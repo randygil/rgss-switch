@@ -1,0 +1,71 @@
+--- audio.cpp.orig	2026-08-31 02:25:49.791033700 -0400
++++ audio.cpp	2026-08-31 02:26:20.852910700 -0400
+@@ -35,6 +35,10 @@
+ #include <SDL_thread.h>
+ #include <SDL_timer.h>
+ 
++#ifdef __SWITCH__
++extern "C" void nx_traza_me(int hayQueSubir);
++#endif
++
+ struct AudioPrivate
+ {
+     
+@@ -196,29 +200,50 @@
+ 				if (me.stream.queryState() != ALStream::Playing)
+                 {
+                     /* ME has ended */
++
++                    /* El estado se decide DESPUES del bucle, no dentro.
++                     *
++                     * Antes se ponia meWatch.state = MeNotPlaying al final de
++                     * cada vuelta, pisando el BgmFadingIn que la rama de
++                     * "pausada" acababa de asignar seis lineas mas arriba. Y
++                     * BgmFadingOut deja el volumen en 0 antes de pausar, asi
++                     * que BgmFadingIn es el UNICO estado que lo devuelve a 1:
++                     * saltarselo reanuda la musica MUDA y la deja asi para
++                     * siempre. En el juego se ve como que la musica de fondo
++                     * desaparece al coger el primer objeto —una fanfarria es
++                     * un ME— mientras los efectos de sonido siguen sonando.
++                     *
++                     * Con varias pistas basta con que UNA necesite subir para
++                     * tener que pasar por el fundido de entrada; ir derecho a
++                     * MeNotPlaying dejaria esa pista a cero. */
++                    bool hayQueSubir = false;
++
+                     for (auto track : bgmTracks) {
+                         track->lockStream();
+                         track->extPaused = false;
+-                        
++
+                         ALStream::State sState = track->stream.queryState();
+-                        
++
+                         if (sState == ALStream::Paused) {
+                             /* BGM is paused. -> FadeInBGM */
+                             track->stream.play();
+-                            meWatch.state = BgmFadingIn;
++                            hayQueSubir = true;
+                         }
+                         else {
+                             /* BGM is stopped. -> MeNotPlaying */
+                             track->setVolume(AudioStream::External, 1.0f);
+-                            
++
+                             if (!track->noResumeStop)
+                                 track->stream.play();
+                         }
+-                        
+-                        meWatch.state = MeNotPlaying;
+-                        
++
+                         track->unlockStream();
+                     }
++
++                    meWatch.state = hayQueSubir ? BgmFadingIn : MeNotPlaying;
++#ifdef __SWITCH__
++                    nx_traza_me(hayQueSubir);
++#endif
+ 				}
+ 
+                 me.unlockStream();

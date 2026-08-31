@@ -1,0 +1,39 @@
+--- audio/vorbissource.cpp.orig	2026-08-31 02:04:29.915356700 -0400
++++ audio/vorbissource.cpp	2026-08-31 02:04:29.959787000 -0400
+@@ -186,6 +186,9 @@
+ 
+ 		bool readAgain = false;
+ 
++		/* Huecos tolerados antes de rendirse. Ver el bloque de res < 0. */
++		int huecos = 0;
++
+ 		if (loop.valid)
+ 		{
+ 			int tilLoopEnd = loop.end * info.frameSize;
+@@ -200,6 +203,26 @@
+ 
+ 			if (res < 0)
+ 			{
++				/* OV_HOLE no es un fichero roto: es un hueco en el flujo
++				 * —una pagina que no llego a tiempo o llego mal— y libvorbis
++				 * lo documenta como recuperable: se vuelve a leer y sigue.
++				 *
++				 * Tratarlo como error cuesta la musica ENTERA, no un chasquido:
++				 * el Error sube a ALStream::streamData, que hace return y mata
++				 * el hilo de streaming para siempre; luego checkStopped ve la
++				 * fuente parada y pone el estado en Stopped. La musica de fondo
++				 * no vuelve hasta que algo pida otra distinta, y los efectos de
++				 * sonido siguen sonando porque esos no se transmiten, se cargan
++				 * enteros en memoria. Que es exactamente el sintoma que da la
++				 * consola y que el emulador nunca dio: sobre una SD de verdad,
++				 * y compitiendo por el unico nucleo que estabamos usando, los
++				 * huecos ocurren.
++				 *
++				 * El reintento va acotado para que un fichero de verdad roto no
++				 * deje el hilo dando vueltas. */
++				if (res == OV_HOLE && ++huecos <= 8)
++					continue;
++
+ 				/* Read error */
+ 				retStatus = ALDataSource::Error;
+ 

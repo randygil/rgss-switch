@@ -1,0 +1,14 @@
+--- src/audio/fluid-fun.cpp.orig	2026-08-30 19:16:23.073964300 -0400
++++ src/audio/fluid-fun.cpp	2026-08-30 19:17:03.665458100 -0400
+@@ -14,6 +14,11 @@
+ #define FLUID_LIB "libfluidsynth.3.dylib"
+ #elif __WIN32__
+ #define FLUID_LIB "fluidsynth.dll"
++#elif defined(__SWITCH__)
++/* Horizon no tiene dlopen, asi que SDL_LoadObject fallara y el codigo de
++   abajo ya degrada con elegancia a "Midi playback is disabled". Es el
++   comportamiento correcto: el juego no lleva ni un fichero MIDI (ver H5). */
++#define FLUID_LIB "libfluidsynth.so"
+ #else
+ #error "platform not recognized"
+ #endif

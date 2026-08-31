@@ -1,0 +1,28 @@
+--- src/util/encoding.h.orig	2026-08-30 19:42:43.219898000 -0400
++++ src/util/encoding.h	2026-08-30 19:42:43.253424000 -0400
+@@ -16,15 +16,25 @@
+ #include <uchardet.h>
+ #include <errno.h>
+ 
++#ifdef __SWITCH__
++extern "C" void nx_boot_trace(const char *msg);
++#endif
++
+ namespace Encoding {
+ 
+ static std::string getCharset(std::string &str) {
++#ifdef __SWITCH__
++    nx_boot_trace("[boot] 6d entrando en uchardet_new");
++#endif
+     uchardet_t ud = uchardet_new();
+     uchardet_handle_data(ud, str.c_str(), str.length());
+     uchardet_data_end(ud);
+     
+     std::string ret(uchardet_get_charset(ud));
+     uchardet_delete(ud);
++#ifdef __SWITCH__
++    nx_boot_trace("[boot] 6e uchardet OK");
++#endif
+     
+     if (ret.empty())
+         throw Exception(Exception::MKXPError, "Could not detect string encoding", str.c_str());

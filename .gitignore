@@ -1,0 +1,96 @@
+#==============================================================================
+#  Lista blanca: se ignora TODO y solo se permite lo que aparece nombrado.
+#
+#  Es deliberado. El directorio de trabajo comparte sitio con 2,1 GB que no
+#  pueden publicarse —los 702 MB de assets de Pokemon Anil, los 770 scripts
+#  Ruby extraidos del juego, los arboles de fuentes de terceros y 213 MB de
+#  objetos compilados—, y con una lista negra basta olvidar un patron para
+#  que algo de eso acabe en un commit publico. Con lista blanca, lo que no se
+#  nombra no entra.
+#
+#  Nada de lo ignorado esta borrado: sigue en disco y el build lo usa igual.
+#==============================================================================
+
+/*
+
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/LICENSE
+!/LICENCIAS.md
+
+#--- Cadena de compilacion ----------------------------------------------------
+!/build-deps.sh
+!/build-deps2.sh
+!/build-ruby-switch.sh
+!/make-resume.sh
+!/finalize-ruby.sh
+!/gen-xxd.sh
+!/fixup-arm64.py
+!/pack-anil.sh
+!/empaquetar-nsp.sh
+
+#--- Utillaje de desarrollo y verificacion ------------------------------------
+!/dump-scripts.py
+!/iterate.sh
+!/captura.ps1
+!/jugar.ps1
+!/recoger.ps1
+
+#--- Parches a Ruby y a mkxp-z, mas los shims de C ----------------------------
+!/patches/
+/patches/*
+!/patches/*.patch
+!/patches/nxcompat.c
+!/patches/extinit.c
+!/patches/include/
+# Los *.orig son copias del fuente upstream que sirvieron de base a los
+# parches: se regeneran extrayendo el tarball, no hace falta versionarlas.
+
+#--- El binario del juego: Makefile propio + los 13 shims de nx/ --------------
+!/mkxp-z-nx/
+/mkxp-z-nx/*
+!/mkxp-z-nx/Makefile
+!/mkxp-z-nx/nx/
+# generated/ lo rehace gen-xxd.sh (5 MB de hexadecimal); build/ y los
+# .elf/.nro/.nacp los rehace make.
+
+#--- Banco de pruebas aislado del interprete ----------------------------------
+!/hello-ruby-nx/
+/hello-ruby-nx/*
+!/hello-ruby-nx/Makefile
+!/hello-ruby-nx/source/
+
+#--- Empaquetado NSP: solo las piezas escritas a mano --------------------------
+!/nsp/
+/nsp/*
+!/nsp/npdm.json
+!/nsp/nacp-utf8.py
+!/nsp/icono.jpg
+# control/, exefs/, nca/, temp/ y salida/ los produce empaquetar-nsp.sh, y el
+# NCA va firmado con prod.keys de tu propia consola.
+
+#--- Lo que va a la tarjeta SD y es fuente, no salida -------------------------
+!/runtime/
+
+#--- Documentacion: los registros que cita el README --------------------------
+!/docs/
+/docs/*
+!/docs/configure-log.txt
+!/docs/make-log.txt
+!/docs/test-results-ryujinx.txt
+!/docs/test-results-hardware-real.txt
+# Los h4-*.log son el diario de las 40 iteraciones de depuracion: utiles en
+# local, ruido en un repo. docs/consola/ trae partidas .rxdata del juego.
+!/docs/capturas/
+/docs/capturas/*
+!/docs/capturas/cargar-01-menu.png
+!/docs/capturas/cargar-b06.png
+!/docs/capturas/nom2-b-letras.png
+# Las otras 168 capturas son 236 MB de fotogramas de depuracion.
+
+#--- Nunca, bajo ningun patron ------------------------------------------------
+# Claves de consola. Se leen de ~/.switch/ y no se copian aqui jamas.
+*.keys
+prod.keys
+title.keys

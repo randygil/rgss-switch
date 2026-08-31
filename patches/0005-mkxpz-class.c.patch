@@ -1,0 +1,20 @@
+--- patches/class.c.orig	2026-08-30 18:42:41.943260100 -0400
++++ src/ruby-3.1.7/class.c	2026-08-30 18:42:42.041569900 -0400
+@@ -881,13 +881,16 @@
+ 		     name, rb_obj_class(klass));
+ 	}
+ 	if (rb_class_real(RCLASS_SUPER(klass)) != super) {
+-	    rb_raise(rb_eTypeError, "superclass mismatch for class %s", name);
++	    /* PARCHE mkxp-z: los scripts RGSS reabren clases cambiando la
++	     * superclase. Ruby 1.8 lo toleraba; 3.x lo rechaza. */
++	    goto override_class;
+ 	}
+ 
+         /* Class may have been defined in Ruby and not pin-rooted */
+         rb_vm_add_root_module(klass);
+ 	return klass;
+     }
++override_class:
+     if (!super) {
+ 	rb_raise(rb_eArgError, "no super class for `%s'", name);
+     }

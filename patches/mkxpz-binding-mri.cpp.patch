@@ -1,0 +1,26 @@
+--- C:/anilswitch/src/mkxp-z/binding/binding-mri.cpp.orig	2026-08-30 20:13:19.700779600 -0400
++++ C:/anilswitch/src/mkxp-z/binding/binding-mri.cpp	2026-08-30 20:13:19.737286900 -0400
+@@ -843,8 +843,22 @@
+         return;
+     }
+     
++    /* Aqui mkxp-z pasaba NULL como estado, es decir, descartaba el resultado
++       de rb_protect: un preload con un error de sintaxis fallaba sin decir
++       nada y el sintoma aparecia mucho despues y en otro fichero. En una
++       consola, donde no hay terminal a la que mirar, eso es intolerable. */
++    int state = 0;
+     evalString(newStringUTF8(scriptData.c_str(), scriptData.size()),
+-               newStringUTF8(filename.c_str(), filename.size()), NULL);
++               newStringUTF8(filename.c_str(), filename.size()), &state);
++
++    if (state) {
++        VALUE exc = rb_errinfo();
++        rb_set_errinfo(Qnil);
++        VALUE msg = rb_funcall2(exc, rb_intern("message"), 0, NULL);
++        VALUE name = rb_class_path(rb_obj_class(exc));
++        Debug() << "Error cargando" << filename << "->" << RSTRING_PTR(msg)
++                << "(" << RSTRING_PTR(name) << ")";
++    }
+ }
+ 
+ VALUE kernelLoadDataInt(const char *filename, bool rubyExc, bool raw);

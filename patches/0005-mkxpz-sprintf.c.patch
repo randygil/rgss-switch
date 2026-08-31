@@ -1,0 +1,17 @@
+--- patches/sprintf.c.orig	2026-08-30 18:42:41.964572700 -0400
++++ src/ruby-3.1.7/sprintf.c	2026-08-30 18:42:42.041569900 -0400
+@@ -931,11 +931,14 @@
+     rb_str_tmp_frozen_release(orig, fmt);
+     /* XXX - We cannot validate the number of arguments if (digit)$ style used.
+      */
++    /* PARCHE mkxp-z: desactivado para igualar el comportamiento de Ruby 1.8 */
++#if 0
+     if (posarg >= 0 && nextarg < argc) {
+ 	const char *mesg = "too many arguments for format string";
+ 	if (RTEST(ruby_debug)) rb_raise(rb_eArgError, "%s", mesg);
+ 	if (RTEST(ruby_verbose)) rb_warn("%s", mesg);
+     }
++#endif
+     rb_str_resize(result, blen);
+ 
+     return result;

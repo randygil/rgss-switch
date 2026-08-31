@@ -1,0 +1,75 @@
+--- src/config.cpp.orig	2026-08-30 19:42:43.199897900 -0400
++++ src/config.cpp	2026-08-30 19:44:26.409667000 -0400
+@@ -97,16 +97,35 @@
+     return defaultValue;
+ }
+ 
++#ifdef __SWITCH__
++extern "C" void nx_boot_trace(const char *msg);
++#endif
++
+ json::value readConfFile(const char *path) {
+-    
++#ifdef __SWITCH__
++    nx_boot_trace("[boot] 6a readConfFile: antes de fileExists");
++#endif
+     json::value ret(0);
+     if (!mkxp_fs::fileExists(path)) {
+         return json::object({});
+     }
+     
+     try {
++#ifdef __SWITCH__
++        nx_boot_trace("[boot] 6b fileExists OK, leyendo el fichero");
++#endif
+         std::string cfg = mkxp_fs::contentsOfFileAsString(path);
+-        ret = json::parse5(Encoding::convertString(cfg));
++#ifdef __SWITCH__
++        nx_boot_trace("[boot] 6c fichero leido, convirtiendo codificacion");
++#endif
++        std::string conv = Encoding::convertString(cfg);
++#ifdef __SWITCH__
++        nx_boot_trace("[boot] 6f codificacion OK, parseando JSON");
++#endif
++        ret = json::parse5(conv);
++#ifdef __SWITCH__
++        nx_boot_trace("[boot] 6g JSON parseado");
++#endif
+     }
+     catch (const std::exception &e) {
+         Debug() << "Failed to parse" << path << ":" << e.what();
+@@ -247,8 +266,20 @@
+     readGameINI();
+     
+     // Now check for an extra mkxp.conf in the user's save directory and merge anything else from that
++#ifdef __SWITCH__
++    /* Horizon no tiene directorio de preferencias por usuario:
++       SDL_GetPrefPath() no devuelve nada util, customDataPath queda vacio y
++       normalizePath acaba resolviendo una ruta sin dispositivo ("/mkxp.json").
++       fileExists() sobre eso se colgaba sin dar un error. En una consola no
++       hay perfiles de usuario, asi que la configuracion por usuario sobra:
++       manda mkxp.json y punto. */
++    userConfPath.clear();
++    json::value userConf = json::object({});
++    nx_boot_trace("[boot] 6h config de usuario omitida (no aplica en Horizon)");
++#else
+     userConfPath = mkxp_fs::normalizePath(std::string(customDataPath + "/" CONF_FILE).c_str(), 0, 1);
+     json::value userConf = readConfFile(userConfPath.c_str());
++#endif
+     copyObject(optsJ, userConf);
+     
+     // now RESUME
+@@ -393,7 +424,13 @@
+     if (dataPathApp.empty())
+         dataPathApp = game.title;
+     
++#ifdef __SWITCH__
++    /* Las partidas guardadas van junto al juego, en sdmc:/switch/pokemon-anil/,
++       que es escribible. Dejarlo vacio hace que se use el directorio actual. */
++    customDataPath = "";
++#else
+     customDataPath = mkxp_fs::normalizePath(prefPath(dataPathOrg.c_str(), dataPathApp.c_str()).c_str(), 0, 1);
++#endif
+     
+     if (rgssVersion == 0) {
+         /* Try to guess RGSS version based on Data/Scripts extension */

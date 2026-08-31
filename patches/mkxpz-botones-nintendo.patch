@@ -1,0 +1,29 @@
+--- keybindings.cpp.orig	2026-08-30 23:14:25.935718300 -0400
++++ keybindings.cpp	2026-08-30 23:14:25.971791800 -0400
+@@ -104,10 +104,26 @@
+ 
+ static const CtrlBindingData defaultCtrlBindings[] =
+ {
++#ifdef __SWITCH__
++	/* SDL nombra los botones por POSICION, al estilo de Xbox: A abajo, B a la
++	 * derecha, X a la izquierda, Y arriba. En un mando de Nintendo las letras
++	 * estan justo al reves, asi que el boton A de la consola —el de la derecha,
++	 * el de "aceptar" en todo el catalogo de Switch— le llega a SDL como
++	 * SDL_CONTROLLER_BUTTON_B. Medido: pulsar A produce el boton 1.
++	 *
++	 * Con el mapa de serie, aceptar seria el boton de abajo y cancelar el de la
++	 * derecha: al reves que cualquier otro juego de la consola. Se cruzan las
++	 * dos parejas para que A acepte y B cancele. */
++	{ SDL_CONTROLLER_BUTTON_Y, Input::A  },   /* X de Switch */
++	{ SDL_CONTROLLER_BUTTON_A, Input::B  },   /* B de Switch: cancelar */
++	{ SDL_CONTROLLER_BUTTON_B, Input::C  },   /* A de Switch: aceptar  */
++	{ SDL_CONTROLLER_BUTTON_X, Input::X  },   /* Y de Switch */
++#else
+ 	{ SDL_CONTROLLER_BUTTON_X, Input::A  },
+ 	{ SDL_CONTROLLER_BUTTON_B, Input::B  },
+ 	{ SDL_CONTROLLER_BUTTON_A, Input::C },
+ 	{ SDL_CONTROLLER_BUTTON_Y, Input::X  },
++#endif
+ 	{ SDL_CONTROLLER_BUTTON_LEFTSTICK, Input::Y  },
+ 	{ SDL_CONTROLLER_BUTTON_RIGHTSTICK, Input::Z },
+ 	{ SDL_CONTROLLER_BUTTON_LEFTSHOULDER, Input::L  },

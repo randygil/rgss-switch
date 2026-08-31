@@ -1,0 +1,15 @@
+# El proyecto se compila desde el shell MSYS2 de devkitPro: todo lo que lea el
+# shell tiene que llegar con finales de linea LF aunque el repo se clone en
+# Windows. Un solo CR en la primera linea de un .sh y bash responde
+# "/bin/bash^M: bad interpreter".
+* text=auto eol=lf
+
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+
+# Los parches se aplican byte a byte: normalizarlos descuadra el contexto.
+*.patch -text
+*.diff  -text
+
+*.png   binary
+*.jpg   binary

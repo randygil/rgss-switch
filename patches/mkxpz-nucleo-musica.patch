@@ -1,0 +1,29 @@
+--- audio/alstream.cpp.orig	2026-08-31 02:05:17.960616800 -0400
++++ audio/alstream.cpp	2026-08-31 02:05:18.006875900 -0400
+@@ -35,6 +35,10 @@
+ #include <SDL_thread.h>
+ #include <SDL_timer.h>
+ 
++#ifdef __SWITCH__
++extern "C" void nx_nucleo(const char *quien, int preferido);
++#endif
++
+ ALStream::ALStream(LoopMode loopMode,
+ 		           const std::string &threadId)
+ 	: looped(loopMode == Looped),
+@@ -360,6 +364,15 @@
+ /* thread func */
+ void ALStream::streamData()
+ {
++#ifdef __SWITCH__
++	/* La musica pide nucleo preferido propio, el 2. No es capricho: este hilo
++	 * solo tiene que rellenar bufers a tiempo, y si comparte nucleo con quien
++	 * esta descomprimiendo un PNG llega tarde. Llegar tarde aqui costaba la
++	 * musica entera hasta el arreglo de OV_HOLE en vorbissource.cpp; con el
++	 * arreglo ya solo costaria un chasquido, pero mejor ninguno. */
++	nx_nucleo("musica", 2);
++#endif
++
+ 	/* Fill up queue */
+ 	bool firstBuffer = true;
+ 	ALDataSource::Status status;

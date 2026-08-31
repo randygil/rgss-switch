@@ -1,0 +1,69 @@
+--- eventthread.cpp.orig	2026-08-30 22:22:21.329388700 -0400
++++ eventthread.cpp	2026-08-30 22:22:21.367989300 -0400
+@@ -468,22 +468,49 @@
+                         setFullscreen(win, static_cast<bool>(event.user.code));
+                         break;
+                         
++                    /* En Horizon la ventana ES la pantalla: 1280x720 en
++                     * portatil, 1920x1080 en la base, y no se puede mover ni
++                     * cambiar de tamano. Peor aun, intentarlo MATA el proceso:
++                     * SDL_SetWindowSize -> SWITCH_SetWindowSize ->
++                     * SDL_EGL_CreateSurface -> switch_create_window_surface ->
++                     * nwindowSetDimensions, que devuelve AlreadyInitialized
++                     * porque la ventana ya tiene sus busers, y el winsys de
++                     * Mesa responde a los errores llamando a fatalThrow. Se ve
++                     * desde fuera como la pantalla de error de Horizon con el
++                     * codigo 2345-0007 y nada mas.
++                     *
++                     * Pokemon Essentials pide un cambio de resolucion nada mas
++                     * arrancar (Graphics.resize_screen), asi que esto no es un
++                     * caso raro: es el camino normal.
++                     *
++                     * Se ignora la peticion pero SE MANTIENE el apreton de
++                     * manos: rqWindowAdjust lo pone requestWindowResize y hay
++                     * quien lo espera con wait(). Sin el clear(), el hilo RGSS
++                     * se quedaria colgado para siempre. La resolucion interna
++                     * si cambia —eso lo hace Graphics::resizeScreen antes de
++                     * pedir nada—, y mkxp-z la escala a la ventana fija. */
+                     case REQUEST_WINRESIZE :
++#ifndef __SWITCH__
+                         SDL_SetWindowSize(win, event.window.data1, event.window.data2);
++#endif
+                         rtData.rqWindowAdjust.clear();
+                         break;
+                         
+                     case REQUEST_WINREPOSITION :
++#ifndef __SWITCH__
+                         SDL_SetWindowPosition(win, event.window.data1, event.window.data2);
++#endif
+                         rtData.rqWindowAdjust.clear();
+                         break;
+                         
+                     case REQUEST_WINCENTER :
++#ifndef __SWITCH__
+                         rc = SDL_GetDesktopDisplayMode(SDL_GetWindowDisplayIndex(win), &dm);
+                         if (!rc)
+                             SDL_SetWindowPosition(win,
+                                                   (dm.w / 2) - (winW / 2),
+                                                   (dm.h / 2) - (winH / 2));
++#endif
+                         rtData.rqWindowAdjust.clear();
+                         break;
+                         
+@@ -668,9 +695,16 @@
+ 
+ void EventThread::setFullscreen(SDL_Window *win, bool mode)
+ {
++#ifdef __SWITCH__
++    /* Siempre a pantalla completa y sin alternativa; ver REQUEST_WINRESIZE.
++     * SDL_SetWindowFullscreen acaba en el mismo switch_create_window_surface. */
++    (void)win;
++    fullscreen = true;
++#else
+     SDL_SetWindowFullscreen
+     (win, mode ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+     fullscreen = mode;
++#endif
+ }
+ 
+ void EventThread::updateCursorState(bool inWindow,

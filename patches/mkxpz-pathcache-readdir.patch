@@ -1,0 +1,251 @@
+--- filesystem/filesystem.cpp.orig	2026-08-31 00:03:58.070232300 -0400
++++ filesystem/filesystem.cpp	2026-08-31 02:09:30.366885900 -0400
+@@ -129,6 +129,12 @@
+   return io;
+ }
+ 
++#ifdef __SWITCH__
++#include <switch.h>
++extern "C" void nx_io_suma(u64 ticks);
++extern "C" void nx_io_abre(void);
++#endif
++
+ static inline PHYSFS_File *sdlPHYS(SDL_RWops *ops) {
+   return static_cast<PHYSFS_File *>(ops->hidden.unknown.data1);
+ }
+@@ -175,8 +181,20 @@
+   if (!f)
+     return 0;
+ 
++#ifdef __SWITCH__
++  /* Embudo unico de lecturas: por aqui pasan mapas, sprites y musica. Es el
++   * sitio donde se puede separar "la tarjeta es lenta" de "la CPU es lenta"
++   * sin instrumentar cien sitios. armGetSystemTick no es una llamada al
++   * sistema, asi que medir sale casi gratis (nx/nx_tirones.c). */
++  u64 nxT0 = armGetSystemTick();
++#endif
++
+   PHYSFS_sint64 result = PHYSFS_readBytes(f, buffer, size * maxnum);
+ 
++#ifdef __SWITCH__
++  nx_io_suma(armGetSystemTick() - nxT0);
++#endif
++
+   return (result != -1) ? (result / size) : 0;
+ }
+ 
+@@ -246,6 +264,24 @@
+ }
+ 
+ static void initReadOps(PHYSFS_File *handle, SDL_RWops &ops, bool freeOnClose) {
++#ifdef __SWITCH__
++  /* PhysFS no pone bufer a nada por su cuenta, y mkxp-z nunca se lo pide: cada
++   * PHYSFS_readBytes baja tal cual al sistema de ficheros. En un PC eso es una
++   * llamada barata; en Horizon es una IPC, y una IPC de fichero cuesta 0,85 ms
++   * medidos (§5.48).
++   *
++   * Lo caro no es el tamano, es la cuenta. libpng no lee un PNG de una vez: lee
++   * la firma, luego cada cabecera de trozo, luego cada trozo. Un sprite de 8 KB
++   * puede costar veinte llamadas, y una pantalla de menu que cargue cuarenta
++   * sprites se planta en cientos. A 0,85 ms cada una, eso son los dos y tres
++   * segundos de congelacion que se ven en la consola y que el emulador no
++   * ensena, porque alli la lectura sale casi gratis.
++   *
++   * 64 KiB porque la mayoria de los recursos del juego caben enteros: el
++   * fichero entero pasa a ser UNA lectura. PhysFS libera el bufer al cerrar. */
++  PHYSFS_setBuffer(handle, 64 * 1024);
++  nx_io_abre();
++#endif
+   ops.size = SDL_RWopsSize;
+   ops.seek = SDL_RWopsSeek;
+   ops.read = SDL_RWopsRead;
+@@ -352,6 +388,26 @@
+     if (reload) reloadPathCache();
+ }
+ 
++#ifdef __SWITCH__
++#include <switch.h>
++#include <dirent.h>
++#include <sys/stat.h>
++/* Instrumentacion de createPathCache.
++ *
++ * El arranque tarda ~55 s y casi todo se va aqui, recorriendo los 22.141
++ * ficheros del juego. Antes de tocar nada hay que saber en QUE se van: la
++ * sospecha es el PHYSFS_stat por entrada —en Horizon cada stat es una llamada
++ * IPC al servicio de ficheros—, pero una sospecha no es una medida.
++ *
++ * armGetSystemTick cuenta a 19,2 MHz y no cuesta una llamada al sistema. */
++namespace {
++  u64 nxRelojStat = 0;      /* solo dentro de PHYSFS_stat */
++  u64 nxRelojResto = 0;     /* minusculas, insert en el cache, vectores */
++  unsigned nxEntradas = 0;  /* entradas visitadas */
++  unsigned nxDirs = 0;      /* de ellas, directorios */
++}
++#endif
++
+ struct CacheEnumData {
+   FileSystemPrivate *p;
+   std::stack<std::vector<std::string> *> fileLists;
+@@ -412,10 +468,21 @@
+   strTolower(lowerCase);
+ 
+   PHYSFS_Stat stat;
++#ifdef __SWITCH__
++  u64 nxT0 = armGetSystemTick();
++#endif
+   PHYSFS_stat(fullPath, &stat);
++#ifdef __SWITCH__
++  u64 nxT1 = armGetSystemTick();
++  nxRelojStat += nxT1 - nxT0;
++  nxEntradas++;
++#endif
+ 
+   if (stat.filetype == PHYSFS_FILETYPE_DIRECTORY) {
+     /* Create a new list for this directory */
++#ifdef __SWITCH__
++    nxDirs++;
++#endif
+     std::vector<std::string> &list = data.p->fileLists[lowerCase];
+ 
+     /* Iterate over its contents */
+@@ -433,17 +500,137 @@
+ 
+     /* Add the lower -> mixed mapping of the file's full path */
+     data.p->pathCache.insert(lowerCase, mixedCase);
++#ifdef __SWITCH__
++    nxRelojResto += armGetSystemTick() - nxT1;
++#endif
+   }
+ 
+   return PHYSFS_ENUM_OK;
+ }
+ 
++#ifdef __SWITCH__
++/* Recorrido nativo del arbol, en vez del de PhysFS.
++ *
++ * Medido sobre los 22.318 ficheros del juego, el mismo arbol y en la misma
++ * ejecucion (`nx/nx_fsprobe.c`):
++ *
++ *     PhysFS: PHYSFS_enumerate + PHYSFS_stat por entrada .... 56.065 ms
++ *     opendir/readdir, clasificando por d_type .................. 206 ms
++ *
++ * Doscientas setenta veces. La culpa es del stat —0,85 ms por llamada, que en
++ * Horizon es una IPC al servicio de ficheros— y PhysFS lo hace una vez por
++ * entrada para averiguar algo que readdir ya le habia dicho: la newlib de
++ * devkitPro declara _DIRENT_HAVE_D_TYPE y libnx lo rellena siempre. En las
++ * 22.318 entradas no salio ni un DT_UNKNOWN ni un solo desacuerdo con stat.
++ *
++ * Aqui se construyen las MISMAS dos tablas que cacheEnumCB, con el mismo
++ * criterio de mayusculas y recorriendo las rutas montadas en el mismo orden,
++ * para que nada del resto de mkxp-z note la diferencia.
++ */
++static void nxRecorrer(FileSystemPrivate *p, const std::string &real,
++                       const std::string &rel,
++                       std::vector<std::string> *listaPadre) {
++  DIR *d = opendir(real.c_str());
++  if (!d)
++    return;
++
++  struct dirent *e;
++  while ((e = readdir(d)) != 0) {
++    const char *nombre = e->d_name;
++    if (nombre[0] == '.' &&
++        (nombre[1] == 0 || (nombre[1] == '.' && nombre[2] == 0)))
++      continue;
++
++    std::string hijoReal = real + "/" + nombre;
++    std::string hijoRel = rel.empty() ? std::string(nombre) : rel + "/" + nombre;
++    std::string minusculas = hijoRel;
++    strTolower(minusculas);
++
++    bool esDir;
++    if (e->d_type == DT_DIR) {
++      esDir = true;
++    } else if (e->d_type == DT_UNKNOWN) {
++      /* No ha pasado ni una vez en la consola, pero d_type es opcional por
++       * norma y equivocarse aqui deja ficheros invisibles. */
++      struct stat st;
++      esDir = (stat(hijoReal.c_str(), &st) == 0) && S_ISDIR(st.st_mode);
++    } else {
++      esDir = false;
++    }
++
++    nxEntradas++;
++    if (esDir) {
++      nxDirs++;
++      /* fileLists es un std::map: la referencia sigue siendo valida por muchas
++       * entradas que se inserten despues, que es de lo que depende la
++       * recursion. cacheEnumCB se apoya en lo mismo. */
++      std::vector<std::string> &lista = p->fileLists[minusculas];
++      nxRecorrer(p, hijoReal, hijoRel, &lista);
++    } else {
++      std::string minusculasNombre(nombre);
++      strTolower(minusculasNombre);
++      listaPadre->push_back(minusculasNombre);
++      p->pathCache.insert(minusculas, hijoRel);
++    }
++  }
++
++  closedir(d);
++}
++
++static bool nxCacheRapido(FileSystemPrivate *p) {
++  char **rutas = PHYSFS_getSearchPath();
++  if (!rutas)
++    return false;
++
++  /* Solo sirve si todo lo montado son directorios de verdad: un .rgssad o un
++   * zip no se recorren con readdir, y ahi PhysFS sigue siendo el que sabe. */
++  bool sirve = (*rutas != 0);
++  for (char **r = rutas; *r; r++) {
++    struct stat st;
++    if (stat(*r, &st) != 0 || !S_ISDIR(st.st_mode)) {
++      sirve = false;
++      break;
++    }
++  }
++
++  if (sirve) {
++    std::vector<std::string> &raiz = p->fileLists[""];
++    for (char **r = rutas; *r; r++)
++      nxRecorrer(p, *r, "", &raiz);
++  }
++
++  PHYSFS_freeList(rutas);
++  return sirve;
++}
++#endif
++
+ void FileSystem::createPathCache() {
+-  CacheEnumData data(p);
+-  data.fileLists.push(&p->fileLists[""]);
+-  PHYSFS_enumerate("", cacheEnumCB, &data);
++#ifdef __SWITCH__
++  u64 nxInicio = armGetSystemTick();
++  nxEntradas = nxDirs = 0;
++  nxRelojStat = nxRelojResto = 0;
++  bool nxRapido = nxCacheRapido(p);
++  if (!nxRapido)
++#endif
++  {
++    CacheEnumData data(p);
++    data.fileLists.push(&p->fileLists[""]);
++    PHYSFS_enumerate("", cacheEnumCB, &data);
++  }
+ 
+   p->havePathCache = true;
++#ifdef __SWITCH__
++  {
++    u64 total = armTicksToNs(armGetSystemTick() - nxInicio) / 1000000;
++    Debug() << "[cache]" << (nxRapido ? "readdir:" : "PhysFS:")
++            << (int)nxEntradas << "entradas," << (int)nxDirs
++            << "directorios en" << (int)total << "ms";
++    if (!nxRapido)
++      Debug() << "[cache]   de ellos" << (int)(armTicksToNs(nxRelojStat) / 1000000)
++              << "ms en PHYSFS_stat y"
++              << (int)(armTicksToNs(nxRelojResto) / 1000000) << "ms en el resto";
++  }
++#endif
+ }
+ 
+ void FileSystem::reloadPathCache() {

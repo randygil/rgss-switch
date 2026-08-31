@@ -1,0 +1,78 @@
+	BASERUBY = C:/anilswitch/src/rubyinstaller-3.1.4-1-x64/bin/ruby.exe --disable=gems
+	CC = aarch64-none-elf-gcc
+	LD = aarch64-none-elf-ld
+	LDSHARED = aarch64-none-elf-ld
+	CFLAGS = -g -O2 -std=gnu11 -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE -D__SWITCH__ -ffunction-sections -fdata-sections -IC:/anilswitch/patches/include -IC:/devkitPro/libnx/include -IC:/devkitPro/portlibs/switch/include 
+	XCFLAGS = -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fno-strict-overflow -fvisibility=hidden -fexcess-precision=standard -DRUBY_EXPORT -I. -I.ext/include/aarch64-elf -IC:/anilswitch/src/ruby-3.1.7/include -IC:/anilswitch/src/ruby-3.1.7 -IC:/anilswitch/src/ruby-3.1.7/enc/unicode/13.0.0 
+	CPPFLAGS = -include C:/anilswitch/patches/include/nxshim.h -D__SWITCH__ -IC:/anilswitch/patches/include -IC:/devkitPro/libnx/include -IC:/devkitPro/portlibs/switch/include   
+	DLDFLAGS = -specs=C:/devkitPro/libnx/switch.specs -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE -LC:/anilswitch/out/lib -LC:/devkitPro/libnx/lib -LC:/devkitPro/portlibs/switch/lib -Wl,--compress-debug-sections=zlib -fstack-protector-strong  
+	SOLIBS = -lz -lpthread -lm -lnxcompat -lnx
+	LANG = es_MX.UTF-8
+	LC_ALL = 
+	LC_CTYPE = 
+	MFLAGS = -k -j6 --jobserver-auth=4,5
+aarch64-none-elf-gcc.exe (devkitA64) 16.1.0
+Copyright (C) 2026 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+compiling C:/anilswitch/src/ruby-3.1.7/class.c
+compiling C:/anilswitch/src/ruby-3.1.7/sprintf.c
+compiling C:/anilswitch/src/ruby-3.1.7/vm.c
+C:/anilswitch/src/ruby-3.1.7/revision.h unchanged
+generating enc.mk
+making srcs under enc
+make[1]: se entra en el directorio '/c/anilswitch/build/ruby-switch'
+make[1]: No se hace nada para 'srcs'.
+make[1]: se sale del directorio '/c/anilswitch/build/ruby-switch'
+generating transdb.h
+transdb.h unchanged
+linking static-library libruby-static.a
+generating makefiles ext/configure-ext.mk
+making libenc
+making libtrans
+ext/configure-ext.mk unchanged
+make[1]: se entra en el directorio '/c/anilswitch/build/ruby-switch'
+make[1]: se entra en el directorio '/c/anilswitch/build/ruby-switch'
+make[1]: No se hace nada para 'libenc'.
+make[1]: se sale del directorio '/c/anilswitch/build/ruby-switch'
+make[1]: se entra en el directorio '/c/anilswitch/build/ruby-switch'
+make[1]: No se hace nada para 'libtrans'.
+make[1]: se sale del directorio '/c/anilswitch/build/ruby-switch'
+make[2]: se entra en el directorio '/c/anilswitch/build/ruby-switch/ext/coverage'
+making libencs
+make[2]: se entra en el directorio '/c/anilswitch/build/ruby-switch/ext/digest'
+make[2]: se entra en el directorio '/c/anilswitch/build/ruby-switch/ext/json'
+make[2]: se sale del directorio '/c/anilswitch/build/ruby-switch/ext/coverage'
+make[2]: se entra en el directorio '/c/anilswitch/build/ruby-switch/ext/monitor'
+make[2]: se entra en el directorio '/c/anilswitch/build/ruby-switch/ext/nkf'
+make[2]: se sale del directorio '/c/anilswitch/build/ruby-switch/ext/json'
+make[2]: se sale del directorio '/c/anilswitch/build/ruby-switch/ext/digest'
+make[2]: se sale del directorio '/c/anilswitch/build/ruby-switch/ext/monitor'
+make[2]: se sale del directorio '/c/anilswitch/build/ruby-switch/ext/nkf'
+make[2]: se entra en el directorio '/c/anilswitch/build/ruby-switch/ext/objspace'
+make[2]: se entra en el directorio '/c/anilswitch/build/ruby-switch/ext/rubyvm'
+make[2]: se sale del directorio '/c/anilswitch/build/ruby-switch/ext/objspace'
+make[1]: se entra en el directorio '/c/anilswitch/build/ruby-switch'
+make[1]: No se hace nada para 'libencs'.
+make[1]: se sale del directorio '/c/anilswitch/build/ruby-switch'
+make[2]: se entra en el directorio '/c/anilswitch/build/ruby-switch/ext/ripper'
+make[2]: se sale del directorio '/c/anilswitch/build/ruby-switch/ext/rubyvm'
+make[2]: se sale del directorio '/c/anilswitch/build/ruby-switch/ext/ripper'
+make[2]: se entra en el directorio '/c/anilswitch/build/ruby-switch'
+make[2]: No se hace nada para 'libencs'.
+make[2]: se sale del directorio '/c/anilswitch/build/ruby-switch'
+make[2]: se entra en el directorio '/c/anilswitch/build/ruby-switch'
+C:/anilswitch/src/ruby-3.1.7/revision.h unchanged
+generating enc.mk
+compiling enc/encinit.c
+linking ruby
+C:/devkitPro/devkitA64/bin/../lib/gcc/aarch64-none-elf/16.1.0/../../../../aarch64-none-elf/bin/ld.exe: section .tls.align LMA [0000000000000000,0000000000000007] overlaps section .text LMA [0000000000000000,00000000002640f7]
+collect2.exe: error: ld returned 1 exit status
+make[2]: *** [Makefile:294: ruby] Error 1
+make[2]: se sale del directorio '/c/anilswitch/build/ruby-switch'
+make[1]: *** [exts.mk:81: ruby] Error 2
+make[1]: Debido a los errores, el objetivo 'static' no se reconstruyó.
+make[1]: se sale del directorio '/c/anilswitch/build/ruby-switch'
+make: *** [uncommon.mk:306: build-ext] Error 2
+make: Debido a los errores, el objetivo 'all' no se reconstruyó.

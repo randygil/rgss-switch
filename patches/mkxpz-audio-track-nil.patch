@@ -1,0 +1,91 @@
+--- audio-binding.cpp.orig	2026-08-30 22:29:06.021720200 -0400
++++ audio-binding.cpp	2026-08-30 23:13:58.120592800 -0400
+@@ -85,6 +85,22 @@
+ 
+ // DEF_PLAY_STOP_POS( bgm )
+ 
++/* El parametro track de las pistas multiples es opcional, y Pokemon
++ * Essentials lo declara como "track = nil" y lo pasa TAL CUAL:
++ *
++ *     def bgm_play_internal2(name, volume, pitch, position, track = nil)
++ *       Audio.bgm_play(name, vol, pitch, position, track)
++ *
++ * El formato "i" de rb_get_args exige Fixnum o Float y rechaza nil con
++ * TypeError, asi que la pantalla de titulo muere al poner su musica. Se lee
++ * como objeto y se traduce: nil significa "no dijo nada", que es -127, el
++ * mismo valor que ya usaba por defecto. */
++static void tomar_pista(VALUE obj, int *track)
++{
++    if (!NIL_P(obj))
++        rb_int_arg(obj, track, 4);
++}
++
+ RB_METHOD(audio_bgmPlay)
+ {
+     RB_UNUSED_PARAM;
+@@ -93,7 +109,9 @@
+     int pitch = 100;
+     double pos = 0.0;
+     int track = -127;
+-    rb_get_args(argc, argv, "z|iifi", &filename, &volume, &pitch, &pos, &track RB_ARG_END);
++    VALUE trackObj = Qnil;
++    rb_get_args(argc, argv, "z|iifo", &filename, &volume, &pitch, &pos, &trackObj RB_ARG_END);
++    tomar_pista(trackObj, &track);
+     GUARD_EXC( shState->audio().bgmPlay(filename, volume, pitch, pos, track); )
+     return Qnil;
+ }
+@@ -102,7 +120,9 @@
+ {
+     RB_UNUSED_PARAM;
+     int track = -127;
+-    rb_get_args(argc, argv, "|i", &track RB_ARG_END);
++    VALUE trackObj = Qnil;
++    rb_get_args(argc, argv, "|o", &trackObj RB_ARG_END);
++    tomar_pista(trackObj, &track);
+     shState->audio().bgmStop(track);
+     return Qnil;
+ }
+@@ -111,7 +131,9 @@
+ {
+     RB_UNUSED_PARAM;
+     int track = 0;
+-    rb_get_args(argc, argv, "|i", &track RB_ARG_END);
++    VALUE trackObj = Qnil;
++    rb_get_args(argc, argv, "|o", &trackObj RB_ARG_END);
++    tomar_pista(trackObj, &track);
+     return rb_float_new(shState->audio().bgmPos(track));
+ }
+ 
+@@ -119,7 +141,9 @@
+ {
+     RB_UNUSED_PARAM;
+     int track = -127;
+-    rb_get_args(argc, argv, "|i", &track RB_ARG_END);
++    VALUE trackObj = Qnil;
++    rb_get_args(argc, argv, "|o", &trackObj RB_ARG_END);
++    tomar_pista(trackObj, &track);
+     int ret = 0;
+     GUARD_EXC( ret = shState->audio().bgmGetVolume(track); )
+     return rb_fix_new(ret);
+@@ -130,7 +154,9 @@
+     RB_UNUSED_PARAM;
+     int volume;
+     int track = -127;
+-    rb_get_args(argc, argv, "i|i", &volume, &track RB_ARG_END);
++    VALUE trackObj = Qnil;
++    rb_get_args(argc, argv, "i|o", &volume, &trackObj RB_ARG_END);
++    tomar_pista(trackObj, &track);
+     GUARD_EXC( shState->audio().bgmSetVolume(volume, track); )
+     return Qnil;
+ }
+@@ -145,7 +171,9 @@
+     RB_UNUSED_PARAM;
+     int time;
+     int track = -127;
+-    rb_get_args(argc, argv, "i|i", &time, &track RB_ARG_END);
++    VALUE trackObj = Qnil;
++    rb_get_args(argc, argv, "i|o", &time, &trackObj RB_ARG_END);
++    tomar_pista(trackObj, &track);
+     shState->audio().bgmFade(time, track);
+     return Qnil;
+ }

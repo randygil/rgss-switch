@@ -1,0 +1,17 @@
+--- src/system/system.h.orig	2026-08-30 19:16:23.032323400 -0400
++++ src/system/system.h	2026-08-30 19:17:03.648452800 -0400
+@@ -13,8 +13,13 @@
+ #define MKXPZ_PLATFORM_WINDOWS 0
+ #define MKXPZ_PLATFORM_MACOS 1
+ #define MKXPZ_PLATFORM_LINUX 2
++#define MKXPZ_PLATFORM_SWITCH 3
+ 
+-#ifdef __WIN32__
++/* Horizon OS. Va primero: devkitA64 no define __linux__, pero dejarlo al
++   frente hace explicito que la Switch no es ninguna de las otras tres. */
++#ifdef __SWITCH__
++#define MKXPZ_PLATFORM MKXPZ_PLATFORM_SWITCH
++#elif defined __WIN32__
+ #define MKXPZ_PLATFORM MKXPZ_PLATFORM_WINDOWS
+ #elif defined __APPLE__
+ #define MKXPZ_PLATFORM MKXPZ_PLATFORM_MACOS

@@ -1,0 +1,37 @@
+--- src/util/debugwriter.h.orig	2026-08-30 19:22:46.789799200 -0400
++++ src/util/debugwriter.h	2026-08-30 19:28:26.790068900 -0400
+@@ -30,6 +30,15 @@
+ #include <android/log.h>
+ #endif
+ 
++#ifdef __SWITCH__
++/* Horizon no tiene una salida estandar a la que mirar: std::cerr se pierde.
++   svcOutputDebugString llega al registro Guest de Ryujinx y a las trazas de
++   Atmosphere en consola real, que es la unica forma de diagnosticar esto. */
++#include <switch.h>
++#include <string>
++#include <cstdio>
++#endif
++
+ 
+ /* A cheap replacement for qDebug() */
+ 
+@@ -63,6 +72,18 @@
+ 	{
+ #ifdef __ANDROID__
+ 		__android_log_write(ANDROID_LOG_DEBUG, "mkxp", buf.str().c_str());
++#elif defined(__SWITCH__)
++		{
++			std::string s = buf.str();
++			svcOutputDebugString(s.c_str(), s.size());
++			/* El registro Guest del emulador no siempre llega hasta el
++			   anfitrion, y en consola real no hay a donde mirar. Se anade a
++			   un fichero de la SD: se abre y cierra en cada linea para que
++			   sobreviva a un cierre brusco. */
++			FILE *f = fopen("sdmc:/switch/pokemon-anil/mkxp-debug.log", "a");
++			if (!f) f = fopen("mkxp-debug.log", "a");
++			if (f) { fputs(s.c_str(), f); fputc(0x0A, f); fclose(f); }
++		}
+ #else
+ 		std::cerr << buf.str() << std::endl;
+ #endif

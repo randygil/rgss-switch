@@ -1,0 +1,42 @@
+--- patches/addr2line.c.orig	2026-08-30 18:03:36.224207800 -0400
++++ src/ruby-3.1.7/addr2line.c	2026-08-30 18:04:20.387824400 -0400
+@@ -27,7 +27,19 @@
+ 
+ #include "ruby/internal/stdbool.h"
+ 
+-#if defined(USE_ELF) || defined(HAVE_MACH_O_LOADER_H)
++/* --- PARCHE Nintendo Switch (Horizon OS) --------------------------------
++ * La guarda original no exigia HAVE_DLADDR, pero el cuerpo del archivo usa
++ * Dl_info y dladdr() sin proteger (ver ~linea 2320). Su UNICO consumidor,
++ * vm_dump.c:760, si exige HAVE_DLADDR:
++ *
++ *   #if (defined(USE_ELF) || defined(HAVE_MACH_O_LOADER_H))  *       && defined(HAVE_DLADDR) && !defined(__sparc)
++ *
++ * Es decir: la implementacion se compilaba en casos donde su consumidor
++ * jamas la llamaria. Cualquier plataforma con ELF pero sin enlace dinamico
++ * lo dispara — Horizon es una de ellas. Alineamos la guarda con la del
++ * consumidor.
++ */
++#if (defined(USE_ELF) || defined(HAVE_MACH_O_LOADER_H)) && defined(HAVE_DLADDR)
+ 
+ #include <fcntl.h>
+ #include <limits.h>
+@@ -2813,6 +2825,17 @@
+ 	}
+ #undef PCHAR
+ }
+-#else /* defined(USE_ELF) */
++#elif defined(USE_ELF) || defined(HAVE_MACH_O_LOADER_H)
++/* --- PARCHE Nintendo Switch (Horizon OS) --------------------------------
++ * Plataforma con binarios ELF pero SIN enlace dinamico (no hay dladdr).
++ * El simbolizador de backtraces no se compila, y vm_dump.c tampoco lo
++ * llama: su guarda ya exige HAVE_DLADDR. Sin este caso, el #error de
++ * abajo abortaria la compilacion.
++ *
++ * Consecuencia: los volcados de fallo muestran direcciones en crudo en
++ * lugar de nombres de funcion y numeros de linea. Irrelevante para el
++ * juego; en Horizon se depura con nxlink de todos modos.
++ */
++#else /* ni ELF ni Mach-O */
+ #error not supported
+ #endif

@@ -1,0 +1,23 @@
+--- src/net/httplib.h.orig	2026-08-30 19:16:23.112471600 -0400
++++ src/net/httplib.h	2026-08-30 19:17:03.679993400 -0400
+@@ -161,7 +161,9 @@
+ 
+ #include <arpa/inet.h>
+ #include <cstring>
++#ifndef __SWITCH__
+ #include <ifaddrs.h>
++#endif
+ #include <netdb.h>
+ #include <netinet/in.h>
+ #ifdef __linux__
+@@ -2062,7 +2064,9 @@
+   return ret;
+ }
+ 
+-#if !defined _WIN32 && !defined ANDROID
++/* if2ip() solo sirve para atar la conexion a una interfaz de red concreta,
++   una posibilidad opcional de httplib. Horizon no expone getifaddrs(). */
++#if !defined _WIN32 && !defined ANDROID && !defined __SWITCH__
+ #define USE_IF2IP
+ #endif
+ 

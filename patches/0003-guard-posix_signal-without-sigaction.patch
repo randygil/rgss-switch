@@ -1,0 +1,22 @@
+--- patches/thread_pthread.c.orig	2026-08-30 18:02:03.011203200 -0400
++++ src/ruby-3.1.7/thread_pthread.c	2026-08-30 18:02:03.049718300 -0400
+@@ -659,7 +659,19 @@
+     ruby_thread_set_native(th);
+     fill_thread_id_str(th);
+     native_thread_init(th);
++#ifdef POSIX_SIGNAL
+     posix_signal(SIGVTALRM, null_func);
++#else
++    /* --- PARCHE Nintendo Switch (Horizon OS) -----------------------------
++     * posix_signal() solo se define dentro de #ifdef POSIX_SIGNAL (signal.c),
++     * que configure activa unicamente si existen sigaction Y sigprocmask.
++     * newlib no provee ninguna de las dos, pero esta llamada estaba sin
++     * proteger. En Horizon no hay senales, luego no hay SIGVTALRM que
++     * instalar. El cast a void mantiene null_func referenciada y evita el
++     * aviso de funcion estatica sin usar.
++     */
++    (void)null_func;
++#endif
+ }
+ 
+ #ifdef RB_THREAD_T_HAS_NATIVE_ID

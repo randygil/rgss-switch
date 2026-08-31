@@ -1,0 +1,59 @@
+--- display/graphics.cpp.orig	2026-08-31 00:15:00.931672600 -0400
++++ display/graphics.cpp	2026-08-31 02:04:47.039216700 -0400
+@@ -767,7 +767,17 @@
+     }
+ };
+ 
++#ifdef __SWITCH__
++extern "C" int nx_pantalla_cambio(int *ancho, int *alto);
++extern "C" void nx_memoria_latido(void);
++extern "C" void nx_marco(void);
++#endif
++
+ struct GraphicsPrivate {
++#ifdef __SWITCH__
++    /* Cuenta atras para no preguntarle al servicio applet 60 veces por segundo */
++    int nxCuenta = 0;
++#endif
+     /* Screen resolution, ie. the resolution at which
+      * RGSS renders at (settable with Graphics.resize_screen).
+      * Can only be changed from within RGSS */
+@@ -952,6 +962,38 @@
+     }
+     
+     void checkResize(bool skipIntScaleBuffer = false) {
++#ifdef __SWITCH__
++        /* Una vez por fotograma: cierra el marco anterior y, si duro mas de lo
++         * que puede pasar desapercibido, lo anota junto con lo que se fue en
++         * leer de la tarjeta. */
++        nx_marco();
++
++        /* La consola puede entrar o salir de la base en cualquier momento.
++         *
++         * Medido: al pasar a portatil, appletGetDefaultDisplayResolution baja a
++         * 1280x720 pero nwindowGetDimensions sigue diciendo 1920x1080, y el
++         * viewport de GL tambien. La superficie NO cambia: Horizon entrega
++         * siempre 1080p y la escala al panel. Asi que esto no llega a
++         * dispararse.
++         *
++         * Se deja puesto igualmente por dos razones: si en la consola de verdad
++         * resultara que si cambia, el juego se enteraria en vez de dibujar
++         * fuera de sitio; y cuando ocurra quedara escrito en el registro, que
++         * es justo el dato que aqui falta. Cuesta una espera con plazo cero una
++         * vez por segundo. */
++        if (++nxCuenta >= 60) {
++            nxCuenta = 0;
++            /* El mismo latido sirve para la marca de agua del monton: es el
++             * numero que decide si el juego cabria en los 448 MB de un applet
++             * (§5.53), y sale gratis aqui. */
++            nx_memoria_latido();
++            int nxW, nxH;
++            if (nx_pantalla_cambio(&nxW, &nxH)) {
++                threadData->windowSizeMsg.post(Vec2i(nxW, nxH));
++                threadData->drawableSizeMsg.post(Vec2i(nxW, nxH));
++            }
++        }
++#endif
+         if (threadData->windowSizeMsg.poll(winSize)) {
+             /* Query the actual size in pixels, not units */
+             Vec2i drawableSize(winSize);

@@ -1,0 +1,13 @@
+--- patches/vm_eval.c.orig	2026-08-30 18:42:41.984508000 -0400
++++ src/ruby-3.1.7/vm_eval.c	2026-08-30 18:42:42.042568300 -0400
+@@ -827,7 +827,9 @@
+     rb_method_visibility_t visi = METHOD_ENTRY_VISI(me);
+ 
+     /* receiver specified form for private method */
+-    if (UNLIKELY(visi != METHOD_VISI_PUBLIC)) {
++    /* PARCHE mkxp-z: la visibilidad private/protected se desactiva.
++     * El codigo RGSS llama a metodos privados con total naturalidad. */
++    if (0) { /* UNLIKELY(visi != METHOD_VISI_PUBLIC) */
+         if (me->def->original_id == idMethodMissing) {
+             return MISSING_NONE;
+         }

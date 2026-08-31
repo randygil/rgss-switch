@@ -1,0 +1,28 @@
+=== CRuby 3.1.7 en Nintendo Switch (Horizon OS) ===
+
+  [ OK  ] version     3.1.7
+  [ OK  ] plataforma  aarch64-elf
+  [ OK  ] aritmetica  5050
+  [ OK  ] cadenas     LINA NOMEKOP
+  [ OK  ] bloques     [1, 4, 9]
+  [ OK  ] hash        {:a=>10, :b=>20}
+  [ OK  ] struct      [4, 5]
+  [ OK  ] excepcion   capturada
+  [ OK  ] marshal     {:s=>[1, 2], :t=>"x"}
+  [ OK  ] require     true
+  [ OK  ] zlib        rxdata
+  [ OK  ] stringio    ok
+  [ OK  ] strscan     a
+  [ OK  ] rxdata      script
+  [ OK  ] alloc       5000
+  [ OK  ] GC.count    3
+  [ OK  ] GC.stat     3
+  [ OK  ] GC.start    sobrevivio
+  [ OK  ] post-GC     110
+  [ OK  ] privado     accesible
+  [ OK  ] protegido   ok
+  [ OK  ] superclase  permitido
+  [ OK  ] sprintf     1
+
+=== RESULTADO: 23 OK, 0 fallos ===
+

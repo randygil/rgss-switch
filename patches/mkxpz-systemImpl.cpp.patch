@@ -1,0 +1,62 @@
+--- src/system/systemImpl.cpp.orig	2026-08-30 19:16:23.054956500 -0400
++++ src/system/systemImpl.cpp	2026-08-30 19:18:12.813040100 -0400
+@@ -10,6 +10,11 @@
+ #if defined(__WIN32__)
+ #include <stdlib.h>
+ #include <windows.h>
++#elif defined(__SWITCH__)
++/* newlib solo trae la localizacion "C": std::locale("") lanza una excepcion.
++   Horizon expone el idioma del sistema por el servicio 'set'. */
++#include <switch.h>
++#include <stdlib.h>
+ #else
+ #include <locale>
+ #endif
+@@ -25,6 +30,35 @@
+     LANGID lid = GetUserDefaultLangID();
+     LCIDToLocaleName(lid, wbuf, sizeof(wbuf), 0);
+     wcstombs(buf, wbuf, sizeof(buf));
++#elif defined(__SWITCH__)
++    {
++        u64 lcode = 0;
++        SetLanguage lang = SetLanguage_ENUS;
++        const char *tag = "en_US";
++        if (R_SUCCEEDED(setInitialize())) {
++            if (R_SUCCEEDED(setGetSystemLanguage(&lcode)) &&
++                R_SUCCEEDED(setMakeLanguage(lcode, &lang))) {
++                switch (lang) {
++                case SetLanguage_ES:  tag = "es_ES";  break;
++                case SetLanguage_ES419: tag = "es_419"; break;
++                case SetLanguage_FR: case SetLanguage_FRCA: tag = "fr_FR"; break;
++                case SetLanguage_DE:    tag = "de_DE";  break;
++                case SetLanguage_IT:    tag = "it_IT";  break;
++                case SetLanguage_PT: case SetLanguage_PTBR: tag = "pt_BR"; break;
++                case SetLanguage_JA:    tag = "ja_JP";  break;
++                case SetLanguage_KO:    tag = "ko_KR";  break;
++                case SetLanguage_RU:    tag = "ru_RU";  break;
++                case SetLanguage_ZHCN: case SetLanguage_ZHHANS: tag = "zh_CN"; break;
++                case SetLanguage_ZHTW: case SetLanguage_ZHHANT: tag = "zh_TW"; break;
++                case SetLanguage_NL:    tag = "nl_NL";  break;
++                default:                tag = "en_US";  break;
++                }
++            }
++            setExit();
++        }
++        strncpy(buf, tag, sizeof(buf) - 1);
++        return std::string(buf);   /* la etiqueta ya viene normalizada */
++    }
+ #else
+     strncpy(buf, std::locale("").name().c_str(), sizeof(buf));
+ #endif
+@@ -49,6 +83,11 @@
+     // The Ruby binding gets the username from the environment loaded
+     // with Ruby instead, should fix getting it from WinAPI at some point
+     return std::string("unused");
++#elif defined(__SWITCH__)
++    /* Horizon no tiene variable de entorno USER. El nombre real del perfil
++       exigiria el servicio de cuentas, que no siempre esta disponible al
++       lanzar desde hbmenu. La rama de Windows tampoco lo resuelve. */
++    return std::string("Player");
+ #else
+     char ret[30];
+     char *username = getenv("USER");

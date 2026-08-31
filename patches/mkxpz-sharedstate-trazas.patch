@@ -1,0 +1,62 @@
+Instrumentacion de arranque en sharedstate.cpp.
+
+SharedStatePrivate es el constructor mas largo del arranque: compila los
+shaders, monta PhysFS, construye el pathCache e indexa las fuentes. En la
+consola un fallo aqui solo deja pantalla negra, asi que se instrumenta con
+nx_boot_trace() (nx/nx_boot.c) para saber cual de los seis pasos fue.
+
+--- a/src/sharedstate.cpp
++++ b/src/sharedstate.cpp
+@@ -60,6 +60,8 @@
+ 	return 0;
+ }
+ 
++extern "C" void nx_boot_trace(const char *msg);   /* nx/nx_boot.c */
++
+ struct SharedStatePrivate
+ {
+ 	void *bindingData;
+@@ -123,6 +125,7 @@
+ 		if (gl.ReleaseShaderCompiler)
+ 			gl.ReleaseShaderCompiler();
+ 
++		nx_boot_trace("[boot] 10a miembros construidos (shaders compilados)");
+ 		std::string archPath = config.execName + gameArchExt();
+ 
+ 		/* Check if a game archive exists */
+@@ -134,14 +137,19 @@
+ 		}
+ 
+ 		fileSystem.addPath(".");
++		nx_boot_trace("[boot] 10b PhysFS: directorio de juego montado");
+ 
+ 		for (size_t i = 0; i < config.rtps.size(); ++i)
+ 			fileSystem.addPath(config.rtps[i].c_str());
+ 
+ 		if (config.pathCache)
++		{
+ 			fileSystem.createPathCache();
++			nx_boot_trace("[boot] 10c pathCache construido");
++		}
+ 
+ 		fileSystem.initFontSets(fontState);
++		nx_boot_trace("[boot] 10d fuentes indexadas");
+ 
+ 		globalTexW = 128;
+ 		globalTexH = 64;
+@@ -157,11 +165,15 @@
+ 		/* Reuse starting values */
+ 		TEXFBO::allocEmpty(gpTexFBO, globalTexW, globalTexH);
+ 		TEXFBO::linkFBO(gpTexFBO);
++		nx_boot_trace("[boot] 10e texturas globales creadas");
+ 
+ 		/* RGSS3 games will call setup_midi, so there's
+ 		 * no need to do it on startup */
+ 		if (rgssVer <= 2)
++		{
+ 			midiState.initIfNeeded(threadData->config);
++			nx_boot_trace("[boot] 10f midi resuelto");
++		}
+ 	}
+ 
+ 	~SharedStatePrivate()

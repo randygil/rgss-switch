@@ -1,0 +1,13 @@
+--- src/filesystem/ghc/filesystem.hpp.orig	2026-08-30 19:16:23.092471500 -0400
++++ src/filesystem/ghc/filesystem.hpp	2026-08-30 19:17:03.665458100 -0400
+@@ -72,6 +72,10 @@
+ #elif defined(__EMSCRIPTEN__)
+ #define GHC_OS_WEB
+ #include <wasi/api.h>
++#elif defined(__SWITCH__)
++/* newlib de devkitA64 ofrece stat/opendir/readdir/realpath via libsysbase,
++   que es todo lo que ghc::filesystem necesita en su ruta POSIX. */
++#define GHC_OS_LINUX
+ #else
+ #error "Operating system currently not supported!"
+ #endif
