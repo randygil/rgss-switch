@@ -12,17 +12,23 @@
 #
 #   JUEGO="/c/ruta/a/Pokemon Anil" ./pack-anil.sh
 #
+#   PERFIL=diagnostico ./pack-anil.sh   mete ademas las sondas de runtime/diagnostico
+#
 set -u
-RAIZ=${RAIZ:-/c/anilswitch}
-SRC=${JUEGO:-"/c/Users/Usuario/Downloads/POKEMON_ANIL (1)/Pokemon Anil"}
+RAIZ=${RAIZ:-$(cd "$(dirname "$0")" && pwd)}
+SRC=${JUEGO:-${1:-}}
 DST=${DST:-"$RAIZ/out/sdcard/switch/pokemon-anil"}
 RUBY=${RUBY_SRC:-"$RAIZ/src/ruby-3.1.7/lib"}
+PERFIL=${PERFIL:-produccion}
 
-if [ ! -d "$SRC" ]; then
-  echo "No encuentro el juego en: $SRC"
-  echo "Define JUEGO con la ruta a tu copia de Pokemon Anil 4.0."
+if [ -z "$SRC" ] || [ ! -d "$SRC" ]; then
+  echo "No encuentro el juego en: '${SRC}'"
+  echo "Uso:  JUEGO=\"/ruta/a/Pokemon Anil\" ./pack-anil.sh     (o pasala como primer argumento)"
   exit 1
 fi
+for imprescindible in Data/Scripts.rxdata Graphics Audio; do
+  [ -e "$SRC/$imprescindible" ] || { echo "Esa carpeta no parece Pokemon Anil: falta $imprescindible"; exit 1; }
+done
 mkdir -p "$DST"
 
 echo "=== 1. Assets del juego ==="
@@ -43,11 +49,21 @@ done
 # El mkxp.json del juego es el de escritorio y no sirve: el del port fija la
 # resolucion de la Switch, el pathCache y la lista de preloadScript. Se copia
 # despues de los assets a proposito, para pisarlo si venia en la carpeta.
-echo "=== 4. Configuracion y shims de Ruby del port (runtime/) ==="
-cp "$RAIZ/runtime/mkxp.json" "$DST/mkxp.json" && echo "  + mkxp.json"
+echo "=== 4. Configuracion y shims de Ruby del port (runtime/, perfil: $PERFIL) ==="
+if [ "$PERFIL" = "diagnostico" ]; then
+  cp "$RAIZ/runtime/mkxp.diagnostico.json" "$DST/mkxp.json" && echo "  + mkxp.json (diagnostico)"
+else
+  cp "$RAIZ/runtime/mkxp.json" "$DST/mkxp.json" && echo "  + mkxp.json"
+fi
 mkdir -p "$DST/lib/io"
+rm -f "$DST"/lib/nx-*.rb
 cp "$RAIZ"/runtime/lib/*.rb     "$DST/lib/"    && echo "  + lib/*.rb          ($(ls "$RAIZ"/runtime/lib/*.rb | wc -l) ficheros)"
 cp "$RAIZ"/runtime/lib/io/*.rb  "$DST/lib/io/" && echo "  + lib/io/*.rb"
+if [ "$PERFIL" = "diagnostico" ]; then
+  cp "$RAIZ"/runtime/diagnostico/*.rb "$DST/lib/" && echo "  + lib/nx-*.rb de diagnostico ($(ls "$RAIZ"/runtime/diagnostico/*.rb | wc -l) ficheros)"
+fi
+# El binario, si ya esta compilado, para que la carpeta quede lista tal cual.
+[ -f "$RAIZ/mkxp-z-nx/pokemon-anil.nro" ] && cp "$RAIZ/mkxp-z-nx/pokemon-anil.nro" "$DST/pokemon-anil.nro" && echo "  + pokemon-anil.nro"
 
 # La stdlib tiene que ser la 3.1.7 con la que se compilo el interprete, no la
 # 3.3.0 de MinGW que traia el juego: los .rb de una version no valen para otra.

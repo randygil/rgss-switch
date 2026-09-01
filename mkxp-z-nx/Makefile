@@ -80,6 +80,18 @@ OBJS := $(addprefix $(BUILD)/,$(notdir $(CPPSRC:.cpp=.o)) $(notdir $(CSRC:.c=.o)
 VPATH := $(sort $(dir $(CPPSRC) $(CSRC)))
 
 #-------------------------------------------------------------------------------
+# Sello de compilacion
+#-------------------------------------------------------------------------------
+# Un contador en fichero, no la fecha a secas: dos compilaciones del mismo
+# minuto tienen que distinguirse, y "b47" se compara de un vistazo con lo que
+# ensena hbmenu mientras que "20260901-1503" no. El contador sube aunque falle
+# el enlazado; eso es a proposito, porque el numero solo tiene que ser distinto,
+# no consecutivo.
+BUILDNUM := $(shell n=$$(cat build-numero.txt 2>/dev/null || echo 0);                     n=$$((n+1)); echo $$n > build-numero.txt; echo $$n)
+VERSION  := $(shell cat ../VERSION 2>/dev/null || echo 0.0.0)
+SELLO    := $(VERSION) b$(BUILDNUM) $(shell date '+%d/%m %H:%M')
+
+#-------------------------------------------------------------------------------
 # Includes
 #-------------------------------------------------------------------------------
 MKXPZ_INC := . audio crypto display display/gl display/libnsgif \
@@ -97,7 +109,7 @@ INCLUDE := $(addprefix -I$(MKXPZ)/src/,$(MKXPZ_INC)) \
 #-------------------------------------------------------------------------------
 # Defines equivalentes a los que inyecta meson
 #-------------------------------------------------------------------------------
-DEFINES := -D__SWITCH__ -DMKXPZ_BUILD_MESON -DMKXPZ_VERSION=\"2.4.2\" \
+DEFINES := -D__SWITCH__ -DMKXPZ_BUILD_MESON -DMKXPZ_VERSION=\"2.4.2\" -DNX_BUILD='"$(SELLO)"' \
            -DHAVE_NANOSLEEP -DMKXPZ_INIT_GL_LATER \
            -DGLES2_HEADER \
            -DMKXPZ_ALCDEVICE=ALCdevice \
@@ -150,6 +162,14 @@ $(BUILD)/%.o: %.c
 	@echo "CC   $(notdir $<)"
 	@$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
+# El sello viaja en CFLAGS, y make no vigila CFLAGS: sin esto, nx_boot.c solo
+# se recompilaria cuando cambie el fichero y el binario saldria diciendo que es
+# de hace tres compilaciones. Que es exactamente el problema que el sello viene
+# a resolver.
+.PHONY: sello
+sello: ;
+$(BUILD)/nx_boot.o: sello
+
 $(TARGET).elf: $(OBJS)
 	@echo "LD   $@"
 	@$(CXX) $(LDFLAGS) $(OBJS) $(LIBS) -o $@
@@ -162,11 +182,16 @@ $(TARGET).elf: $(OBJS)
 # detras; el nuestro salia sin el.
 APP_TITLE   := Pokemon Anil 4.0
 APP_AUTHOR  := Port a Nintendo Switch
-APP_VERSION := 4.0
+# La version del port (fichero VERSION en la raiz), no la del juego: el juego
+# es siempre Anil 4.0; lo que cambia de una entrega a otra es esto.
+APP_VERSION := $(SELLO)
 APP_ICON    := $(LIBNX)/default_icon.jpg
 
+# El .nacp se rehace siempre: lleva el sello dentro y un sello viejo es peor
+# que ninguno.
+.PHONY: $(TARGET).nacp
 $(TARGET).nacp:
-	@echo "NACP $@"
+	@echo "NACP $@ ($(APP_VERSION))"
 	@$(DEVKITPRO)/tools/bin/nacptool --create "$(APP_TITLE)" "$(APP_AUTHOR)" "$(APP_VERSION)" $@
 
 $(TARGET).nro: $(TARGET).elf $(TARGET).nacp

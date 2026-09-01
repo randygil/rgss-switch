@@ -29,9 +29,17 @@
 !/fixup-arm64.py
 !/pack-anil.sh
 !/empaquetar-nsp.sh
+!/construir.sh
+!/VERSION
+!/GUIA.md
+!/Empaquetar.ps1
+!/Empaquetar.cmd
+!/.github/
 
 #--- Utillaje de desarrollo y verificacion ------------------------------------
 !/dump-scripts.py
+!/anilftp.py
+!/desplegar.sh
 !/iterate.sh
 !/captura.ps1
 !/jugar.ps1
@@ -72,6 +80,7 @@
 
 #--- Lo que va a la tarjeta SD y es fuente, no salida -------------------------
 !/runtime/
+# runtime/diagnostico/ va tambien: son fuente, aunque no se empaqueten.
 
 #--- Documentacion: los registros que cita el README --------------------------
 !/docs/

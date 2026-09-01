@@ -27,14 +27,24 @@
 #===============================================================================
 set -e
 
-RAIZ=C:/anilswitch
+RAIZ=${RAIZ:-$(cd "$(dirname "$0")" && pwd)}
 NSP=$RAIZ/nsp
-TOOLS=C:/devkitPro/tools/bin
-HBP=$RAIZ/tools/hacbrewpack/hacbrewpack.exe
+# DEVKITPRO puede venir en forma POSIX (/opt/devkitpro) de un entorno que no
+# es este; se acepta solo si las herramientas estan de verdad ahi.
+DEVKITPRO=${DEVKITPRO:-C:/devkitPro}
+[ -f "$DEVKITPRO/tools/bin/elf2nso.exe" ] || [ -f "$DEVKITPRO/tools/bin/elf2nso" ] || DEVKITPRO=C:/devkitPro
+TOOLS=$DEVKITPRO/tools/bin
+EXE=""; [ -f "$TOOLS/elf2nso$EXE" ] && EXE=.exe
+# hacbrewpack no viaja en el repo (es de terceros): descargalo de
+# https://github.com/The-4n/hacBrewPack/releases y dejalo en tools/hacbrewpack/
+# o define HBP con su ruta.
+HBP=${HBP:-$RAIZ/tools/hacbrewpack/hacbrewpack.exe}
 ELF=$RAIZ/mkxp-z-nx/pokemon-anil.elf
+[ -x "$HBP" ] || [ -f "$HBP" ] || { echo "no encuentro hacbrewpack en $HBP"; exit 1; }
 
 CLAVES=${CLAVES:-$USERPROFILE/.switch/prod.keys}
 [ -f "$CLAVES" ] || CLAVES="$APPDATA/Ryujinx/system/prod.keys"
+[ -f "$CLAVES" ] || { echo "no encuentro prod.keys (ni en ~/.switch ni en Ryujinx). Sacalas de TU consola con Lockpick_RCM y define CLAVES=/ruta/prod.keys"; exit 1; }
 
 # El nombre bueno lleva acentos, y nacptool no puede con ellos: recibe los
 # argumentos en la pagina de codigos ANSI del shell. Se le da la version sin
@@ -42,18 +52,18 @@ CLAVES=${CLAVES:-$USERPROFILE/.switch/prod.keys}
 TITULO="Pokémon Añil 4.0"
 TITULO_ASCII="Pokemon Anil 4.0"
 AUTOR="Port a Nintendo Switch"
-VERSION="4.0"
+VERSION="$(cat "$RAIZ/VERSION" 2>/dev/null || echo 0.0.0)"
 TITLEID=05414E494C000000     # 05 + "ANIL" + 000000; el rango 05.. no lo usa Nintendo
 
 echo "=== 1/5  main (NSO) ==="
 [ -f "$ELF" ] || { echo "no existe $ELF; compila primero"; exit 1; }
-"$TOOLS/elf2nso.exe" "$ELF" "$NSP/exefs/main"
+"$TOOLS/elf2nso$EXE" "$ELF" "$NSP/exefs/main"
 
 echo "=== 2/5  main.npdm ==="
-"$TOOLS/npdmtool.exe" "$NSP/npdm.json" "$NSP/exefs/main.npdm"
+"$TOOLS/npdmtool$EXE" "$NSP/npdm.json" "$NSP/exefs/main.npdm"
 
 echo "=== 3/5  control.nacp ==="
-"$TOOLS/nacptool.exe" --create "$TITULO_ASCII" "$AUTOR" "$VERSION" \
+"$TOOLS/nacptool$EXE" --create "$TITULO_ASCII" "$AUTOR" "$VERSION" \
     "$NSP/control/control.nacp" --titleid="$TITLEID"
 python "$NSP/nacp-utf8.py" "$NSP/control/control.nacp" "$TITULO" "$AUTOR"
 
@@ -73,7 +83,9 @@ mkdir -p "$NSP/salida" "$NSP/nca" "$NSP/temp"
     --nspdir    "$NSP/salida"  \
     --ncadir    "$NSP/nca"     \
     --tempdir   "$NSP/temp"    \
-    --noromfs --nologo
+    --noromfs --nologo 2>&1 | grep -v "Failed to match key"
+# grep -v: hacbrewpack avisa de cada clave del fichero que no reconoce Y LA
+# IMPRIME. Son claves de la consola; no deben acabar en ningun registro.
 
 SALIDA=$(ls "$NSP/salida"/*.nsp | head -1)
 FINAL=$RAIZ/out/pokemon-anil.nsp

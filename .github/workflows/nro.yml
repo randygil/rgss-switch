@@ -1,0 +1,37 @@
+# Compilacion del .nro en GitHub Actions — EXPERIMENTAL.
+#
+# Reproduce lo que hace construir.sh dentro del contenedor oficial de devkitPro.
+# El paso caro es portar CRuby y las dependencias (build-deps*.sh y
+# build-ruby-switch.sh): son los mismos guiones que en Windows, pero este flujo
+# no se ha ejecutado nunca de punta a punta en Linux. Si falla, el README
+# (secciones 4 y 5) documenta cada problema conocido y su arreglo; lo que si
+# esta comprobado es la compilacion del .nro a partir de las bibliotecas.
+#
+# Se lanza a mano (workflow_dispatch) y deja el .nro como artefacto. El .nsp no
+# se genera aqui: necesita prod.keys, que no se suben a ningun sitio.
+name: nro
+on:
+  workflow_dispatch:
+jobs:
+  nro:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkita64:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencias de mkxp-z portadas a Switch
+        run: |
+          apt-get update && apt-get install -y python3 autoconf automake libtool cmake pkg-config zip
+          export DEVKITPRO=/opt/devkitpro
+          ./build-deps.sh && ./build-deps2.sh
+      - name: CRuby 3.1.7 para libnx
+        run: |
+          export DEVKITPRO=/opt/devkitpro
+          ./build-ruby-switch.sh && ./finalize-ruby.sh
+      - name: pokemon-anil.nro y entrega
+        run: |
+          export DEVKITPRO=/opt/devkitpro
+          ./construir.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anil-switch
+          path: release/*.zip

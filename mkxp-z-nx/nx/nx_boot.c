@@ -40,6 +40,22 @@
  * se formatea a mano: aqui todavia no se toca el monton. */
 static u64 base_tick;
 
+/* Modo diagnostico: existe SD:/switch/pokemon-anil/diagnostico.txt. Enciende
+ * las autopruebas del arranque (ficheros, hilos, tuberias, sincronizacion) y
+ * el registro linea a linea. Se decide una vez y se cachea, porque se consulta
+ * desde el primer constructor estatico, antes de que exista nada mas. */
+int nx_diagnostico(void);
+int nx_diagnostico(void)
+{
+    static int decidido = -1;
+    if (decidido < 0) {
+        int fd = open("sdmc:/switch/pokemon-anil/diagnostico.txt", O_RDONLY);
+        decidido = (fd >= 0) ? 1 : 0;
+        if (fd >= 0) close(fd);
+    }
+    return decidido;
+}
+
 static void nx_boot_mark(const char *msg)
 {
     static const char *paths[3] = { NX_BOOTLOG_A, NX_BOOTLOG_B, NX_BOOTLOG_C };
@@ -63,6 +79,19 @@ static void nx_boot_mark(const char *msg)
         sello[n++] = ' ';
     }
 
+    /* Abrir, escribir y cerrar por cada linea costaba unos 40 ms en la SD:
+     * las sesenta lineas del arranque eran mas de dos segundos de espera antes
+     * de que el juego hiciera nada. En produccion el descriptor se abre una
+     * vez y se queda; la ultima linea puede perderse si el proceso muere, pero
+     * para eso esta el informe de fallo de Atmosphere. Con diagnostico.txt se
+     * vuelve al modo lento y seguro, que es el que quiere quien depura. */
+    static int fd_abierto = -1;
+    if (fd_abierto >= 0 && !nx_diagnostico()) {
+        write(fd_abierto, sello, n);
+        write(fd_abierto, msg, strlen(msg));
+        write(fd_abierto, &nl, 1);
+        return;
+    }
     for (i = 0; i < 3; i++) {
         int fd = open(paths[i], O_WRONLY | O_CREAT | O_APPEND, 0666);
         if (fd < 0)
@@ -70,7 +99,10 @@ static void nx_boot_mark(const char *msg)
         write(fd, sello, n);
         write(fd, msg, strlen(msg));
         write(fd, &nl, 1);
-        close(fd);
+        if (nx_diagnostico())
+            close(fd);
+        else
+            fd_abierto = fd;
         return;                 /* con que llegue a uno, basta */
     }
 }
@@ -78,9 +110,23 @@ static void nx_boot_mark(const char *msg)
 void nx_boot_trace(const char *msg);
 void nx_boot_trace(const char *msg) { nx_boot_mark(msg); }
 
+/* NX_BUILD lo genera el Makefile en cada compilacion. Existe porque el 1 de
+ * septiembre de 2026, despues de tres despliegues por FTP seguidos, no habia
+ * forma de saber si la consola estaba arrancando el binario nuevo o el de hace
+ * media hora: los registros se parecian demasiado. Un numero que sube solo, en
+ * la primera linea del registro y en la version que ensena hbmenu, cierra esa
+ * duda antes de que empiece a contaminar las medidas. */
+#ifndef NX_BUILD
+#define NX_BUILD "sin sellar"
+#endif
+
+const char *nx_build(void);
+const char *nx_build(void) { return NX_BUILD; }
+
 __attribute__((constructor(101)))
 static void nx_boot_early(void)
 {
+    nx_boot_mark("[build] " NX_BUILD);
     nx_boot_mark("[boot] 1/3 primer constructor estatico — heap y __appInit sobrevividos");
 }
 

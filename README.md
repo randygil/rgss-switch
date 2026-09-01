@@ -1,5 +1,10 @@
 # Pokémon Añil → Nintendo Switch (homebrew nativo)
 
+> **¿Sólo quieres jugar?** Lee [`GUIA.md`](GUIA.md): descargar la entrega, doble clic
+> en `Empaquetar.cmd`, elegir tu carpeta de Añil 4.0, copiar a la SD. Lo de aquí
+> abajo es la bitácora de ingeniería del port, para quien quiera entender o
+> modificar el motor.
+
 Porteo de **Pokémon Añil 4.0** (RPG Maker XP + Pokémon Essentials v21) a
 homebrew nativo de Nintendo Switch, ejecutable como `.nro` desde el hbmenu
 sobre Atmosphère. Sin Android, sin Linux, sin capas de emulación.
