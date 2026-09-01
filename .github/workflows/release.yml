@@ -1,0 +1,19 @@
+# Al empujar una etiqueta vX.Y.Z crea un BORRADOR de release con las notas
+# generadas a partir de los commits. El zip no lo genera la CI (el .nro se
+# compila en local, ver nro.yml): lo adjunta quien publica, con publicar.sh y
+# gh, o arrastrandolo en la web. Borrador a proposito: nada sale publicado sin
+# que alguien lo mire.
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  borrador:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: gh release create "$GITHUB_REF_NAME" --draft --generate-notes --title "Port ${GITHUB_REF_NAME#v}"
+        env:
+          GH_TOKEN: ${{ github.token }}

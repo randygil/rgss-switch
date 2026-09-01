@@ -30,6 +30,8 @@
 !/pack-anil.sh
 !/empaquetar-nsp.sh
 !/construir.sh
+!/publicar.sh
+!/PUBLICAR.md
 !/VERSION
 !/GUIA.md
 !/Empaquetar.ps1
