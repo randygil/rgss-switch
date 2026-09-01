@@ -132,14 +132,9 @@ static u32 avisos;
 /* --------------------------------------------------------------------------
  * Reloj de pared contra tiempo de CPU, que es la pregunta que queda.
  *
- * "resto" —lo que no cae bajo ninguna sonda— son 300 a 580 ms de cada
+ * "resto" —lo que no cae bajo ninguna sonda— eran 300 a 580 ms de cada
  * fotograma malo, y la explicacion que dabamos por buena era "el interprete de
- * Ruby". Contra eso se probo lo evidente: subir la CPU de 1020 a 1785 MHz. No
- * cambio nada. Y con el turbo quitado la consola se pone sola a 612 MHz, que es
- * su reloj de reposo — o sea que el gestor de energia tampoco ve a nadie
- * quemando CPU.
- *
- * Las dos cosas apuntan a lo mismo y ninguna lo demuestra. Esto si: el nucleo
+ * Ruby". Suponerlo no lo demuestra. Esto si: el nucleo
  * lleva la cuenta de los ticks que ha consumido cada hilo, y restarla entre dos
  * fotogramas dice cuanto de esos 580 ms estuvo el hilo trabajando y cuanto
  * estuvo parado esperando a algo. Si "cpu" sale parecido a "marco", es Ruby y

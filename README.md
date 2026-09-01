@@ -2073,8 +2073,10 @@ mucho peor que un error de compilación.
 - [ ] **H6** — Optimización. **La mitad hecha**: `createPathCache` bajó de
       56.065 ms a 300 recorriendo el árbol con `readdir` en vez de con un
       `PHYSFS_stat` por fichero (§5.48), y el intérprete Ruby arranca a los
-      **4,8 s** donde antes tardaba más de sesenta. Quedan la coroutine arm64,
-      el presupuesto de RAM y el overclock.
+      **4,8 s** donde antes tardaba más de sesenta. Los tirones de los menús
+      resultaron ser código del juego (plugins barriendo sprites píxel a píxel
+      desde Ruby) y se arreglaron en `runtime/lib/nx-*.rb` sin tocar el reloj:
+      el juego va bien a la frecuencia de fábrica. Queda la coroutine arm64.
 - [x] **H7** — **NSP instalable: el juego deja de ser homebrew** ✅
       `out/pokemon-anil.nsp`, **11 MB**. Icono propio en el menú HOME, arranque
       directo y presupuesto de aplicación: **3.264 MB de montón** medidos con
@@ -2206,9 +2208,8 @@ Y el diagnóstico, por síntoma:
 | Panel de error de Horizon con un código | `crash_reports` trae registros y pila; para traducir el PC, el `addr2line` de abajo |
 | Va, pero lento | La consola no es el emulador. `Status-Monitor-Overlay` ya está en la SD y da fps en vivo |
 
-La consola tiene además dos herramientas que valen para lo que queda: **sys-clk**
-para el overclock de H6, y **ReverseNX-Tool** para forzar sobremesa o portátil
-sin tocar la base, que es la manera de comprobar §5.49 en hardware de verdad.
+**ReverseNX-Tool** permite forzar sobremesa o portátil sin tocar la base, que es
+la manera de comprobar §5.49 en hardware de verdad.
 
 ---
 

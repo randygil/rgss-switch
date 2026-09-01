@@ -45,9 +45,6 @@ se guardan en `SD:/switch/pokemon-anil/` como en PC.
 - **Va a tirones**: crea un fichero vacío `SD:/switch/pokemon-anil/diagnostico.txt`
   y vuelve a jugar; el registro traerá una línea `[tiron]` por cada fotograma
   lento con su reparto. Sin ese fichero el juego arranca más rápido.
-- **Batería**: el port fija la CPU a 1785 MHz (el *boost* oficial de la consola)
-  porque el intérprete de Ruby lo necesita. Si prefieres el reloj de fábrica,
-  crea `SD:/switch/pokemon-anil/turbo-no.txt`.
 - **Actualizar**: sustituye `pokemon-anil.nro`, `mkxp.json` y `lib/` por los de
   la entrega nueva. Los recursos del juego no cambian.
 
