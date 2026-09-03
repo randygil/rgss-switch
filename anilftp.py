@@ -44,7 +44,11 @@ REGISTROS = ["mkxp-boot.log", "mkxp-debug.log", "mkxp-ruby.log", "errorlog.txt"]
 # sincronizar los 22.151 ficheros del juego son minutos.
 SOLO = {
     "nro":  ["pokemon-anil.nro"],
-    "ruby": ["mkxp.json", "preload.rb"],
+    # Game.rgssad va aqui y no en "todo": son ocho bytes que no cambian nunca,
+    # pero sin ellos el juego no mira dentro de anil-datos.zip y muere a los
+    # veinte segundos (README 5.60). Si la carpeta de la consola viene de un
+    # empaquetado con contenedor, esto es lo que la completa.
+    "ruby": ["mkxp.json", "preload.rb", "Game.rgssad"],
     "todo": None,
 }
 
