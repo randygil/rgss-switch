@@ -13,6 +13,14 @@
 #   JUEGO="/c/ruta/a/Pokemon Anil" ./pack-anil.sh
 #
 #   PERFIL=diagnostico ./pack-anil.sh   mete ademas las sondas de runtime/diagnostico
+#   CONTENEDOR=zip     ./pack-anil.sh   los assets en un solo anil-datos.zip
+#
+# CONTENEDOR=zip deja Data/, Graphics/, Audio/ y Fonts/ dentro de un unico
+# anil-datos.zip ALMACENADO (zip -0), que es lo que el .nro monta con PhysFS al
+# arrancar (sharedstate.cpp). Un fichero en vez de 22.000: la copia a la tarjeta
+# —o el envio por FTP— deja de estar limitada por la cuenta de ficheros. Sin
+# comprimir a proposito: los PNG y los OGG ya lo estan, y una entrada comprimida
+# obliga a PhysFS a inflar en cada lectura y a rebobinar en cada busqueda.
 #
 set -u
 RAIZ=${RAIZ:-$(cd "$(dirname "$0")" && pwd)}
@@ -20,6 +28,7 @@ SRC=${JUEGO:-${1:-}}
 DST=${DST:-"$RAIZ/out/sdcard/switch/pokemon-anil"}
 RUBY=${RUBY_SRC:-"$RAIZ/src/ruby-3.1.7/lib"}
 PERFIL=${PERFIL:-produccion}
+CONTENEDOR=${CONTENEDOR:-carpetas}
 
 if [ -z "$SRC" ] || [ ! -d "$SRC" ]; then
   echo "No encuentro el juego en: '${SRC}'"
@@ -31,15 +40,33 @@ for imprescindible in Data/Scripts.rxdata Graphics Audio; do
 done
 mkdir -p "$DST"
 
-echo "=== 1. Assets del juego ==="
-for d in Data Graphics Audio Fonts; do
-  printf '  %-10s ' "$d"
-  rm -rf "$DST/$d"
-  cp -r "$SRC/$d" "$DST/$d" && echo "copiado" || echo "FALLO"
-done
+if [ "$CONTENEDOR" = "zip" ]; then
+  echo "=== 1. Assets del juego -> anil-datos.zip (almacenado) ==="
+  command -v zip >/dev/null || { echo "falta zip: pacman -S zip en la shell de devkitPro"; exit 1; }
+  for d in Data Graphics Audio Fonts; do rm -rf "$DST/$d"; done
+  rm -f "$DST/anil-datos.zip" "$DST/anil-datos.zip.parcial"
+  # -0 almacenar, -r recursivo, -X sin campos extra del sistema, -q callado.
+  # Se comprime desde $SRC para que las rutas dentro del zip empiecen en Data/.
+  ( cd "$SRC" && zip -0 -r -X -q "$DST/anil-datos.zip.parcial" Data Graphics Audio Fonts \
+      -x '*.exe' '*.dll' 'Thumbs.db' '.nomedia' ) || { echo "FALLO al empaquetar"; exit 1; }
+  # Se renombra al final: un zip a medias no puede parecerse a uno acabado.
+  mv "$DST/anil-datos.zip.parcial" "$DST/anil-datos.zip"
+  echo "  + anil-datos.zip  $(du -h "$DST/anil-datos.zip" | cut -f1), $(unzip -l "$DST/anil-datos.zip" | tail -1 | awk '{print $2}') entradas"
+  unzip -tq "$DST/anil-datos.zip" >/dev/null || { echo "FALLO: el zip no pasa unzip -t"; exit 1; }
+else
+  echo "=== 1. Assets del juego ==="
+  for d in Data Graphics Audio Fonts; do
+    printf '  %-10s ' "$d"
+    rm -rf "$DST/$d"
+    cp -r "$SRC/$d" "$DST/$d" && echo "copiado" || echo "FALLO"
+  done
 
-echo "=== 2. Purga de restos de escritorio dentro de los assets ==="
-find "$DST" -type f \( -iname '*.exe' -o -iname '*.dll' -o -iname 'Thumbs.db' -o -iname '.nomedia' \) -print -delete
+  echo "=== 2. Purga de restos de escritorio dentro de los assets ==="
+  find "$DST" -type f \( -iname '*.exe' -o -iname '*.dll' -o -iname 'Thumbs.db' -o -iname '.nomedia' \) -print -delete
+  # El contenedor manda sobre las carpetas sueltas (el .nro lo monta primero),
+  # asi que uno viejo aqui haria jugar con los datos de antes.
+  [ -f "$DST/anil-datos.zip" ] && echo "  AVISO: hay un anil-datos.zip de otra tanda y el juego lo montara ANTES que estas carpetas. Borralo."
+fi
 
 echo "=== 3. Ficheros sueltos que si hacen falta ==="
 for f in Game.ini preload.rb knownpoint.bmp selpoint.bmp; do
@@ -82,4 +109,5 @@ fi
 
 echo "=== 6. Tamano ==="
 du -sh "$DST"
-du -sh "$DST"/*/
+echo "  $(find "$DST" -type f | wc -l) ficheros en total"
+du -sh "$DST"/*/ 2>/dev/null || true

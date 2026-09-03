@@ -1,0 +1,85 @@
+La pantalla que dice que ha pasado.
+
+En Horizon, SDL_ShowSimpleMessageBox devuelve -1 y no pinta nada, asi que los
+tres fallos de arranque —faltan los datos, memoria de applet, fallo del motor—
+se ven exactamente igual: la consola vuelve al menu homebrew en silencio.
+
+Este parche los separa y los ensena. La revision del inventario va antes de
+SDL_Init, que es cuando la consola de libnx puede usar la ventana por defecto y
+cuando todavia no se han gastado dos segundos en abrir GL y OpenAL para nada.
+Los fallos del motor se guardan y se pintan al final, despues de SDL_Quit, por
+la misma razon al reves: SDL no suelta la ventana hasta entonces.
+
+La pantalla la dibuja nx/nx_aviso.c.
+
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -126,6 +126,14 @@
+ 
+ #ifdef __SWITCH__
+ extern "C" void nx_nucleo(const char *quien, int preferido);
++/* nx/nx_aviso.c — la pantalla que dice que ha pasado. En Horizon,
++   SDL_ShowSimpleMessageBox devuelve -1 y no pinta nada, asi que todos los
++   fallos de arranque se ven igual: la consola vuelve al menu homebrew en
++   silencio. Estas tres funciones son las que rompen ese silencio. */
++extern "C" int  nx_revision_arranque(void);
++extern "C" void nx_aviso_registra(const char *msg);
++extern "C" int  nx_aviso_pendiente(void);
++extern "C" void nx_aviso_mostrar(void);
+ #endif
+ 
+ int rgssThreadFun(void *userdata) {
+@@ -211,6 +219,11 @@
+ 
+ static void showInitError(const std::string &msg) {
+   Debug() << msg;
++#ifdef __SWITCH__
++  /* El cuadro de dialogo de SDL no existe en Horizon: se guarda el mensaje y se
++     pinta al final de main(), cuando SDL ya ha soltado la ventana. */
++  nx_aviso_registra(msg.c_str());
++#endif
+   SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "mkxp-z", msg.c_str(), 0);
+ }
+ 
+@@ -286,6 +299,16 @@
+         Debug() << "[nx] Data/Scripts.rxdata accesible:"
+                 << (access("Data/Scripts.rxdata", R_OK) == 0);
+     }
++    /* La revision del inventario va AQUI, antes de SDL_Init, por dos razones:
++       la consola de libnx y SDL no pueden tener la ventana por defecto a la
++       vez, y porque si faltan los datos no hay ningun motivo para gastar dos
++       segundos abriendo GL y OpenAL antes de decirlo. Devuelve distinto de cero
++       cuando no se puede seguir; el informe ya esta en pantalla y en el
++       registro. */
++    if (nx_revision_arranque() != 0) {
++        nx_boot_trace("[boot] la revision de arranque aborta: falta algo en la SD");
++        return 0;
++    }
+ #endif
+     SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0");
+     SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
+@@ -585,6 +608,9 @@
+ 
+     if (!rtData.rgssErrorMsg.empty()) {
+       Debug() << rtData.rgssErrorMsg;
++#ifdef __SWITCH__
++      nx_aviso_registra(rtData.rgssErrorMsg.c_str());
++#endif
+       SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, conf.game.title.c_str(),
+                                rtData.rgssErrorMsg.c_str(), win);
+     }
+@@ -613,6 +639,14 @@
+     IMG_Quit();
+     SDL_Quit();
+ 
++#ifdef __SWITCH__
++    /* Ahora, y no antes: la consola de libnx necesita la ventana por defecto,
++       que SDL no suelta hasta SDL_Quit. Si no hubo fallo, no pinta nada y se
++       vuelve al menu homebrew como siempre. */
++    if (nx_aviso_pendiente())
++      nx_aviso_mostrar();
++#endif
++
+     return 0;
+ }
+ 

@@ -2002,6 +2002,128 @@ desempataba —*cuándo* se paraba— no estaba en el primer informe, y no lo pe
 Conviene recordarlo: **«se paró de repente» y «se paró al coger un objeto» son
 el mismo síntoma con distinta información, y llevan a sitios distintos.**
 
+### 5.58 Un fichero en vez de 22.148
+
+Copiar el juego a la tarjeta es el único paso del port que hace el jugador, y
+era el más largo de todos: **668 MB repartidos en 22.148 ficheros**. Lo que
+cuesta ahí no son los bytes. Cada fichero es una entrada de directorio, una
+cadena de clusters y una escritura de la tabla de FAT32, y una tarjeta que
+escribe 40 MB/s en un fichero grande se arrastra copiando miles de ficheros de
+30 KB. Peor: una copia interrumpida a mitad deja una carpeta que no se
+distingue de una completa, y el síntoma es el de siempre —pantalla negra.
+
+Así que los recursos pueden viajar dentro de **un solo `anil-datos.zip`**, que
+el `.nro` monta al arrancar. No hay motor nuevo que escribir: PhysFS ya sabe
+leer un zip —el archivador viene compilado en el `libphysfs` de portlibs— y
+mkxp-z ya monta un `.rgssad` si lo encuentra al lado del juego. Son doce líneas
+en `sharedstate.cpp`, y las dos decisiones que llevan dentro son las que
+importan:
+
+**Almacenado, no comprimido.** De los 668 MB, 535 ya son PNG y OGG, y los
+`.rxdata` llevan zlib dentro: comprimir ahorra un 5%. Y se paga dos veces, las
+dos en el peor sitio. Una entrada comprimida obliga a PhysFS a pasar cada
+lectura por `inflate` en vez de leer el fichero a un desplazamiento; y al buscar
+hacia atrás dentro de ella, PhysFS no puede saltar, **rebobina y vuelve a
+inflar desde el principio de la entrada**. El juego busca hacia atrás cada vez
+que un OGG de música vuelve a su punto de bucle, y son ficheros de varios megas.
+Guardado en claro, leer del contenedor es leer de un fichero a otro sitio, y ahí
+se acaba el coste.
+
+Esto tiene una consecuencia práctica que costó descubrir: **el
+`CompressionLevel.NoCompression` de .NET Framework no almacena.** Sigue usando
+deflate (método 8) con bloques sin comprimir, y el fichero sale incluso cinco
+bytes más grande. Se vio al inspeccionar el zip de prueba: las 26 entradas,
+todas con método 8. Por eso `Empaquetar.ps1` no usa `ZipArchive` y escribe el
+zip a mano —cabecera local, índice central y registro final— con noventa
+renglones de C# que `Add-Type` compila al vuelo. Sigue sin hacer falta instalar
+nada, y el resultado lo leen sin queja el `ZipArchive` de .NET, el `zipfile` de
+Python y el `unzip` de Info-ZIP, que es la única forma de saber que la consola
+también podrá.
+
+**Delante de `"."`, no detrás.** PhysFS resuelve cada ruta recorriendo los
+puntos de montaje en el orden en que se montaron, y preguntar al directorio de
+la tarjeta por un fichero que no está ahí cuesta la misma IPC de 0,85 ms que si
+estuviera (§5.48). Con la carpeta delante, las 22.148 rutas del juego pagarían
+ese fallo antes de encontrarse en el contenedor —no sólo al construir el
+`pathCache`, sino en cada apertura de la partida—. Con el contenedor delante, el
+acierto es una consulta a una tabla en memoria y el fallo barato lo paga el
+puñado de ficheros que siguen sueltos: `mkxp.json`, `lib/`, las partidas
+guardadas. Es además lo que mkxp-z ya hacía con el `.rgssad`, así que no hay dos
+criterios.
+
+Medido en el PC: el contenedor se construye en **36,7 s** y sale de 22.186
+entradas (22.035 ficheros y 151 directorios) con los mismos 651 MB dentro,
+byte a byte idénticos tras extraerlos. En un NVMe con la caché caliente
+—el caso más favorable a los ficheros sueltos— `robocopy /MT:8` necesita 6,9 s
+para el árbol y el fichero único se copia de una pasada.
+
+Lo que **no** está medido todavía es lo que pasa en la consola: cuánto tarda
+la copia real a la tarjeta y si el `pathCache` construido sobre el índice del
+zip sale igual de rápido que el recorrido con `readdir` de §5.48. Con un
+contenedor montado, `nxCacheRapido` se rinde a propósito —un zip no se recorre
+con `opendir`— y el índice lo vuelve a construir PhysFS; la diferencia es que
+ahora sus 22.148 `PHYSFS_stat` son consultas a memoria y no llamadas al
+servicio de ficheros. La línea `[cache]` del registro de arranque dice el
+número exacto, y hay que ir a mirarla.
+
+Las carpetas sueltas siguen funcionando y siguen siendo la forma de parchear un
+gráfico a mano: `Empaquetar.ps1 -Contenedor carpetas`, o la casilla sin marcar.
+Lo que no se puede es tener las dos y esperar que gane la carpeta.
+
+### 5.59 Tres fallos distintos, la misma pantalla negra
+
+Cuando el juego no arranca en la consola, lo que ve el jugador es que el menú
+homebrew vuelve. Siempre igual, y son tres cosas que no tienen nada que ver:
+
+1. Los datos no están donde el `.nro` los busca, o la copia a la tarjeta se
+   cortó por la mitad.
+2. El `.nro` se lanzó como applet de biblioteca, con 448 MB, y el juego necesita
+   unos 700 (§5.53).
+3. Un fallo de verdad del motor: GL, PhysFS, Ruby.
+
+mkxp-z distingue los tres —tiene mensajes concretos para cada uno— pero los
+cuenta llamando a `SDL_ShowSimpleMessageBox`, que en el SDL de Horizon **no
+está implementado: devuelve −1 y no pinta nada**. De ahí que todos se vean
+iguales, y de ahí que el único diagnóstico posible fuera sacar la tarjeta y leer
+`mkxp-boot.log` en el PC.
+
+`nx/nx_aviso.c` pinta ese informe en la pantalla, con la consola de libnx. Son
+tres piezas:
+
+- **La revisión del inventario**, antes de `SDL_Init`. Comprueba lo que hace
+  falta —el contenedor o las carpetas, `mkxp.json`, `lib/nx-compat.rb`,
+  `lib/socket.rb`— y si algo falta lo enseña con la ruta donde estaba mirando y
+  los tres pasos para arreglarlo. Va antes de SDL por dos razones: la consola de
+  libnx y SDL no pueden tener la ventana por defecto a la vez, y si faltan los
+  datos no hay ningún motivo para gastar dos segundos abriendo GL y OpenAL.
+- **La revisión del contenedor**, que no se limita a mirar si el fichero está.
+  Un zip termina en su registro final (`50 4b 05 06`), así que si esos cuatro
+  bytes no aparecen al final, la copia está incompleta y se puede decir eso en
+  vez de «pantalla negra». El mismo registro trae la cuenta de entradas, y con
+  ella la pantalla contesta la pregunta que de verdad se hace quien copió el
+  juego: *¿este fichero lleva los datos dentro?* → `anil-datos.zip (653 MB,
+  22186 entradas)`.
+- **El aviso de memoria de applet**, que es el caso en el que todo está bien y
+  el juego muere igual. Se decide con `appletGetAppletType()` y con el montón
+  que libnx consiguió de verdad, porque el primero lo contesta el sistema y el
+  emulador miente. Este no aborta: dice cómo se arranca con memoria de
+  aplicación y deja pulsar A para intentarlo de todas formas.
+
+Los fallos del motor (caso 3) se guardan y se pintan al final de `main()`,
+después de `SDL_Quit()`, por la razón contraria: SDL no suelta la ventana hasta
+entonces.
+
+Todo el texto es ASCII a propósito —la fuente de la consola de libnx no lleva
+las vocales acentuadas—, y cada línea que se pinta va también al registro, así
+que el informe de pantalla y el de fichero son el mismo.
+
+Probado sin consola, que es lo que hace falta para no depender de ella:
+`nx_aviso.c` compila en el PC contra un `switch.h` de mentira con las quince
+funciones que usa, y así se recorren los seis escenarios contra carpetas de
+verdad —contenedor bueno, contenedor truncado, contenedor de otra cosa,
+carpetas sueltas, `lib/socket.rb` ausente, memoria de applet— y se lee la
+pantalla que va a ver el jugador antes de enviarla a la consola.
+
 ## 5-bis. Criterio de diseño para los stubs
 
 Auditando `libc.a`, `libsysbase.a` y `libnx.a` con `nm`, el reparto es:
@@ -2248,9 +2370,18 @@ por FatFS es lento. Opciones:
 
 1. **romfs embebido en el NRO** — un solo archivo, rápido, pero un `.nro` de
    814 MB es poco manejable y no permite parches.
-2. **Assets sueltos en SD + PhysFS con `pathCache: true`** ← *elegida*.
+2. **Assets sueltos en SD + PhysFS con `pathCache: true`** ← *elegida en H5*.
    mkxp-z ya cachea el árbol de rutas en memoria al arrancar, que es
    exactamente la mitigación para este problema.
+3. **Un `anil-datos.zip` almacenado, montado por PhysFS** ← *añadida después,
+   y ahora la de por omisión*. Resuelve lo que la opción 2 dejaba en pie, que no
+   era el arranque sino **la copia a la tarjeta**: 22.148 ficheros no se copian
+   a la velocidad de la tarjeta. Un solo fichero además se envía de una pieza y
+   se comprueba con un hash. Sin comprimir, para no pagar `inflate` en cada
+   lectura ni rebobinados al buscar dentro de un OGG. El detalle, en §5.58.
+
+Las opciones 2 y 3 conviven: el `.nro` monta el contenedor si está y las
+carpetas si no, y `Empaquetar.ps1` produce cualquiera de las dos formas.
 
 
 ---
@@ -2275,6 +2406,22 @@ sdcard/
         ├── Fonts/    292 KB
         └── lib/      1,2 MB       ← stdlib de Ruby 3.1.7 + sustitutos
 ```
+
+Con contenedor (`CONTENEDOR=zip ./pack-anil.sh`, o la casilla de
+`Empaquetar.ps1`), las cuatro carpetas de recursos se sustituyen por un fichero
+y la carpeta entera baja de 22.148 entradas a 15 más `lib/`:
+
+```
+        ├── pokemon-anil.nro
+        ├── mkxp.json
+        ├── Game.ini
+        ├── preload.rb
+        ├── anil-datos.zip   654 MB  ← Audio/ Graphics/ Data/ Fonts/, almacenado
+        └── lib/             1,2 MB
+```
+
+Las partidas guardadas y los registros siguen escribiéndose sueltos en esa misma
+carpeta: el contenedor es de sólo lectura y el juego no escribe dentro.
 
 hbmenu recorre los subdirectorios de `/switch/`, así que el `.nro` puede vivir
 junto a sus datos en vez de separarlos.

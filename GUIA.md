@@ -12,9 +12,18 @@ copia de Pokémon Añil 4.0 para PC**, y la entrega de este port.
 1. **Descarga la entrega** (`anil-switch-x.y.z.zip`) y descomprímela.
 2. **Doble clic en `Empaquetar.cmd`.** Elige la carpeta de tu Añil 4.0 de PC
    (la que tiene `Game.exe`, `Data`, `Graphics`…) y una carpeta de salida —
-   puede ser directamente la raíz de la tarjeta SD. Copia unos 700 MB.
+   puede ser directamente la raíz de la tarjeta SD. Son unos 700 MB.
+
+   Deja marcada la casilla **«Juntar los recursos en un solo fichero»**: los
+   recursos del juego son 22.148 ficheros y una tarjeta SD los copia mucho más
+   despacio que los mismos megas en un fichero único (`anil-datos.zip`). El
+   juego lee de dentro sin descomprimir nada, y un solo fichero se envía y se
+   comprueba de una pieza. Desmárcala sólo si quieres cambiar gráficos o mapas
+   del juego a mano.
 3. Si la salida no era la SD, **copia la carpeta `switch`** a la raíz de la tarjeta.
    Debe quedar `SD:/switch/pokemon-anil/pokemon-anil.nro`.
+   **Espera a que la copia termine del todo**: si se corta a medias, el juego lo
+   dirá al arrancar, pero mejor no llegar ahí.
 4. Elige una forma de lanzarlo:
    - **NSP (recomendado)**: instala `pokemon-anil.nsp` con Awoo Installer, DBI o
      Goldleaf. Aparece en el menú HOME con su icono y arranca con toda la memoria.
@@ -39,6 +48,20 @@ se guardan en `SD:/switch/pokemon-anil/` como en PC.
 
 ## Si algo va mal
 
+Lo primero es leer la pantalla: cuando algo falta, el juego ya **no** se queda en
+negro. Enseña un informe con lo que buscaba, dónde lo buscaba y qué hacer, y se
+sale con **+**. Tres cosas que puede decir:
+
+- **«No encuentro los datos del juego»** — el `.nro` está en la tarjeta pero los
+  recursos no, o no en la misma carpeta. Vuelve al paso 2.
+- **«El paquete de datos está incompleto: la copia se cortó»** — `anil-datos.zip`
+  llegó a medias. Cópialo otra vez y espera a que termine.
+- **«Arrancado con memoria de applet»** — todo está en su sitio, pero el menú
+  homebrew se abrió sin memoria suficiente. Ábrelo manteniendo **R** sobre un
+  juego, o instala el NSP. (Puedes pulsar **A** para intentarlo igualmente.)
+
+Si la pantalla no dice nada o el fallo es del motor:
+
 - **Se queda en negro o vuelve al menú**: mira `SD:/switch/pokemon-anil/mkxp-boot.log`
   (primera línea: la versión que arrancó) y `mkxp-ruby.log`. Si hay un error
   del juego, `errorlog.txt`. Adjúntalos al reportar.
@@ -46,7 +69,12 @@ se guardan en `SD:/switch/pokemon-anil/` como en PC.
   y vuelve a jugar; el registro traerá una línea `[tiron]` por cada fotograma
   lento con su reparto. Sin ese fichero el juego arranca más rápido.
 - **Actualizar**: sustituye `pokemon-anil.nro`, `mkxp.json` y `lib/` por los de
-  la entrega nueva. Los recursos del juego no cambian.
+  la entrega nueva. Los recursos del juego no cambian, así que `anil-datos.zip`
+  (o las carpetas `Data/`, `Graphics/`…) se quedan como están y no hay que
+  volver a copiar los 700 MB.
+- **No tengas las dos cosas a la vez**: si en la carpeta hay un `anil-datos.zip`
+  *y* las carpetas sueltas, el juego lee del `.zip` y las carpetas sólo ocupan
+  sitio. El empaquetador te avisa cuando pasa.
 
 ## Hacer tu propia versión
 
