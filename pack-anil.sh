@@ -38,6 +38,21 @@ fi
 for imprescindible in Data/Scripts.rxdata Graphics Audio; do
   [ -e "$SRC/$imprescindible" ] || { echo "Esa carpeta no parece Pokemon Anil: falta $imprescindible"; exit 1; }
 done
+
+# Origen y destino no pueden ser lo mismo. Este guion empieza borrando las
+# cuatro carpetas de recursos del destino, asi que apuntar JUEGO al propio
+# out/sdcard —que ya parece la carpeta de Anil y pasa todas las comprobaciones
+# de arriba— se lleva por delante los 668 MB antes de copiarlos. Con contenedor
+# es mas facil de pisar todavia, porque el destino ni siquiera tiene que
+# parecerse al origen para que la tentacion aparezca.
+SRC_REAL=$(cd "$SRC" && pwd -P)
+DST_REAL=$(mkdir -p "$DST" && cd "$DST" && pwd -P)
+if [ "$SRC_REAL" = "$DST_REAL" ]; then
+  echo "JUEGO y DST son la misma carpeta ($SRC_REAL)."
+  echo "Este guion borra Data/, Graphics/, Audio/ y Fonts/ del destino antes de escribir:"
+  echo "apunta JUEGO a tu copia original del juego, no a la salida."
+  exit 1
+fi
 mkdir -p "$DST"
 
 if [ "$CONTENEDOR" = "zip" ]; then
