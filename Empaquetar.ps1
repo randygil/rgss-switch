@@ -325,6 +325,38 @@ function Empaqueta([string]$juego, [string]$salida, [string]$modo, [scriptblock]
         if (Test-Path $o) { Copy-Item $o (Join-Path $destino $f) -Force }
     }
 
+    # La llave del contenedor.
+    #
+    # Pokemon Essentials pregunta si un fichero existe de dos maneras distintas,
+    # y elige mirando si hay un Game.rgssad al lado:
+    #
+    #     def pbRgssExists?(filename)
+    #       return !pbGetFileChar(filename).nil? if FileTest.exist?("./Game.rgssad")
+    #       return FileTest.exist?(canonicalize(filename))
+    #     end
+    #
+    # Sin archivo pregunta al SISTEMA DE FICHEROS, que no sabe nada de lo que
+    # hay dentro del contenedor. Con archivo pregunta por load_data, que va por
+    # PhysFS y si lo ve. Se comprobo en el emulador: con el contenedor montado y
+    # todo lo demas bien, el juego cargaba sus 770 scripts desde dentro del zip
+    # y se moria a los veinte segundos con "No se establecio una posicion de
+    # inicio en el editor de mapas", porque no encontraba Data/Map###.rxdata.
+    #
+    # Estos ocho bytes son la cabecera de un RGSSAD version 1 sin ninguna
+    # entrada: un archivo vacio, valido, que mkxp-z monta sin quejarse y que le
+    # dice al juego "aqui se lee por el camino de los archivos".
+    if ($modo -eq "zip") {
+        $suyo = Join-Path $juego "Game.rgssad"
+        if (Test-Path $suyo) {
+            Copy-Item $suyo (Join-Path $destino "Game.rgssad") -Force
+            $avisa.Invoke("     Game.rgssad: el juego ya traia uno, se copia tal cual")
+        } else {
+            [System.IO.File]::WriteAllBytes((Join-Path $destino "Game.rgssad"),
+                [byte[]](0x52, 0x47, 0x53, 0x53, 0x41, 0x44, 0x00, 0x01))
+            $avisa.Invoke("     Game.rgssad (8 bytes): la llave que hace que el juego lea del contenedor")
+        }
+    }
+
     $avisa.Invoke("2/4 Motor del port (.nro, mkxp.json, lib/)")
     Copy-Item (Join-Path $Entrega "pokemon-anil.nro") (Join-Path $destino "pokemon-anil.nro") -Force
     Copy-Item (Join-Path $Entrega "mkxp.json") (Join-Path $destino "mkxp.json") -Force
@@ -336,7 +368,7 @@ function Empaqueta([string]$juego, [string]$salida, [string]$modo, [scriptblock]
     # Una comprobacion que no puede fallar no es una comprobacion: se cuenta lo
     # que tiene que estar y se compara con lo que esta.
     $pedidos = @("pokemon-anil.nro", "mkxp.json", "Game.ini", "preload.rb", "lib\nx-compat.rb", "lib\nx-rutas.rb", "lib\socket.rb")
-    if ($modo -eq "zip") { $pedidos += $NombrePaquete } else { $pedidos += "Data\Scripts.rxdata" }
+    if ($modo -eq "zip") { $pedidos += $NombrePaquete; $pedidos += "Game.rgssad" } else { $pedidos += "Data\Scripts.rxdata" }
     $faltan = @($pedidos | Where-Object { -not (Test-Path (Join-Path $destino $_)) })
     if ($faltan.Count -gt 0) { throw ("Faltan en la salida: " + ($faltan -join ", ")) }
     if ($modo -eq "zip") { Comprueba-Contenedor $paquete $cuenta $avisa }

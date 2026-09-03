@@ -163,15 +163,39 @@ static u64 monton_mb(void)
     return (u64)(fake_heap_end - fake_heap_start) / (1024 * 1024);
 }
 
+/* Decide el MONTON, no el tipo de applet.
+ *
+ * La primera version preguntaba appletGetAppletType() y avisaba si contestaba
+ * AppletType_LibraryApplet. Es la pregunta natural y es la equivocada: ese dato
+ * lo contesta el sistema y Ryujinx no modela la diferencia (§5.53), asi que un
+ * NRO lanzado en el emulador puede declararse applet de biblioteca con los 3,2
+ * GB de una aplicacion en la mano. El aviso habria salido con todo en su sitio,
+ * que es la peor clase de aviso: el que ensena a no leerlos.
+ *
+ * Lo que de verdad decide es cuanta memoria consiguio libnx, porque es la que
+ * hay para repartir. En la consola, un applet de biblioteca son ~448 MB y una
+ * aplicacion ~3,2 GB: no hay ambiguedad posible con un umbral de 1 GB. El tipo
+ * de applet se sigue anotando en el informe, pero como dato, no como juez. */
 static int memoria_de_applet(void)
 {
     if (envIsNso())
         return 0;                                   /* NSP instalado: aplicacion */
-    if (appletGetAppletType() == AppletType_LibraryApplet)
-        return 1;
-    /* El tipo de applet lo contesta el sistema y el emulador miente; el monton
-     * que libnx consiguio de verdad, no. Con menos de 1 GB no cabe el juego. */
     return monton_mb() < 1024;
+}
+
+static const char *como_arranco(void)
+{
+    if (envIsNso())
+        return "aplicacion instalada (NSP)";
+    switch (appletGetAppletType()) {
+    case AppletType_Application:
+    case AppletType_SystemApplication:
+        return "homebrew (NRO) con memoria de aplicacion";
+    case AppletType_LibraryApplet:
+        return "homebrew (NRO) como applet de biblioteca";
+    default:
+        return "homebrew (NRO)";
+    }
 }
 
 /* --------------------------------------------------------------- la pantalla */
@@ -326,6 +350,37 @@ int nx_revision_arranque(void)
         faltan_fatales = 1;
     }
 
+    /* 1-bis. La llave del contenedor.
+     *
+     * Medido en Ryujinx con todo en su sitio: el contenedor montaba, el
+     * interprete arrancaba, Essentials cargaba sus 770 scripts desde dentro
+     * del zip... y el juego moria con "No se establecio una posicion de inicio
+     * en el editor de mapas". El motivo esta en el propio Essentials:
+     *
+     *     def pbRgssExists?(filename)
+     *       return !pbGetFileChar(filename).nil? if FileTest.exist?("./Game.rgssad")
+     *       return FileTest.exist?(canonicalize(filename))
+     *     end
+     *
+     * Sin archivo a la vista, el juego le pregunta al SISTEMA DE FICHEROS, que
+     * no sabe nada de lo que hay dentro del contenedor; con archivo, pregunta
+     * por load_data, que va por PhysFS y si lo ve. Game.rgssad no lleva datos
+     * —son ocho bytes, la cabecera de un archivo vacio— pero es lo que hace
+     * que el juego use el camino que sabe leer contenedores. El empaquetador lo
+     * escribe; si no esta, el juego arranca y muere a los veinte segundos, y
+     * eso es exactamente lo que esta pantalla existe para no repetir. */
+    if (paquete == 1) {
+        if (existe("Game.rgssad", 0, &ignora)) {
+            anota("[ OK  ] Game.rgssad (la llave que hace que el juego lea del contenedor)");
+        } else {
+            anota("[FALTA] Game.rgssad      sin el, el juego no mira dentro del contenedor");
+            if (!motivo[0])
+                snprintf(motivo, sizeof(motivo),
+                         "FALTA Game.rgssad, LA LLAVE DEL CONTENEDOR.");
+            faltan_fatales = 1;
+        }
+    }
+
     /* 2. Las piezas del port. Estan en la entrega, asi que si falta una es que
      *    se descomprimio a medias o se actualizo solo el .nro. */
     for (i = 0; i < sizeof(exigencias) / sizeof(exigencias[0]); i++) {
@@ -380,6 +435,8 @@ int nx_revision_arranque(void)
             0
         };
         n_lineas = 0;
+        snprintf(linea, sizeof(linea), "Arranque: %s.", como_arranco());
+        anota(linea);
         snprintf(linea, sizeof(linea), "El monton que me han dado: %llu MB.",
                  (unsigned long long)monton_mb());
         anota(linea);

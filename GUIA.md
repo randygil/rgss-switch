@@ -56,6 +56,9 @@ sale con **+**. Tres cosas que puede decir:
   recursos no, o no en la misma carpeta. Vuelve al paso 2.
 - **«El paquete de datos está incompleto: la copia se cortó»** — `anil-datos.zip`
   llegó a medias. Cópialo otra vez y espera a que termine.
+- **«Falta Game.rgssad, la llave del contenedor»** — ese fichero de ocho bytes es
+  lo que hace que el juego lea de dentro del `.zip`. Lo escribe el empaquetador;
+  si no está, vuelve al paso 2 en vez de copiarlo a mano.
 - **«Arrancado con memoria de applet»** — todo está en su sitio, pero el menú
   homebrew se abrió sin memoria suficiente. Ábrelo manteniendo **R** sobre un
   juego, o instala el NSP. (Puedes pulsar **A** para intentarlo igualmente.)

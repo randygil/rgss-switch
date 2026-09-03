@@ -68,6 +68,16 @@ if [ "$CONTENEDOR" = "zip" ]; then
   mv "$DST/anil-datos.zip.parcial" "$DST/anil-datos.zip"
   echo "  + anil-datos.zip  $(du -h "$DST/anil-datos.zip" | cut -f1), $(unzip -l "$DST/anil-datos.zip" | tail -1 | awk '{print $2}') entradas"
   unzip -tq "$DST/anil-datos.zip" >/dev/null || { echo "FALLO: el zip no pasa unzip -t"; exit 1; }
+  # La llave del contenedor: ocho bytes, la cabecera de un RGSSAD vacio.
+  # Essentials solo pregunta por load_data —y por tanto por PhysFS, que es quien
+  # ve dentro del contenedor— cuando hay un Game.rgssad al lado; sin el pregunta
+  # al sistema de ficheros y el juego muere con "No se establecio una posicion
+  # de inicio en el editor de mapas". Ver README 5.58.
+  if [ -f "$SRC/Game.rgssad" ]; then
+    cp "$SRC/Game.rgssad" "$DST/Game.rgssad" && echo "  + Game.rgssad (el del juego, tal cual)"
+  else
+    printf 'RGSSAD\000\001' > "$DST/Game.rgssad" && echo "  + Game.rgssad (8 bytes: la llave del contenedor)"
+  fi
 else
   echo "=== 1. Assets del juego ==="
   for d in Data Graphics Audio Fonts; do

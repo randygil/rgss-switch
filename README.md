@@ -2057,14 +2057,40 @@ byte a byte idénticos tras extraerlos. En un NVMe con la caché caliente
 —el caso más favorable a los ficheros sueltos— `robocopy /MT:8` necesita 6,9 s
 para el árbol y el fichero único se copia de una pasada.
 
-Lo que **no** está medido todavía es lo que pasa en la consola: cuánto tarda
-la copia real a la tarjeta y si el `pathCache` construido sobre el índice del
-zip sale igual de rápido que el recorrido con `readdir` de §5.48. Con un
-contenedor montado, `nxCacheRapido` se rinde a propósito —un zip no se recorre
-con `opendir`— y el índice lo vuelve a construir PhysFS; la diferencia es que
-ahora sus 22.148 `PHYSFS_stat` son consultas a memoria y no llamadas al
-servicio de ficheros. La línea `[cache]` del registro de arranque dice el
-número exacto, y hay que ir a mirarla.
+Y medido en Ryujinx, que es donde se vio lo que costaba de verdad:
+
+```
+[   296] [ OK  ] anil-datos.zip (653 MB, 22186 entradas)     ← el inventario, 24 ms
+[  4102] [boot] 10a miembros construidos
+[ 12521] [boot] 10a+ contenedor anil-datos.zip montado       ← 8,4 s en montar
+[ 18101] [boot] 10c pathCache construido                     ← 5,6 s en indexar
+[ 18174] [boot] 11 SharedState OK, arrancando el interprete Ruby
+```
+
+**Trece segundos y medio de arranque**, contra unos 600 ms que costaba lo mismo
+con las carpetas sueltas. Y el reparto dice dónde están, porque ninguno de los
+dos es el trabajo:
+
+- **Montar: 8,4 s.** PhysFS lee el índice central entrada por entrada y campo
+  por campo —`io->read` de cuatro bytes, y el nombre *byte a byte*— y con 22.186
+  entradas eso son cientos de miles de lecturas diminutas. El mismo problema que
+  §5.55, en otro sitio: no es el tamaño, es la cuenta de llamadas.
+- **Indexar: 5,6 s.** `nxCacheRapido` se rinde a propósito cuando algo montado no
+  es un directorio de verdad —un zip no se recorre con `opendir`— y el índice lo
+  construye PhysFS. Lo bueno: sus 22.186 `PHYSFS_stat` son ya consultas a memoria
+  y no IPC, y por eso el desglose dice `193 ms en PHYSFS_stat`. Lo malo: los otros
+  5,4 s se van en `PHYSFS_enumerate`, que para cada uno de los 171 directorios
+  recorre la lista entera de entradas.
+
+Las dos tienen el mismo arreglo y es el que §5.48 ya aplicó una vez: hacer el
+recorrido nosotros. El índice central de un zip es una tabla plana con nombre,
+tamaño y desplazamiento; leerlo de una pasada con un búfer y llenar las dos
+tablas del `pathCache` es exactamente lo que `nxCacheRapido` hace hoy con
+`readdir`. Queda pendiente, y con un número al que apuntar.
+
+En la consola no está medido todavía: ni la copia real a la tarjeta ni estos dos
+tramos, que aquí los mueve el JIT de Ryujinx sobre un x86 y allí un Cortex-A57 a
+1 GHz. Las líneas `[boot] 10a+` y `[cache]` del registro lo dicen.
 
 Las carpetas sueltas siguen funcionando y siguen siendo la forma de parchear un
 gráfico a mano: `Empaquetar.ps1 -Contenedor carpetas`, o la casilla sin marcar.
@@ -2104,10 +2130,16 @@ tres piezas:
   juego: *¿este fichero lleva los datos dentro?* → `anil-datos.zip (653 MB,
   22186 entradas)`.
 - **El aviso de memoria de applet**, que es el caso en el que todo está bien y
-  el juego muere igual. Se decide con `appletGetAppletType()` y con el montón
-  que libnx consiguió de verdad, porque el primero lo contesta el sistema y el
-  emulador miente. Este no aborta: dice cómo se arranca con memoria de
+  el juego muere igual. No aborta: dice cómo se arranca con memoria de
   aplicación y deja pulsar A para intentarlo de todas formas.
+
+  La primera versión preguntaba `appletGetAppletType()`, que es la pregunta
+  natural y era la equivocada: ese dato lo contesta el sistema, y Ryujinx no
+  modela la diferencia (§5.53), así que un NRO lanzado en el emulador se declara
+  applet de biblioteca con los 3,2 GB de una aplicación en la mano. El aviso
+  habría salido con todo en su sitio, que es la peor clase de aviso: el que
+  enseña a no leerlos. Decide el **montón** que libnx consiguió —448 MB contra
+  3,2 GB, sin ambigüedad posible— y el tipo de applet se anota como dato.
 
 Los fallos del motor (caso 3) se guardan y se pintan al final de `main()`,
 después de `SDL_Quit()`, por la razón contraria: SDL no suelta la ventana hasta
@@ -2123,6 +2155,71 @@ funciones que usa, y así se recorren los seis escenarios contra carpetas de
 verdad —contenedor bueno, contenedor truncado, contenedor de otra cosa,
 carpetas sueltas, `lib/socket.rb` ausente, memoria de applet— y se lee la
 pantalla que va a ver el jugador antes de enviarla a la consola.
+
+### 5.60 El motor podía leer el contenedor; el juego no sabía preguntar
+
+Con el contenedor montado y todo lo demás en su sitio, el arranque llegaba
+entero: PhysFS indexaba las 22.186 rutas, el intérprete arrancaba, Essentials
+cargaba sus 770 scripts **desde dentro del zip** —eso ya demuestra que el
+contenedor se lee— y a los veinte segundos el juego se moría:
+
+```
+Excepción: RuntimeError
+Mensaje: No se estableció una posición de inicio en el editor de mapas.
+Traza: StartGame:15:in `initialize'
+```
+
+El mensaje suena a datos corruptos y no lo eran. La línea que falla es ésta:
+
+```ruby
+map_file = sprintf("Data/Map%03d.rxdata", $data_system.start_map_id)
+if $data_system.start_map_id == 0 || !pbRgssExists?(map_file)
+  raise _INTL("No se estableció una posición de inicio en el editor de mapas.")
+end
+```
+
+`start_map_id` estaba bien —`Data/System.rxdata` se había cargado del
+contenedor, por `load_data`, que va por PhysFS—. Lo que falla es la segunda
+condición, y el porqué está en Essentials:
+
+```ruby
+def pbRgssExists?(filename)
+  return !pbGetFileChar(filename).nil? if FileTest.exist?("./Game.rgssad")
+  filename = canonicalize(filename)
+  return FileTest.exist?(filename)
+end
+```
+
+**Dos caminos, y el juego elige mirando si hay un archivo al lado.** Sin
+`Game.rgssad`, pregunta con `FileTest.exist?`, que es el sistema de ficheros de
+Ruby y no sabe nada de lo que PhysFS tiene montado. Con `Game.rgssad`, pregunta
+por `load_data`, que sí. El juego traía el camino bueno desde el principio;
+sólo no tenía motivo para tomarlo.
+
+Así que el empaquetador escribe un `Game.rgssad` de **ocho bytes**: la cabecera
+de un RGSSAD versión 1 sin ninguna entrada. `RGSS_openArchive` verifica la
+cabecera, entra en el bucle de entradas, el primer `readUint32` da EOF y monta
+un archivo vacío sin quejarse. No lleva datos: lleva la señal.
+
+Es la clase de fallo que no se encuentra leyendo el motor, porque el motor
+estaba bien. Y el diagnóstico de §5.59 ya lo cubre: si hay contenedor y no hay
+`Game.rgssad`, la consola lo dice en 24 ms —«FALTA Game.rgssad, LA LLAVE DEL
+CONTENEDOR»— en vez de arrancar veinte segundos para morirse.
+
+Con la llave puesta, Ryujinx enseña la intro completa a 60 FPS y el juego llega
+a la entrada del nombre leyendo los 653 MB desde dentro del zip:
+
+```
+[rutas] resolutor memoizado (Game.rgssad: true)
+[teclado] entrada de texto encaminada a la rejilla con cursor
+```
+
+Ese `Game.rgssad: true` de `nx-rutas.rb` importa más de lo que parece: con
+archivo, cada comprobación de existencia pasa por `pbGetFileChar`, que hace
+`load_data` del fichero **entero**. Para los gráficos lo tapa la memoización de
+§5.55, que es justo la que guarda esas resoluciones; para el audio y los datos
+está sin medir en la consola, y es lo primero que hay que mirar si el
+contenedor va más lento de lo que debería.
 
 ## 5-bis. Criterio de diseño para los stubs
 
