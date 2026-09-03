@@ -31,10 +31,10 @@ normal y no un fallo que haya que investigar.
 -extern "C" void nx_boot_trace(const char *msg);   /* nx/nx_boot.c */
 +extern "C" void nx_boot_trace(const char *msg);      /* nx/nx_boot.c */
 +extern "C" void nx_aviso_registra(const char *msg);  /* nx/nx_aviso.c */
+ extern "C" void nx_espera_paso(float fraccion);      /* nx/nx_espera.cpp */
  
  struct SharedStatePrivate
- {
-@@ -136,6 +137,70 @@
+@@ -138,6 +139,71 @@
  			fclose(tmp);
  		}
  
@@ -85,6 +85,7 @@ normal y no un fallo que haya que investigar.
 +				{
 +					fileSystem.addPath(paquete);
 +					nx_boot_trace("[boot] 10a+ contenedor anil-datos.zip montado");
++					nx_espera_paso(0.55f);
 +				}
 +				catch (const Exception &exc)
 +				{
@@ -104,7 +105,7 @@ normal y no un fallo que haya que investigar.
 +
  		fileSystem.addPath(".");
  		nx_boot_trace("[boot] 10b PhysFS: directorio de juego montado");
- 
+ 		nx_espera_paso(0.60f);
 --- a/src/filesystem/filesystem.cpp
 +++ b/src/filesystem/filesystem.cpp
 @@ -590,6 +590,10 @@

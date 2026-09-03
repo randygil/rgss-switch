@@ -12,6 +12,12 @@ la misma razon al reves: SDL no suelta la ventana hasta entonces.
 
 La pantalla la dibuja nx/nx_aviso.c.
 
+Y de paso van aqui los tres enganches de la OTRA pantalla, la de carga
+(nx/nx_espera.cpp): se abre en cuanto initGL devuelve un contexto -lo primero
+que se puede hacer con GL es dejar de ensenar negro- y se retira justo antes de
+arrancar el interprete, que es cuando empieza a dibujar el juego. Treinta
+segundos de pantalla negra son indistinguibles de un cuelgue (README 5.61).
+
 --- a/src/main.cpp
 +++ b/src/main.cpp
 @@ -126,6 +126,14 @@
@@ -26,10 +32,10 @@ La pantalla la dibuja nx/nx_aviso.c.
 +extern "C" void nx_aviso_registra(const char *msg);
 +extern "C" int  nx_aviso_pendiente(void);
 +extern "C" void nx_aviso_mostrar(void);
- #endif
- 
- int rgssThreadFun(void *userdata) {
-@@ -211,6 +219,11 @@
+ /* nx/nx_espera.cpp — el logo y la barra de CARGANDO mientras el arranque
+    trabaja. Sin esto, veinte segundos de pantalla negra que nadie distingue de
+    un cuelgue. */
+@@ -231,6 +239,11 @@
  
  static void showInitError(const std::string &msg) {
    Debug() << msg;
@@ -41,7 +47,7 @@ La pantalla la dibuja nx/nx_aviso.c.
    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "mkxp-z", msg.c_str(), 0);
  }
  
-@@ -286,6 +299,16 @@
+@@ -306,6 +319,16 @@
          Debug() << "[nx] Data/Scripts.rxdata accesible:"
                  << (access("Data/Scripts.rxdata", R_OK) == 0);
      }
@@ -58,7 +64,7 @@ La pantalla la dibuja nx/nx_aviso.c.
  #endif
      SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0");
      SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
-@@ -585,6 +608,9 @@
+@@ -605,6 +628,9 @@
  
      if (!rtData.rgssErrorMsg.empty()) {
        Debug() << rtData.rgssErrorMsg;
@@ -68,7 +74,7 @@ La pantalla la dibuja nx/nx_aviso.c.
        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, conf.game.title.c_str(),
                                 rtData.rgssErrorMsg.c_str(), win);
      }
-@@ -613,6 +639,14 @@
+@@ -633,6 +659,14 @@
      IMG_Quit();
      SDL_Quit();
  

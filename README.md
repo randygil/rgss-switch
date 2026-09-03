@@ -2221,6 +2221,106 @@ archivo, cada comprobación de existencia pasa por `pbGetFileChar`, que hace
 está sin medir en la consola, y es lo primero que hay que mirar si el
 contenedor va más lento de lo que debería.
 
+#### El método que no existía detrás de la puerta
+
+La llave abre el camino del archivo, y ese camino tiene tres puertas más:
+`pbRgssExists?`, `pbGetFileChar` y **`pbRgssOpen`**. Las dos primeras funcionan.
+La tercera empieza así:
+
+```ruby
+def pbRgssOpen(file, mode = nil)
+  ...
+  file = canonicalize(file)
+  Marshal.neverload = true
+  str = load_data(file, true)
+```
+
+`Marshal.neverload` aparece **una vez en los 770 scripts del juego y cero veces
+en todo mkxp-z**. Es un resto de compatibilidad con el mkxp antiguo, donde ese
+indicador hacía que `load_data` devolviera la cadena en bruto en vez de
+deserializarla; en mkxp-z eso lo dice el segundo argumento de `load_data` —el
+`true` de la línea siguiente— y el indicador sobra. Pero sobrar no es lo mismo
+que no hacer falta: sin el método, la línea muere con `NoMethodError` la primera
+vez que el juego lee sus textos (`Data/messages_*.dat`) o una batalla de reto.
+
+O sea que con contenedor el juego arrancaba y se rompía más tarde y en otro
+sitio, que es la peor forma de romperse. El arreglo son doce líneas en
+`lib/nx-compat.rb`: un setter vacío y un getter que devuelve `false`. **No
+faltaba una función, faltaba una firma**, y esa es la misma categoría que
+`lib/socket.rb` — el port existe para tapar huecos de plataforma, y éste lo es.
+
+La lección, que costó una tanda de pruebas: cambiar el contenedor no cambia sólo
+cómo se leen los ficheros, **cambia por qué rama del juego se pasa**. Y una rama
+que no se recorría nunca no está probada por nadie.
+
+### 5.61 Treinta segundos de pantalla negra son un cuelgue
+
+El arranque tarda lo que tarda: veinte segundos con las carpetas sueltas
+(§5.48), trece y medio más con el contenedor (§5.58). Y en todo ese rato la
+consola no enseñaba **nada**. El registro decía desde el principio que el
+arranque iba bien, pero el jugador no lee registros: ve una pantalla negra, y
+una pantalla negra que dura medio minuto es indistinguible de un cuelgue. Es un
+fallo de verdad aunque no lo sea del código.
+
+`nx/nx_espera.cpp` dibuja el logo del juego, la palabra CARGANDO y una barra que
+avanza en cada hito del arranque. Tres cosas que decidir, y las tres tienen
+razón técnica:
+
+**Dónde se dibuja.** Todo esto pasa DENTRO del constructor de `SharedState`: el
+`Graphics` de mkxp-z, sus shaders y su caché de estado se están construyendo
+justo ahí, y no hay un `shState` al que pedirle nada. Así que hay un programa
+GLES mínimo —un cuadrado, dos texturas— que usa la tabla de funciones de mkxp-z
+(`gl-fun.h`) para no tener dos formas distintas de llegar al driver. El logo va
+empotrado en el binario con `xxd`, como los shaders, porque esto se pinta antes
+de que PhysFS monte nada y en ese momento no se puede leer un fichero del juego.
+
+**Por qué hay que limpiar después.** `GLState` es una **caché**: recuerda qué
+programa y qué color de fondo dejó puestos y se salta la llamada si le piden lo
+que ya cree tener. Una pantalla que cambia el estado a su espalda hace que la
+primera escena del juego salga con el programa equivocado. El arreglo no es
+adivinar lo que había, es volver a poner de acuerdo caché y driver: al terminar,
+`sharedstate.cpp` reinicia las propiedades cacheadas exactamente como hace el
+constructor de `GLState`.
+
+**Por qué la barra da saltos.** Entre un hito y el siguiente el hilo está dentro
+de PhysFS y no hay a quién pedirle un fotograma. Podría animarse una barra falsa
+que avanzara sola; sería mentir sobre el progreso, y una barra que miente es un
+adorno. Da saltos: 0,25 al compilar los shaders, 0,55 al montar el contenedor,
+0,85 al construir el índice.
+
+Y el primer fotograma se pinta **dos veces**. La superficie de Horizon tiene más
+de un búfer y un solo intercambio deja el otro con lo que hubiera antes —negro—;
+si el compositor enseña ése, el jugador ve negro hasta el hito siguiente, que
+puede estar ocho segundos después. Dos intercambios cuestan 32 ms.
+
+#### Lo que no se pudo hacer: música durante la carga
+
+Una imagen quieta y medio minuto de silencio siguen pareciendo un cuelgue, así
+que el paso natural era sonar el tema del título mientras carga —y entraría sin
+costura en el juego, porque `AudioStream::play` compara el nombre del fichero
+con el que ya suena y, si coincide, no reinicia nada—.
+
+No se puede desde ahí. `audio.bgmPlay()` termina en `alstream.cpp:264`:
+
+```cpp
+shState->fileSystem().openRead(handler, filename.c_str());
+```
+
+y `shState` —el puntero global al estado compartido— **no se asigna hasta que el
+constructor de `SharedState` termina**. El intento costó un
+`Invalid memory access at virtual address 0x0` en la consola. Dentro de ese
+constructor hay GL, hay OpenAL y hay PhysFS, pero no hay motor al que pedirle un
+fichero.
+
+Se intentó entonces desde un script de precarga, que corre con todo publicado.
+Funciona, pero llega al mismo sitio al que llega el juego por su cuenta unos
+segundos después, y a cambio mete una pieza móvil en el arranque: en la consola
+la música empezó antes de que se viera la pantalla de carga y los efectos de
+sonido se quedaron mudos. Se quitó. **La música de la carga es un adorno y no
+puede ser el motivo de que algo del juego suene distinto**; el sitio donde eso
+se arregla de verdad es en los trece segundos y medio de §5.58, no en un
+parche que los tape.
+
 ## 5-bis. Criterio de diseño para los stubs
 
 Auditando `libc.a`, `libsysbase.a` y `libnx.a` con `nm`, el reparto es:

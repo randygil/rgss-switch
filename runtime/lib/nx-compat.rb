@@ -148,3 +148,37 @@ NX.log("[nx] $LOAD_PATH: #{$LOAD_PATH.inspect}")
     NX.log("[nx] require #{feature}: #{e.class}: #{e.message}")
   end
 end
+
+# --- Marshal.neverload, el metodo que el juego llama y nadie define ---------
+#
+# Essentials tiene dos caminos para leer ficheros y elige mirando si hay un
+# Game.rgssad al lado (README 5.60). El del archivo, que es el que usa el
+# contenedor, pasa por aqui:
+#
+#     def pbRgssOpen(file, mode = nil)
+#       ...
+#       Marshal.neverload = true
+#       str = load_data(file, true)
+#
+# `Marshal.neverload` aparece UNA vez en los 770 scripts del juego y CERO veces
+# en mkxp-z: es un resto de compatibilidad con el mkxp antiguo, donde ese
+# indicador servia para que load_data devolviera la cadena en bruto en vez de
+# deserializarla. En mkxp-z eso ya lo dice el segundo argumento de load_data
+# —el `true` de la linea siguiente—, asi que el indicador no tiene que hacer
+# nada... pero el metodo tiene que EXISTIR, o pbRgssOpen muere con NoMethodError
+# la primera vez que el juego lee los textos o una batalla de reto.
+#
+# De ahi que esto sea un setter vacio y no una implementacion: no falta una
+# funcion, falta una firma. Misma familia que lib/socket.rb.
+module Marshal
+  class << self
+    def neverload=(_valor)
+      # a proposito, nada: load_data(ruta, true) ya lee en bruto
+    end
+
+    def neverload
+      false
+    end
+  end
+end
+NX.log("[nx] Marshal.neverload definido (lo pide pbRgssOpen con contenedor)")

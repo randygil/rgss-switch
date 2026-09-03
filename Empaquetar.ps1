@@ -27,6 +27,17 @@
 #                         ahora. Es lo que hay que usar para parchear ficheros
 #                         del juego uno a uno.
 #
+# EL TRATO, medido y sin adornos. El contenedor cuesta unos TRECE SEGUNDOS MAS
+# de arranque cada vez que se abre el juego: PhysFS tiene que leer el indice del
+# zip (8 s) y volver a construir su tabla de rutas (5 s), y eso no se paga con
+# las carpetas sueltas. En cambio se ahorra en cada copia: 22.148 ficheros a una
+# tarjeta SD no van a la velocidad de la tarjeta, van a la del sistema de
+# ficheros, y ahi la diferencia se cuenta en decenas de minutos.
+#
+# Asi que: contenedor si vas a copiar, enviar o rehacer la tarjeta; carpetas
+# sueltas si el juego ya esta puesto y lo que quieres es que arranque cuanto
+# antes o cambiar graficos a mano.
+#
 # Sin comprimir a proposito: 535 de los 668 MB ya son PNG y OGG, formatos
 # comprimidos, y los .rxdata llevan zlib dentro. Comprimir ahorra un 5% y se
 # paga inflando cada lectura durante la partida.
@@ -399,7 +410,9 @@ function Empaqueta([string]$juego, [string]$salida, [string]$modo, [scriptblock]
 
     $tam = [math]::Round(((Get-ChildItem $destino -Recurse -File | Measure-Object Length -Sum).Sum / 1MB))
     $cuantos = (Get-ChildItem $destino -Recurse -File).Count
-    return "Listo: $destino ($tam MB en $cuantos ficheros). Copia la carpeta 'switch' a la raiz de la tarjeta SD."
+    $comoQuedo = "recursos sueltos: el arranque mas rapido, 22.148 ficheros que copiar"
+    if ($modo -eq "zip") { $comoQuedo = "un solo contenedor: copia rapida, ~13 s mas de arranque" }
+    return "Listo: $destino ($tam MB en $cuantos ficheros, $comoQuedo). Copia la carpeta 'switch' a la raiz de la tarjeta SD."
 }
 
 # ---------------------------------------------------------------- sin interfaz
@@ -418,7 +431,7 @@ Add-Type -AssemblyName System.Drawing
 
 $f = New-Object System.Windows.Forms.Form
 $f.Text = "Pokemon Anil para Nintendo Switch - empaquetador"
-$f.Size = New-Object System.Drawing.Size(640, 460)
+$f.Size = New-Object System.Drawing.Size(640, 480)
 $f.StartPosition = "CenterScreen"
 $f.FormBorderStyle = "FixedDialog"
 $f.MaximizeBox = $false
@@ -460,22 +473,35 @@ $bSalida.Add_Click({
 # La casilla decide entre un fichero de 700 MB y 22.000 de 30 KB. Marcada por
 # omision porque copiar a una SD lo agradece muchisimo y porque un solo fichero
 # se puede enviar y comprobar; se desmarca para parchear el juego a mano.
+#
+# Debajo va el trato explicado, porque las dos opciones son razonables y quien
+# elige tiene derecho a saber que pierde: una casilla sin explicacion es una
+# trampa para el que la desmarca por curiosidad.
 $casillaZip = New-Object System.Windows.Forms.CheckBox
-$casillaZip.Location = New-Object System.Drawing.Point(16, 136)
+$casillaZip.Location = New-Object System.Drawing.Point(16, 132)
 $casillaZip.Size = New-Object System.Drawing.Size(598, 22)
 $casillaZip.Checked = ($Contenedor -eq "zip")
-$casillaZip.Text = "3. Juntar los recursos en un solo fichero ($NombrePaquete) - mucho mas rapido de copiar"
+$casillaZip.Text = "3. Juntar los recursos en un solo fichero ($NombrePaquete)"
 $f.Controls.Add($casillaZip)
 
+$explica = New-Object System.Windows.Forms.Label
+$explica.Location = New-Object System.Drawing.Point(36, 155)
+$explica.Size = New-Object System.Drawing.Size(580, 46)
+$explica.ForeColor = [System.Drawing.Color]::FromArgb(90, 90, 90)
+$explica.Text = ("MARCADA: un solo fichero de ~650 MB. Copiar a la tarjeta pasa de decenas de minutos a unos pocos," + [Environment]::NewLine +
+                 "y se envia y comprueba de una pieza. A cambio el juego tarda unos 13 s mas en arrancar, siempre." + [Environment]::NewLine +
+                 "SIN MARCAR: 22.148 ficheros sueltos. Arranca lo mas rapido posible y permite cambiar graficos a mano.")
+$f.Controls.Add($explica)
+
 $estado = New-Object System.Windows.Forms.TextBox
-$estado.Location = New-Object System.Drawing.Point(16, 166); $estado.Size = New-Object System.Drawing.Size(598, 190)
+$estado.Location = New-Object System.Drawing.Point(16, 208); $estado.Size = New-Object System.Drawing.Size(598, 176)
 $estado.Multiline = $true; $estado.ReadOnly = $true; $estado.ScrollBars = "Vertical"
 $estado.Font = New-Object System.Drawing.Font("Consolas", 9)
 $f.Controls.Add($estado)
 $e = Comprueba-Entrega
 if ($e) { $estado.Text = "AVISO: $e" } else { $estado.Text = "Entrega encontrada junto a este guion. Elige las dos carpetas y pulsa Empaquetar." }
 
-$bIr = Boton "Empaquetar" 16 368 140
+$bIr = Boton "Empaquetar" 16 394 140
 $bIr.Font = New-Object System.Drawing.Font($bIr.Font, [System.Drawing.FontStyle]::Bold)
 $bIr.Add_Click({
     $estado.Clear()
@@ -494,7 +520,7 @@ $bIr.Add_Click({
     } finally { $bIr.Enabled = $true }
 })
 
-$bGuia = Boton "Abrir la guia" 476 368 138
+$bGuia = Boton "Abrir la guia" 476 394 138
 $bGuia.Add_Click({ $g = Join-Path $Entrega "GUIA.md"; if (Test-Path $g) { Start-Process notepad.exe $g } })
 
 [void]$f.ShowDialog()

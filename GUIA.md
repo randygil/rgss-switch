@@ -32,8 +32,12 @@ copia de Pokémon Añil 4.0 para PC**, y la entrega de este port.
      menú homebrew corre como aplicación, con memoria de sobra) y lanza *Pokemon Anil 4.0*.
      Desde el Álbum a secas **no arranca**: un applet no tiene memoria para 700 MB de recursos.
 
-La primera carga tarda unos 20 segundos (indexa 22.000 ficheros). Las partidas
-se guardan en `SD:/switch/pokemon-anil/` como en PC.
+Mientras carga verás el logo del juego con una barra: **es normal que tarde**.
+Con los recursos sueltos son unos 20 segundos; con el contenedor
+(`anil-datos.zip`) unos 13 más, porque el motor tiene que leer su índice y
+volver a construir su tabla de rutas. Si la barra se mueve, va bien.
+
+Las partidas se guardan en `SD:/switch/pokemon-anil/` como en PC.
 
 ## Mando
 

@@ -162,6 +162,19 @@ $(BUILD)/%.o: %.c
 	@echo "CC   $(notdir $<)"
 	@$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
+# El logo de la pantalla de carga se empotra en el binario, igual que los
+# shaders: se dibuja ANTES de que PhysFS monte nada, asi que no puede ser un
+# fichero del juego. La regla va aqui y no en gen-xxd.sh porque gen-xxd.sh solo
+# corre cuando falta generated/ entero, y esto tiene que rehacerse si cambia el
+# PNG. El nombre del array lo construye xxd con la ruta: nx/espera.png ->
+# nx_espera_png (por eso se invoca desde $(CURDIR) y con esa ruta exacta).
+generated/espera.png.xxd: nx/espera.png
+	@echo "XXD  $<"
+	@mkdir -p generated
+	@cd $(CURDIR) && xxd -i nx/espera.png > generated/espera.png.xxd
+
+$(BUILD)/nx_espera.o: generated/espera.png.xxd
+
 # El sello viaja en CFLAGS, y make no vigila CFLAGS: sin esto, nx_boot.c solo
 # se recompilaria cuando cambie el fichero y el binario saldria diciendo que es
 # de hace tres compilaciones. Que es exactamente el problema que el sello viene

@@ -59,7 +59,13 @@ fi
 
 paso "5. Entrega"
 ENT="release/anil-switch-$VERSION"
-rm -rf "$ENT"; mkdir -p "$ENT/lib/io"
+# Se vacia la carpeta, no se borra. Windows deja handles abiertos sobre
+# directorios (el indexador, el antivirus, un Explorer que paso por ahi) y
+# entonces `rm -rf "$ENT"` falla con "Device or resource busy" y tumba la
+# entrega entera por algo que no tiene nada que ver con compilar. Vaciarla
+# consigue lo mismo y no depende de que nadie la tenga mirando.
+rm -rf "$ENT"/* "$ENT"/.[!.]* 2>/dev/null || true
+mkdir -p "$ENT/lib/io"
 cp mkxp-z-nx/pokemon-anil.nro "$ENT/"
 [ -f out/pokemon-anil.nsp ] && cp out/pokemon-anil.nsp "$ENT/"
 cp runtime/mkxp.json "$ENT/"
