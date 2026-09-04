@@ -18,9 +18,8 @@ montaje y preguntar al directorio de la tarjeta por un fichero que no esta ahi
 cuesta la misma IPC de 0,85 ms que si estuviera (§5.48). Con el contenedor
 delante, el acierto es una consulta en memoria.
 
-De paso, filesystem.cpp dice en el registro por que el camino rapido del
-pathCache no se usa: con un contenedor montado, que nxCacheRapido se rinda es lo
-normal y no un fallo que haya que investigar.
+El indice de rutas del contenedor lo construye mkxpz-pathcache-readdir.patch,
+que es quien toca filesystem.cpp.
 
 --- a/src/sharedstate.cpp
 +++ b/src/sharedstate.cpp
@@ -106,16 +105,3 @@ normal y no un fallo que haya que investigar.
  		fileSystem.addPath(".");
  		nx_boot_trace("[boot] 10b PhysFS: directorio de juego montado");
  		nx_espera_paso(0.60f);
---- a/src/filesystem/filesystem.cpp
-+++ b/src/filesystem/filesystem.cpp
-@@ -590,6 +590,10 @@
-   for (char **r = rutas; *r; r++) {
-     struct stat st;
-     if (stat(*r, &st) != 0 || !S_ISDIR(st.st_mode)) {
-+      /* Con un contenedor montado esto es lo normal, no un fallo: se dice cual
-+       * es para que el registro no invite a buscar un problema que no hay. */
-+      Debug() << "[cache] no es un directorio:" << *r
-+              << "-> el indice lo construye PhysFS";
-       sirve = false;
-       break;
-     }

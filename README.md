@@ -2084,9 +2084,9 @@ dos es el trabajo:
 
 Las dos tienen el mismo arreglo y es el que §5.48 ya aplicó una vez: hacer el
 recorrido nosotros. El índice central de un zip es una tabla plana con nombre,
-tamaño y desplazamiento; leerlo de una pasada con un búfer y llenar las dos
-tablas del `pathCache` es exactamente lo que `nxCacheRapido` hace hoy con
-`readdir`. Queda pendiente, y con un número al que apuntar.
+tamaño y desplazamiento; leerlo de una pasada y llenar las dos tablas del
+`pathCache` es exactamente lo que `nxCacheRapido` hace con `readdir`. **Hecho en
+§5.63**: 33 s en la consola pasaron a 185 ms en el emulador.
 
 En la consola no está medido todavía: ni la copia real a la tarjeta ni estos dos
 tramos, que aquí los mueve el JIT de Ryujinx sobre un x86 y allí un Cortex-A57 a
@@ -2409,6 +2409,53 @@ copia un fichero -que es lo que se queria-, la consola lo abre una vez y a
 partir de ahi el juego corre sobre la misma carpeta suelta con la que lleva
 meses funcionando: sin llave, sin ganchos, sin los 13,5 s de arranque de §5.58 y
 sin ramas nuevas. Cuesta unos minutos una vez, y esta sin hacer.
+
+### 5.63 Treinta y tres segundos que eran una búsqueda lineal
+
+Con el juego dentro del contenedor y ya jugable, quedaba el número feo. Medido
+en la consola, no en el emulador:
+
+```
+[cache] PhysFS: 22321 entradas, 171 directorios en 33272 ms
+[cache]   de ellos 342 ms en PHYSFS_stat y 107 ms en el resto
+```
+
+**Treinta y tres segundos**, y el desglose señala al culpable sin margen: el
+trabajo de verdad son 107 ms, los `stat` 342 —baratos, porque con el contenedor
+son consultas a memoria y no IPC—, y los otros **32,8 s están dentro de
+`PHYSFS_enumerate`**. El archivador de zip de PhysFS guarda sus entradas en una
+tabla plana y, para contestar «qué hay en este directorio», la recorre entera.
+Con 171 directorios y 22.321 entradas, eso son 3,8 millones de comparaciones de
+cadena. Es cuadrático. Y por eso Ryujinx —x86 con JIT— lo disimulaba en 5 s
+mientras un Cortex-A57 a 1 GHz tarda 33: **el emulador no miente, pero tampoco
+avisa.**
+
+El arreglo es el de §5.48 aplicado al otro lado. En vez de preguntar entrada por
+entrada, se lee el índice de una pasada: el directorio central de un zip está
+pegado al final del archivo y son dos megas con todos los nombres, tamaños y
+desplazamientos. `nxIndiceZip` los recorre y llena **las mismas dos tablas** que
+`cacheEnumCB`, con el mismo criterio de mayúsculas y la misma regla de
+prioridad: el primero que se monta manda, así que no se pisa una clave puesta.
+
+Y `nxCacheRapido` deja de rendirse en bloque. Antes bastaba un punto de montaje
+que no fuera un directorio para devolverle todo el trabajo a PhysFS —y con un
+contenedor eso es siempre—; ahora decide montaje por montaje: `readdir` para las
+carpetas, el índice central para los zips, y sólo se rinde si aparece algo que
+no sabemos leer, un `.rgssad` de verdad o un 7z. La llave de §5.60 es un caso
+aparte que también se reconoce: ocho bytes de cabecera RGSSAD, un archivo válido
+sin ninguna entrada, que no aporta nada que indexar.
+
+```
+[cache] readdir: 22324 entradas, 171 directorios en 185 ms
+```
+
+**De 5.336 ms a 185 en el emulador**, y el intérprete arranca a los 13,0 s en
+vez de a los 18,1. En la consola el número de partida era 33.272 ms, así que ahí
+la diferencia se cuenta en decenas de segundos —falta medirlo—.
+
+Con esto el contenedor deja de costar trece segundos y medio de arranque y pasa
+a costar los ocho del montaje, que es la siguiente piedra: PhysFS lee la
+cabecera de cada entrada campo por campo, y el nombre byte a byte.
 
 ## 5-bis. Criterio de diseño para los stubs
 

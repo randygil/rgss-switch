@@ -1,19 +1,50 @@
---- filesystem/filesystem.cpp.orig	2026-08-31 00:03:58.070232300 -0400
-+++ filesystem/filesystem.cpp	2026-08-31 02:09:30.366885900 -0400
-@@ -129,6 +129,12 @@
+El indice de rutas, construido por nosotros.
+
+Dos veces la misma leccion, en el mismo fichero y con dos anos de diferencia
+entre una y otra:
+
+1. Con las carpetas sueltas, createPathCache tardaba 56 s porque PhysFS pregunta
+   PHYSFS_stat por cada una de las 22.318 entradas y en Horizon cada stat es una
+   IPC de 0,85 ms. readdir ya trae el dato. De 56.065 ms a 300 (README 5.48).
+
+2. Con el contenedor, tardaba 33 s medidos en la consola, y el desglose lo dejo
+   claro: 342 ms en PHYSFS_stat, 107 ms en el trabajo real y 32,8 s dentro de
+   PHYSFS_enumerate. El archivador de zip de PhysFS guarda las entradas en una
+   tabla plana y la recorre entera por cada directorio: 171 directorios por
+   22.321 entradas son 3,8 millones de comparaciones. Es cuadratico. El indice
+   central de un zip es una tabla con todos los nombres pegada al final del
+   archivo, dos megas que se leen de un tiron. De 33.272 ms a 185 en el
+   emulador (README 5.63).
+
+Las tablas quedan IDENTICAS a las de cacheEnumCB -un directorio crea su lista y
+no aparece en la de su padre; un fichero anade solo su nombre a la lista de su
+directorio y su ruta completa a pathCache-, porque si no el juego resolveria
+rutas distintas segun como se empaqueto. Y el primero que se monta manda, igual
+que en PhysFS: no se pisa una clave ya puesta.
+
+nxCacheRapido decide ahora punto de montaje por punto de montaje en vez de
+rendirse en cuanto ve uno que no es un directorio, que con un contenedor es
+siempre. Solo devuelve el trabajo a PhysFS si aparece algo que no sabemos leer:
+un .rgssad de verdad, un 7z.
+
+--- a/src/filesystem/filesystem.cpp
++++ b/src/filesystem/filesystem.cpp
+@@ -129,6 +129,14 @@
    return io;
  }
  
 +#ifdef __SWITCH__
 +#include <switch.h>
-+extern "C" void nx_io_suma(u64 ticks);
++enum { NX_G_IO = 0, NX_G_EXISTE = 9, NX_G_ABRIR = 10, NX_G_FISICO = 13 };
++extern "C" u64  nx_entra(void);
++extern "C" void nx_sale(int cual, u64 t0);
 +extern "C" void nx_io_abre(void);
 +#endif
 +
  static inline PHYSFS_File *sdlPHYS(SDL_RWops *ops) {
    return static_cast<PHYSFS_File *>(ops->hidden.unknown.data1);
  }
-@@ -175,8 +181,20 @@
+@@ -175,8 +183,20 @@
    if (!f)
      return 0;
  
@@ -22,19 +53,19 @@
 +   * sitio donde se puede separar "la tarjeta es lenta" de "la CPU es lenta"
 +   * sin instrumentar cien sitios. armGetSystemTick no es una llamada al
 +   * sistema, asi que medir sale casi gratis (nx/nx_tirones.c). */
-+  u64 nxT0 = armGetSystemTick();
++  u64 nxT0 = nx_entra();
 +#endif
 +
    PHYSFS_sint64 result = PHYSFS_readBytes(f, buffer, size * maxnum);
  
 +#ifdef __SWITCH__
-+  nx_io_suma(armGetSystemTick() - nxT0);
++  nx_sale(NX_G_IO, nxT0);
 +#endif
 +
    return (result != -1) ? (result / size) : 0;
  }
  
-@@ -246,6 +264,24 @@
+@@ -246,6 +266,24 @@
  }
  
  static void initReadOps(PHYSFS_File *handle, SDL_RWops &ops, bool freeOnClose) {
@@ -59,7 +90,7 @@
    ops.size = SDL_RWopsSize;
    ops.seek = SDL_RWopsSeek;
    ops.read = SDL_RWopsRead;
-@@ -352,6 +388,26 @@
+@@ -352,6 +390,30 @@
      if (reload) reloadPathCache();
  }
  
@@ -67,6 +98,10 @@
 +#include <switch.h>
 +#include <dirent.h>
 +#include <sys/stat.h>
++#include <fcntl.h>
++#include <unistd.h>
++#include <stdlib.h>
++#include <stdint.h>
 +/* Instrumentacion de createPathCache.
 + *
 + * El arranque tarda ~55 s y casi todo se va aqui, recorriendo los 22.141
@@ -86,7 +121,7 @@
  struct CacheEnumData {
    FileSystemPrivate *p;
    std::stack<std::vector<std::string> *> fileLists;
-@@ -412,10 +468,21 @@
+@@ -412,10 +474,21 @@
    strTolower(lowerCase);
  
    PHYSFS_Stat stat;
@@ -108,7 +143,7 @@
      std::vector<std::string> &list = data.p->fileLists[lowerCase];
  
      /* Iterate over its contents */
-@@ -433,17 +500,137 @@
+@@ -433,17 +506,405 @@
  
      /* Add the lower -> mixed mapping of the file's full path */
      data.p->pathCache.insert(lowerCase, mixedCase);
@@ -189,26 +224,269 @@
 +  closedir(d);
 +}
 +
++/* ---------------------------------------------------------------------------
++ * El indice de un contenedor, leido por nosotros.
++ *
++ * Medido en la consola, con el juego dentro de anil-datos.zip:
++ *
++ *   [cache] PhysFS: 22321 entradas, 171 directorios en 33272 ms
++ *   [cache]   de ellos 342 ms en PHYSFS_stat y 107 ms en el resto
++ *
++ * Treinta y tres segundos, y el desglose senala al culpable sin margen de duda:
++ * el trabajo de verdad son 107 ms y los stat 342, asi que los otros 32,8 s estan
++ * dentro de PHYSFS_enumerate. El archivador de zip de PhysFS guarda sus entradas
++ * en una tabla plana y, para contestar "que hay en este directorio", la recorre
++ * ENTERA. Con 171 directorios y 22.321 entradas eso son 3,8 millones de
++ * comparaciones de cadena. Es cuadratico, y por eso el emulador -x86 y JIT- lo
++ * disimulaba en 5 s mientras un Cortex-A57 a 1 GHz tarda 33.
++ *
++ * El arreglo es el mismo que en §5.48, aplicado al otro lado: en vez de
++ * preguntarle a PhysFS entrada por entrada, se lee el indice de una pasada y se
++ * llenan las tablas nosotros. El indice central de un zip es exactamente eso, una
++ * tabla plana con el nombre, el tamano y el desplazamiento de cada fichero,
++ * pegada al final del archivo; son dos megas que se leen de un tiron.
++ *
++ * Las tablas tienen que quedar IDENTICAS a las que hace cacheEnumCB, o el juego
++ * resolvera rutas distintas segun como se empaqueto:
++ *
++ *   - un directorio crea su lista en fileLists[ruta en minusculas] y no aparece
++ *     en la lista de su padre ni en pathCache;
++ *   - un fichero anade SOLO SU NOMBRE en minusculas a la lista de su directorio,
++ *     y su ruta completa a pathCache (minusculas -> como se escribe de verdad).
++ *
++ * Y quien manda cuando algo esta en dos sitios: PhysFS resuelve por orden de
++ * montaje, asi que el primero que se monta gana. Aqui eso es no pisar una clave
++ * que ya este puesta.
++ */
++
++/* Registro final del zip (EOCD): firma 50 4b 05 06, y a partir de ahi cuantas
++ * entradas hay y donde empieza el indice. Se busca en los ultimos 22 bytes, que
++ * es donde esta si no hay comentario, y si no, en los ultimos 64 KiB, que es lo
++ * maximo que ese comentario puede medir. */
++static bool nxZipEocd(int fd, uint32_t *cdTam, uint32_t *cdOff, unsigned *entradas)
++{
++  unsigned char cola[64 * 1024 + 22];
++  off_t fin = lseek(fd, 0, SEEK_END);
++  off_t desde;
++  ssize_t n;
++  ssize_t i;
++
++  if (fin < 22)
++    return false;
++
++  desde = fin > (off_t)sizeof(cola) ? fin - (off_t)sizeof(cola) : 0;
++  if (lseek(fd, desde, SEEK_SET) != desde)
++    return false;
++  n = read(fd, cola, sizeof(cola));
++  if (n < 22)
++    return false;
++
++  for (i = n - 22; i >= 0; i--) {
++    if (cola[i] != 0x50 || cola[i + 1] != 0x4b || cola[i + 2] != 0x05 ||
++        cola[i + 3] != 0x06)
++      continue;
++
++    *entradas = (unsigned)cola[i + 10] | ((unsigned)cola[i + 11] << 8);
++    *cdTam = (uint32_t)cola[i + 12] | ((uint32_t)cola[i + 13] << 8) |
++             ((uint32_t)cola[i + 14] << 16) | ((uint32_t)cola[i + 15] << 24);
++    *cdOff = (uint32_t)cola[i + 16] | ((uint32_t)cola[i + 17] << 8) |
++             ((uint32_t)cola[i + 18] << 16) | ((uint32_t)cola[i + 19] << 24);
++
++    /* Zip64 marca estos campos con todo unos. No se lee: se devuelve el trabajo
++     * a PhysFS, que si lo entiende. Con 654 MB y 22.000 entradas no aparece. */
++    if (*entradas == 0xFFFF || *cdTam == 0xFFFFFFFFu || *cdOff == 0xFFFFFFFFu)
++      return false;
++    return true;
++  }
++  return false;
++}
++
++/* Un archivo RGSSAD vacio: la cabecera de ocho bytes y nada mas.
++ *
++ * Es la llave que el port pone junto al contenedor para que Essentials use su
++ * camino de archivo (README 5.60). No lleva datos, pero mkxp-z lo monta igual,
++ * y para el camino rapido de aqui un punto de montaje que no sepamos leer vale
++ * lo mismo que rendirse. Este si se sabe: no aporta ninguna entrada. */
++static bool nxRgssadVacio(int fd)
++{
++  char cab[8];
++
++  if (lseek(fd, 0, SEEK_END) != 8)
++    return false;
++  if (lseek(fd, 0, SEEK_SET) != 0 || read(fd, cab, 8) != 8)
++    return false;
++  return memcmp(cab, "RGSSAD", 7) == 0;
++}
++
++/* Solo mira si sabremos leerlo, sin cargar nada. */
++static bool nxZipLegible(const char *ruta)
++{
++  uint32_t cdTam, cdOff;
++  unsigned entradas;
++  int fd = open(ruta, O_RDONLY);
++  bool si;
++
++  if (fd < 0)
++    return false;
++  si = nxZipEocd(fd, &cdTam, &cdOff, &entradas) || nxRgssadVacio(fd);
++  close(fd);
++  return si;
++}
++
++/* Se acuerda del ultimo directorio usado. Las entradas de un zip vienen
++ * agrupadas por carpeta, asi que con esto la busqueda en el mapa pasa de una por
++ * fichero a una por carpeta. */
++struct NxUltimaLista {
++  std::string clave;
++  std::vector<std::string> *lista;
++  NxUltimaLista() : lista(0) {}
++};
++
++/* Crea la lista de un directorio y las de sus padres, si no estaban. */
++static std::vector<std::string> *nxListaDe(FileSystemPrivate *p,
++                                           const std::string &dirMinusculas,
++                                           NxUltimaLista &ultima)
++{
++  if (ultima.lista && ultima.clave == dirMinusculas)
++    return ultima.lista;
++
++  /* Los padres primero: un fichero puede ser lo unico que delate que existe un
++   * directorio, si el zip no trae entradas para las carpetas. */
++  size_t corte = 0;
++  while ((corte = dirMinusculas.find('/', corte)) != std::string::npos) {
++    p->fileLists[dirMinusculas.substr(0, corte)];
++    corte++;
++  }
++
++  std::vector<std::string> &lista = p->fileLists[dirMinusculas];
++  ultima.clave = dirMinusculas;
++  ultima.lista = &lista;
++  return &lista;
++}
++
++static bool nxIndiceZip(FileSystemPrivate *p, const char *ruta)
++{
++  uint32_t cdTam = 0, cdOff = 0;
++  unsigned entradas = 0;
++  unsigned char *cd = 0;
++  NxUltimaLista ultima;
++  int fd = open(ruta, O_RDONLY);
++  bool bien = false;
++
++  if (fd < 0)
++    return false;
++  if (!nxZipEocd(fd, &cdTam, &cdOff, &entradas) || cdTam == 0) {
++    /* Un zip vacio, o la llave RGSSAD de ocho bytes: validos los dos, y ninguno
++     * aporta entradas que indexar. */
++    bool vacio = (entradas == 0 && cdTam == 0) || nxRgssadVacio(fd);
++    close(fd);
++    return vacio;
++  }
++
++  cd = (unsigned char *)malloc(cdTam);
++  if (!cd) {
++    close(fd);
++    return false;
++  }
++  bien = (lseek(fd, cdOff, SEEK_SET) == (off_t)cdOff) &&
++         (read(fd, cd, cdTam) == (ssize_t)cdTam);
++  close(fd);
++  if (!bien) {
++    free(cd);
++    return false;
++  }
++
++  uint32_t pos = 0;
++  while (pos + 46 <= cdTam) {
++    if (cd[pos] != 0x50 || cd[pos + 1] != 0x4b || cd[pos + 2] != 0x01 ||
++        cd[pos + 3] != 0x02)
++      break;
++
++    unsigned nlen = (unsigned)cd[pos + 28] | ((unsigned)cd[pos + 29] << 8);
++    unsigned elen = (unsigned)cd[pos + 30] | ((unsigned)cd[pos + 31] << 8);
++    unsigned clen = (unsigned)cd[pos + 32] | ((unsigned)cd[pos + 33] << 8);
++    uint32_t attrs = (uint32_t)cd[pos + 38] | ((uint32_t)cd[pos + 39] << 8) |
++                     ((uint32_t)cd[pos + 40] << 16) | ((uint32_t)cd[pos + 41] << 24);
++
++    if (pos + 46 + nlen > cdTam)
++      break;
++
++    std::string nombre((const char *)cd + pos + 46, nlen);
++    pos += 46 + nlen + elen + clen;
++
++    /* Un zip escrito en Windows puede traer contrabarras; y una entrada absoluta
++     * o con ".." no es cosa nuestra. */
++    for (size_t k = 0; k < nombre.size(); k++)
++      if (nombre[k] == '\\')
++        nombre[k] = '/';
++    if (nombre.empty() || nombre[0] == '/' || nombre.find("..") != std::string::npos)
++      continue;
++
++    bool esDir = (nombre[nombre.size() - 1] == '/') || (attrs & 0x10);
++    while (!nombre.empty() && nombre[nombre.size() - 1] == '/')
++      nombre.erase(nombre.size() - 1);
++    if (nombre.empty())
++      continue;
++
++    std::string minusculas = nombre;
++    strTolower(minusculas);
++
++    nxEntradas++;
++    if (esDir) {
++      nxDirs++;
++      nxListaDe(p, minusculas, ultima);
++      continue;
++    }
++
++    size_t barra = minusculas.rfind('/');
++    std::string dir = (barra == std::string::npos) ? std::string()
++                                                   : minusculas.substr(0, barra);
++    std::string base = (barra == std::string::npos) ? minusculas
++                                                    : minusculas.substr(barra + 1);
++
++    nxListaDe(p, dir, ultima)->push_back(base);
++
++    /* El primero que se monta manda, igual que en PhysFS: no se pisa lo puesto. */
++    if (!p->pathCache.contains(minusculas))
++      p->pathCache.insert(minusculas, nombre);
++  }
++
++  free(cd);
++  return true;
++}
++
 +static bool nxCacheRapido(FileSystemPrivate *p) {
 +  char **rutas = PHYSFS_getSearchPath();
 +  if (!rutas)
 +    return false;
 +
-+  /* Solo sirve si todo lo montado son directorios de verdad: un .rgssad o un
-+   * zip no se recorren con readdir, y ahi PhysFS sigue siendo el que sabe. */
++  /* Antes esto se rendia entero en cuanto un punto de montaje no era un
++   * directorio, y con un contenedor eso es siempre: el indice lo acababa
++   * construyendo PhysFS y costaba 33 s (ver arriba). Ahora se mira montaje por
++   * montaje y solo se devuelve el trabajo si aparece algo que no sabemos leer
++   * —un .rgssad de verdad, un 7z—, que es cuando PhysFS sigue siendo el que
++   * sabe. */
 +  bool sirve = (*rutas != 0);
 +  for (char **r = rutas; *r; r++) {
 +    struct stat st;
-+    if (stat(*r, &st) != 0 || !S_ISDIR(st.st_mode)) {
-+      sirve = false;
-+      break;
-+    }
++    if (stat(*r, &st) == 0 && S_ISDIR(st.st_mode))
++      continue;
++    if (nxZipLegible(*r))
++      continue;
++    Debug() << "[cache] no se leer" << *r << "-> el indice lo construye PhysFS";
++    sirve = false;
++    break;
 +  }
 +
 +  if (sirve) {
 +    std::vector<std::string> &raiz = p->fileLists[""];
-+    for (char **r = rutas; *r; r++)
-+      nxRecorrer(p, *r, "", &raiz);
++    for (char **r = rutas; *r; r++) {
++      struct stat st;
++      if (stat(*r, &st) == 0 && S_ISDIR(st.st_mode))
++        nxRecorrer(p, *r, "", &raiz);
++      else
++        nxIndiceZip(p, *r);
++    }
 +  }
 +
 +  PHYSFS_freeList(rutas);
@@ -232,6 +510,31 @@
 +    data.fileLists.push(&p->fileLists[""]);
 +    PHYSFS_enumerate("", cacheEnumCB, &data);
 +  }
++
++  /* Cada lista de directorio se deja ORDENADA. No es cosmetica: es lo que
++   * permite que openRead busque en binario en vez de recorrer el directorio
++   * entero por cada apertura (ver alli). Se paga una vez al arrancar; el
++   * directorio mas grande del juego tiene 1646 ficheros y ordenarlo son unos
++   * pocos milisegundos.
++   *
++   * El unico cambio de comportamiento es el orden en que se prueban varios
++   * ficheros con el mismo nombre y distinta extension: antes mandaba el orden
++   * del directorio, que es arbitrario, y ahora el alfabetico, que tambien lo
++   * es. Ningun sitio del juego depende de eso. */
++  {
++    std::vector<std::string> claves;
++    for (BoostHash<std::string, std::vector<std::string> >::const_iterator it =
++             p->fileLists.cbegin(); it != p->fileLists.cend(); ++it)
++      claves.push_back(it->first);
++    for (size_t i = 0; i < claves.size(); ++i) {
++      std::vector<std::string> &lista = p->fileLists[claves[i]];
++      std::sort(lista.begin(), lista.end());
++      /* Y sin repetidos: con las carpetas sueltas y el contenedor a la vez, el
++       * mismo nombre entra dos veces y la busqueda binaria de openRead no tiene
++       * por que ver el mismo fichero dos veces. */
++      lista.erase(std::unique(lista.begin(), lista.end()), lista.end());
++    }
++  }
  
    p->havePathCache = true;
 +#ifdef __SWITCH__
@@ -249,3 +552,71 @@
  }
  
  void FileSystem::reloadPathCache() {
+@@ -582,7 +1043,13 @@
+   if (data.pathTrans)
+     fullPath = (*data.pathTrans)[fullPath].c_str();
+ 
++#ifdef __SWITCH__
++  u64 nxT0 = nx_entra();
++#endif
+   PHYSFS_File *phys = PHYSFS_openRead(fullPath);
++#ifdef __SWITCH__
++  nx_sale(NX_G_FISICO, nxT0);
++#endif
+ 
+   if (!phys) {
+     /* Failing to open this file here means there must
+@@ -605,6 +1072,9 @@
+ }
+ 
+ void FileSystem::openRead(OpenHandler &handler, const char *filename) {
++#ifdef __SWITCH__
++  struct NxAbrir { u64 t0; NxAbrir() : t0(nx_entra()) {} ~NxAbrir() { nx_sale(NX_G_ABRIR, t0); } } nxAbrir;
++#endif
+   std::string filename_nm = normalize(filename, false, false);
+   char buffer[512];
+   size_t len = strcpySafe(buffer, filename_nm.c_str(), sizeof(buffer), -1);
+@@ -635,12 +1105,24 @@
+                         p->havePathCache ? &p->pathCache : 0);
+ 
+   if (p->havePathCache) {
+-    /* Get the list of files contained in this directory
+-     * and manually iterate over them */
++    /* Los nombres que empiezan por el que buscamos forman un tramo contiguo de
++     * la lista, porque createPathCache la deja ordenada. Asi que se salta
++     * directamente a ese tramo en vez de recorrer el directorio entero.
++     *
++     * Esto era el tiron de los menus. Abrir un icono de Pokemon miraba los
++     * 1534 ficheros de Graphics/Pokemon/Icons uno por uno, con su strncmp
++     * cada uno, y un menu abre unos treinta ficheros: cerca de cincuenta mil
++     * comparaciones de cadena para dibujar una pantalla. Medido en consola,
++     * ~30 ms por apertura. Ahora son once comparaciones y el tramo. */
+     const std::vector<std::string> &fileList = p->fileLists[dir];
++    const std::string prefijo(file, data.filenameN);
+ 
+-    for (size_t i = 0; i < fileList.size(); ++i)
+-      openReadEnumCB(&data, dir, fileList[i].c_str());
++    for (std::vector<std::string>::const_iterator it =
++             std::lower_bound(fileList.begin(), fileList.end(), prefijo);
++         it != fileList.end() && !data.stopSearching &&
++         it->compare(0, prefijo.size(), prefijo) == 0;
++         ++it)
++      openReadEnumCB(&data, dir, it->c_str());
+   } else {
+     PHYSFS_enumerate(dir, openReadEnumCB, &data);
+   }
+@@ -670,7 +1152,14 @@
+ }
+ 
+ bool FileSystem::exists(const char *filename) {
++#ifdef __SWITCH__
++  u64 nxT0 = nx_entra();
++  bool nxHay = PHYSFS_exists(normalize(filename, false, false).c_str());
++  nx_sale(NX_G_EXISTE, nxT0);
++  return nxHay;
++#else
+   return PHYSFS_exists(normalize(filename, false, false).c_str());
++#endif
+ }
+ 
+ const char *FileSystem::desensitize(const char *filename) {
