@@ -2508,6 +2508,29 @@ desbordamiento.
 
 `patches/mkxpz-textura-sin-memoria.patch`.
 
+**Lo cerca que se pasa, medido en la consola.** Un jugador conto que la 1.0.0 se
+le caia megaevolucionando contra el Ladron Matias -el del laberinto de la
+Mansion Quemada, mapa 121, cuyo Shiftry es de nivel 55-. Con
+`runtime/diagnostico/nx-mega-ya.rb` ese combate se monta y se juega solo, sin
+tocar el mando, y en hardware sale entero. Pero el registro deja el numero:
+
+```
+fondo 0 aciertos 511 MB
+```
+
+**511 de 512.** La animacion de megaevolucion es el momento mas caro de texturas
+de todo el juego y roza el techo sin llegar a tocarlo. Ahi no hay margen para
+nada, y es justo el escenario que §5.64 convierte de muerte del proceso en
+soltar el fondo y seguir.
+
+Y una leccion sobre medir: durante esa prueba el juego daba un tiron de un
+segundo cada seis. No era el juego. La sonda escribia su latido cada 300
+fotogramas —sesenta y dos lineas de pila, cada una con su `fsync` sobre la
+tarjeta— y eso son mil milisegundos exactos. Cinco segundos de fotogramas mas
+uno de sonda: los 6.030 ms que separaban un tiron del siguiente. El instrumento
+pesaba mas que lo que estaba pesando.
+
+
 ---
 
 ## 5-bis. Criterio de diseño para los stubs

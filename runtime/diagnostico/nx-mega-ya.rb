@@ -42,7 +42,28 @@ module NXMega
     NX.log("[mega] #{msg}")
   end
 
+  # La sonda vacia el equipo del jugador para poner el suyo, asi que mientras
+  # este puesta el juego NO puede guardar: bastaria una autopartida -el juego
+  # trae "Guardar al curar"- para dejar la partida de verdad con un Pikachu y
+  # un Charizard de mentira. Se tapan las dos puertas, la de arriba y la de
+  # abajo, y se deja constancia en el registro.
+  def self.prohibe_guardar
+    return if @sin_guardar
+    @sin_guardar = true
+
+    Game.define_singleton_method(:save) do |*_args, **_kw|
+      NXMega.log("GUARDADO BLOQUEADO (Game.save) mientras la sonda esta puesta")
+      false
+    end
+    SaveData.define_singleton_method(:save_to_file) do |*_args|
+      NXMega.log("GUARDADO BLOQUEADO (SaveData.save_to_file)")
+      nil
+    end
+    log("guardado bloqueado")
+  end
+
   def self.arma_equipo
+    prohibe_guardar
     # El juego lleva Level Caps EX, que engancha Pokemon#level= y recorta al
     # tope por medallas: pedir un Charizard de 59 en una partida temprana
     # devuelve uno de 14. El interruptor 29 es la puerta de atras del propio
