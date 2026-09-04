@@ -42,6 +42,7 @@ int  nx_revision_arranque(void);
 void nx_aviso_registra(const char *msg);
 int  nx_aviso_pendiente(void);
 void nx_aviso_mostrar(void);
+void nx_medir_tarjeta(void);   /* nx/nx_medir.c */
 
 /* El contenedor de datos que monta sharedstate.cpp cuando existe. Un solo
  * fichero en vez de 22.148: lo que hace que copiar el juego a la tarjeta sea
@@ -294,6 +295,11 @@ int nx_revision_arranque(void)
 
     n_lineas = 0;
     motivo[0] = 0;
+
+    /* Si hay medir.txt, se mide la tarjeta antes de nada: espacio, tamano de
+     * cluster y coste de escritura (nx/nx_medir.c). Es lo que decide si tiene
+     * sentido desempaquetar el contenedor en la consola o no. */
+    nx_medir_tarjeta();
 
     if (!getcwd(cwd, sizeof(cwd)))
         snprintf(cwd, sizeof(cwd), "(desconocido)");
