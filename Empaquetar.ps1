@@ -397,6 +397,15 @@ function Empaqueta([string]$juego, [string]$salida, [string]$modo, [scriptblock]
     if ($modo -eq "carpetas" -and (Test-Path $paquete)) {
         $avisos += "AVISO: en la salida queda un $NombrePaquete de un empaquetado anterior, y el juego lo monta ANTES que las carpetas: borralo o seguiras jugando con los datos viejos."
     }
+    # La llave sin contenedor no abre nada y ademas estorba: con ella presente el
+    # juego pregunta por sus ficheros a traves de load_data en vez de al sistema,
+    # que es el camino largo. Se retira solo la nuestra, la de ocho bytes; un
+    # Game.rgssad de verdad del juego no se toca.
+    $llave = Join-Path $destino "Game.rgssad"
+    if ($modo -eq "carpetas" -and (Test-Path $llave) -and (Get-Item $llave).Length -eq 8) {
+        Remove-Item $llave -Force
+        $avisa.Invoke("     (retirada la llave Game.rgssad de un empaquetado con contenedor)")
+    }
     foreach ($a in $avisos) { $avisa.Invoke(""); $avisa.Invoke($a) }
 
     $avisa.Invoke("4/4 NSP")

@@ -288,7 +288,7 @@ int nx_revision_arranque(void)
     char linea[96], cwd[256];
     int faltan_fatales = 0, hay_sueltos, hay_scripts, dir;
     unsigned entradas = 0;
-    u64 tam = 0, ignora;
+    u64 tam = 0, ignora, tam_llave = 0;
     int paquete;
     size_t i;
 
@@ -379,6 +379,19 @@ int nx_revision_arranque(void)
                          "FALTA Game.rgssad, LA LLAVE DEL CONTENEDOR.");
             faltan_fatales = 1;
         }
+    }
+
+    /* 1-ter. La llave sin puerta.
+     *
+     * Al reves que el caso de arriba, esto no impide jugar: con Game.rgssad y
+     * sin contenedor, el juego pregunta por sus ficheros a traves de load_data
+     * -que va por PhysFS y ve las carpetas igual- en vez de preguntarle al
+     * sistema. Funciona, pero es el camino largo y el que menos se ha
+     * recorrido, y no hay ninguna razon para tomarlo si los datos estan
+     * sueltos. Se dice y se sigue. */
+    if (paquete != 1 && hay_sueltos && existe("Game.rgssad", 0, &tam_llave)
+        && tam_llave == 8) {
+        anota("[  ?  ] Game.rgssad sobra: es la llave del contenedor y aqui los datos estan sueltos");
     }
 
     /* 2. Las piezas del port. Estan en la entrega, asi que si falta una es que

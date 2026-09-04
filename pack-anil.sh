@@ -91,6 +91,13 @@ else
   # El contenedor manda sobre las carpetas sueltas (el .nro lo monta primero),
   # asi que uno viejo aqui haria jugar con los datos de antes.
   [ -f "$DST/anil-datos.zip" ] && echo "  AVISO: hay un anil-datos.zip de otra tanda y el juego lo montara ANTES que estas carpetas. Borralo."
+  # La llave sin contenedor no abre nada y ademas estorba: con ella presente el
+  # juego pregunta por sus ficheros a traves de load_data en vez de al sistema,
+  # que es el camino largo y el que menos se ha recorrido. Solo se retira la
+  # nuestra -ocho bytes-; si el juego trajera un .rgssad de verdad, ni tocarlo.
+  if [ -f "$DST/Game.rgssad" ] && [ "$(stat -c%s "$DST/Game.rgssad" 2>/dev/null)" = "8" ]; then
+    rm -f "$DST/Game.rgssad" && echo "  - Game.rgssad (la llave del contenedor; aqui no hay contenedor)"
+  fi
 fi
 
 echo "=== 3. Ficheros sueltos que si hacen falta ==="
