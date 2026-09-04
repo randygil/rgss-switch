@@ -59,7 +59,7 @@
     // depurar, pero cuestan una llamada de metodo por fotograma: fuera en produccion.
     // lib/nx-guardado.rb comprueba el camino de guardado sobre la SD. Se anade a
     // esta lista solo cuando se quiere medir, y se quita despues.
-    "preloadScript": ["lib/nx-compat.rb", "lib/nx-teclado.rb", "lib/nx-rutas.rb", "lib/nx-gc.rb", "lib/nx-metodos.rb", "lib/nx-tira.rb", "lib/nx-centro.rb", "lib/nx-bolas.rb", "preload.rb"],
+    "preloadScript": ["lib/nx-compat.rb", "lib/nx-sonido.rb", "lib/nx-teclado.rb", "lib/nx-rutas.rb", "lib/nx-gc.rb", "lib/nx-metodos.rb", "lib/nx-tira.rb", "lib/nx-centro.rb", "lib/nx-bolas.rb", "preload.rb"],
 
     // Carpeta lib/ = subconjunto de la biblioteca estandar de Ruby 3.1.7
     // (misma version que el interprete compilado, no la 3.3.0 de MinGW que

@@ -2321,6 +2321,95 @@ puede ser el motivo de que algo del juego suene distinto**; el sitio donde eso
 se arregla de verdad es en los trece segundos y medio de §5.58, no en un
 parche que los tape.
 
+### 5.62 El juego no pide sus ficheros por donde uno cree
+
+Con el contenedor montado, el motor leia bien: los mapas cargaban, los graficos
+se veian, la musica sonaba. Y el juego se quedaba **sin efectos de sonido**, y
+la pantalla de titulo se caia. Costo cuatro vueltas, y cada una enseno lo mismo
+por un sitio distinto: **cambiar los datos de sitio no cambia solo como se leen,
+cambia por que rama del juego se pasa**, y esas ramas no las habia recorrido
+nadie.
+
+**Uno: el audio no se resuelve por donde los graficos.** La asimetria era la
+pista —se ve pero no se oye— y estaba en dos funciones que hacen lo mismo por
+caminos distintos:
+
+```
+pbResolveBitmap  -> pbTryString -> pbGetFileChar -> load_data -> PhysFS   ve el contenedor
+pbResolveAudioSE -> RTP.exists? -> FileTest.exist?            -> sistema  no lo ve
+```
+
+`RTP.exists?` y `RTP.getPath` preguntan con `FileTest.exist?`, que es el sistema
+de ficheros de Ruby. Contestaba que no, `pbResolveAudioSE` devolvia `nil` y nadie
+llegaba a pedir el sonido: un fallo mudo en los dos sentidos, sin excepcion ni
+linea en el registro. El arreglo no es parchear `RTP` —hay 770 scripts que pueden
+preguntar lo mismo por su cuenta— sino contestar la pregunta entera una vez:
+`nx/nx_ficheros.cpp` hace que `FileTest.exist?` mire primero la tarjeta, como
+siempre, y solo si no esta, el contenedor. **Solo anade verdades.**
+
+**Dos: y entonces el juego intento abrirlo.** El arreglo movio el fallo un paso
+mas alla, que es como se sabe que era el arreglo bueno:
+
+```
+Errno::ENOENT: rb_sysopen - Audio/BGM/TITULO.ogg
+Audio:92:in `open' -> getPlayTime2 -> playBGM   [Pantalla de Titulo Animada]
+```
+
+El plugin del titulo abre el OGG con `File.open` para medir su duracion. Mismo
+hueco, otra funcion. `File.open` en modo lectura, cuando el fichero no esta en
+la tarjeta y PhysFS si lo tiene, devuelve ahora un `FileInt`. Escribir no se
+toca: las partidas se guardan con `File.open("wb")` y esas llamadas pasan de
+largo.
+
+Con un detalle que se ve en el mensaje: el juego pide `TITULO.ogg` y el fichero
+se llama `Titulo.ogg`. En FAT32 da igual; dentro de un zip no. Por eso la
+consulta pasa por `desensitize()`, que es el mismo apano por el que el juego
+funciona con las carpetas sueltas.
+
+**Tres: `FileInt` sabia decir donde estaba, pero no moverse.**
+
+```
+Errno::EBADF: Bad file number
+Audio:93:in `pos=' -> block in getPlayTime2
+```
+
+`FileInt` es una subclase de `IO` **sin descriptor de fichero debajo** —lo que
+hay es un `SDL_RWops` sobre PhysFS—, asi que cualquier metodo de `IO` que no
+este reimplementado acaba en el `IO` de verdad y contesta `EBADF`. Estaban
+reimplementados… dentro de un `#if RAPI_FULL <= 187`: **solo para Ruby 1.8.7**.
+mkxp-z da por hecho que con Ruby moderno el `IO` se apana solo, y para un
+`FileInt` no es cierto. Se sacan de ahi `pos` y `getc` y se anaden `pos=`,
+`seek`, `rewind`, `eof?` y `size`.
+
+Comprobado en el emulador, con los 653 MB dentro del contenedor y una sonda que
+cuenta lo que el juego PIDE (`runtime/diagnostico/nx-sonido.rb`), que es distinto
+de lo que se oye:
+
+```
+[sonido] FileTest.exist?("Audio/SE/Battle ball drop.ogg") = true
+[sonido] pbResolveAudioSE("Battle ball drop") = "Audio/SE/Battle ball drop.ogg"
+[sonido] efectos pedidos: 3 | ultimo "Audio/SE/GUI sel cursor"
+```
+
+Antes de esto, la primera linea era `false`, la segunda `nil` y la tercera no
+existia.
+
+#### Lo que esto dice del contenedor
+
+Tres huecos en una noche, en tres capas distintas, y ninguno estaba en el motor:
+estaban en como el juego pregunta. Quedan mas —`IO.read`, `Dir.glob` y
+`File.size` no pasan por lo que se ha arreglado aqui—, y aparecera el que use un
+plugin que nadie ha abierto todavia. Es una cola larga y es inherente a mover
+los datos dentro de un archivo: **el juego se escribio dando por hecho que sus
+ficheros estan en un disco**.
+
+La alternativa que corta la cola de raiz es no pedirle al juego que lea de un
+archivo: **desempaquetar el contenedor en la propia consola la primera vez**. Se
+copia un fichero -que es lo que se queria-, la consola lo abre una vez y a
+partir de ahi el juego corre sobre la misma carpeta suelta con la que lleva
+meses funcionando: sin llave, sin ganchos, sin los 13,5 s de arranque de §5.58 y
+sin ramas nuevas. Cuesta unos minutos una vez, y esta sin hacer.
+
 ## 5-bis. Criterio de diseño para los stubs
 
 Auditando `libc.a`, `libsysbase.a` y `libnx.a` con `nm`, el reparto es:

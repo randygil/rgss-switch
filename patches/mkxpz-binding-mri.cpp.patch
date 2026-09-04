@@ -1,6 +1,43 @@
---- C:/anilswitch/src/mkxp-z/binding/binding-mri.cpp.orig	2026-08-30 20:13:19.700779600 -0400
-+++ C:/anilswitch/src/mkxp-z/binding/binding-mri.cpp	2026-08-30 20:13:19.737286900 -0400
-@@ -843,8 +843,22 @@
+Ajustes de binding-mri.cpp.
+
+Rehecho contra el fuente original de mkxp-z 2.4.2 -antes iba con rutas absolutas
+en las etiquetas y no se podia comprobar con `patch -p1`-. Lleva lo que ya
+habia mas el enganche de nx_ficheros_init(), que hace que FileTest.exist? y
+File.exist? contesten tambien por lo que PhysFS tiene montado; sin eso, con los
+datos en un contenedor el juego se queda sin efectos de sonido. El detalle, en
+mkxpz-lector-contenedor.patch y en README 5.62.
+
+--- a/binding/binding-mri.cpp
++++ b/binding/binding-mri.cpp
+@@ -151,6 +151,10 @@
+ VALUE json2rb(json5pp::value const &v);
+ json5pp::value rb2json(VALUE v);
+ 
++#ifdef __SWITCH__
++extern "C" void nx_ficheros_init(void);   /* nx/nx_ficheros.cpp */
++#endif
++
+ static void mriBindingInit() {
+     tableBindingInit();
+     etcBindingInit();
+@@ -255,6 +259,16 @@
+     _rb_define_module_function(cmod, "[]=", mkxpSetJSONSetting);
+     _rb_define_module_function(cmod, "to_hash", mkxpGetAllJSONSettings);
+     
++#ifdef __SWITCH__
++    /* nx/nx_ficheros.cpp: FileTest.exist? y File.exist? contestan tambien por
++       lo que PhysFS tiene montado. Sin esto, con los datos en un contenedor el
++       juego se queda sin efectos de sonido, porque RTP.exists? -por donde pasa
++       toda la resolucion de audio- pregunta al sistema de ficheros y alli no
++       hay nada. Va aqui, con el resto de constantes globales, porque tiene que
++       estar puesto antes de que corra el primer script. */
++    nx_ficheros_init();
++#endif
++
+     /* Load global constants */
+     rb_gv_set("MKXP", Qtrue);
+     
+@@ -843,8 +857,22 @@
          return;
      }
      

@@ -1,0 +1,261 @@
+Que el juego pueda leer de dentro del contenedor.
+
+Con los datos en anil-datos.zip el motor leia bien -graficos, mapas, musica-
+pero el JUEGO se quedaba sin efectos de sonido y la pantalla de titulo se caia.
+La causa no es una sino tres, y las tres son la misma idea: Pokemon Essentials y
+sus plugins no siempre piden los ficheros por los envoltorios que Essentials
+trae para archivos; a veces preguntan al sistema de ficheros de Ruby, que no
+sabe nada de lo que PhysFS tiene montado.
+
+1. FileTest.exist? / File.exist?  (nx/nx_ficheros.cpp, enganchado desde aqui)
+
+   RTP.exists? y RTP.getPath -por donde pasa TODA la resolucion de audio-
+   preguntan con FileTest.exist?. Con el contenedor contestaba que no, asi que
+   pbResolveAudioSE devolvia nil y nadie llegaba a pedir el sonido: un fallo
+   mudo, en los dos sentidos. Ahora se pregunta primero al sistema, exactamente
+   como antes, y solo si dice que no se le pregunta a PhysFS. Solo anade
+   verdades: nada que existiera deja de existir, y las partidas guardadas
+   -ficheros de verdad- se siguen encontrando por el primer camino.
+
+2. File.open en modo lectura
+
+   El plugin de la pantalla de titulo animada abre el OGG con File.open para
+   medir su duracion:
+
+     Errno::ENOENT: rb_sysopen - Audio/BGM/TITULO.ogg
+     Audio:92:in `open' -> getPlayTime2 -> playBGM
+
+   Cuando el fichero no esta en la tarjeta, el modo es de solo lectura y PhysFS
+   si lo tiene, se devuelve un FileInt -la clase IO respaldada por PhysFS que
+   mkxp-z ya usa para load_data-. Escribir no se toca: las partidas se guardan
+   con File.open("wb") y esas llamadas pasan de largo.
+
+   Ojo al nombre: el juego pide TITULO.ogg y el fichero se llama Titulo.ogg. En
+   FAT32 da igual y dentro de un zip no, asi que se pasa por desensitize(), que
+   es el mismo apano por el que el juego funciona con las carpetas sueltas.
+
+3. FileInt sabia decir donde estaba, pero no moverse
+
+   Y en cuanto el punto 2 le dio el fichero al juego, este hizo file.pos = 0 y
+   la consola contesto Errno::EBADF. FileInt es una subclase de IO sin
+   descriptor debajo, asi que todo metodo que no este reimplementado acaba en el
+   IO de verdad y falla. Estaban reimplementados... dentro de un
+   `#if RAPI_FULL <= 187`, es decir solo para Ruby 1.8.7: mkxp-z da por hecho
+   que con Ruby moderno el IO se apana solo, y para un FileInt no es cierto.
+   Se sacan de ahi pos y getc, y se anaden pos=, seek, rewind, eof? y size.
+
+La leccion, que costo cuatro vueltas: cambiar los datos de sitio no cambia solo
+como se leen, cambia POR QUE RAMA del juego se pasa, y esas ramas no las habia
+recorrido nadie. Ver README 5.60 y 5.62.
+
+--- a/binding/filesystem-binding.cpp
++++ b/binding/filesystem-binding.cpp
+@@ -160,6 +160,81 @@
+     long long pos = SDL_RWtell(ops); // Will return -1 if it doesn't work
+     return LL2NUM(pos);
+ }
++
++
++#endif
++
++#ifdef __SWITCH__
++/* FileInt sabia decir donde estaba, pero no moverse.
++ *
++ * Es una subclase de IO sin descriptor de fichero detras -lo que hay debajo es
++ * un SDL_RWops sobre PhysFS-, asi que todo metodo de IO que no este
++ * reimplementado aqui acaba en el IO de verdad y contesta Errno::EBADF. Se vio
++ * en la consola en cuanto el juego leyo un OGG del contenedor para saber su
++ * duracion:
++ *
++ *   Errno::EBADF: Bad file number
++ *   Audio:93:in `pos='  ->  block in getPlayTime2  ->  playBGM
++ *
++ * Van los cinco que usa quien lee un fichero de datos: colocarse, saltar, volver
++ * al principio, preguntar si se acabo y cuanto mide. Con esto un FileInt se
++ * comporta como el IO que dice ser para todo lo que sea leer. */
++RB_METHOD(fileIntPosNX) {
++    RB_UNUSED_PARAM;
++    SDL_RWops *ops = getPrivateData<SDL_RWops>(self);
++
++    return LL2NUM(SDL_RWtell(ops));
++}
++
++RB_METHOD(fileIntSetPos) {
++    SDL_RWops *ops = getPrivateData<SDL_RWops>(self);
++    VALUE pos;
++
++    rb_scan_args(argc, argv, "1", &pos);
++    SDL_RWseek(ops, NUM2LL(pos), RW_SEEK_SET);
++    return pos;
++}
++
++RB_METHOD(fileIntSeek) {
++    SDL_RWops *ops = getPrivateData<SDL_RWops>(self);
++    VALUE desplazamiento, desde;
++    int origen = RW_SEEK_SET;
++
++    rb_scan_args(argc, argv, "11", &desplazamiento, &desde);
++    if (!NIL_P(desde)) {
++        switch (NUM2INT(desde)) {
++        case 1:  origen = RW_SEEK_CUR; break;   /* IO::SEEK_CUR */
++        case 2:  origen = RW_SEEK_END; break;   /* IO::SEEK_END */
++        default: origen = RW_SEEK_SET; break;
++        }
++    }
++    SDL_RWseek(ops, NUM2LL(desplazamiento), origen);
++    return INT2FIX(0);                          /* IO#seek devuelve 0 */
++}
++
++RB_METHOD(fileIntRewind) {
++    RB_UNUSED_PARAM;
++    SDL_RWops *ops = getPrivateData<SDL_RWops>(self);
++
++    SDL_RWseek(ops, 0, RW_SEEK_SET);
++    return INT2FIX(0);
++}
++
++RB_METHOD(fileIntEof) {
++    RB_UNUSED_PARAM;
++    SDL_RWops *ops = getPrivateData<SDL_RWops>(self);
++    Sint64 donde = SDL_RWtell(ops);
++    Sint64 medida = SDL_RWsize(ops);
++
++    return rb_bool_new(medida >= 0 && donde >= medida);
++}
++
++RB_METHOD(fileIntSize) {
++    RB_UNUSED_PARAM;
++    SDL_RWops *ops = getPrivateData<SDL_RWops>(self);
++
++    return LL2NUM(SDL_RWsize(ops));
++}
+ #endif
+ 
+ VALUE
+@@ -265,6 +340,91 @@
+ }
+ #endif
+ 
++#ifdef __SWITCH__
++#include <unistd.h>
++
++/* File.open que tambien lee del contenedor.
++ *
++ * El juego no siempre pide sus ficheros por los envoltorios que Essentials trae
++ * para archivos (pbRgssOpen y compania): hay plugins que llaman a File.open a
++ * secas. Con los datos sueltos eso funciona porque estan en la tarjeta; con el
++ * contenedor, Ruby abre por el sistema de ficheros y no ve nada. El sintoma
++ * medido: la pantalla de titulo animada muere con
++ *
++ *   Errno::ENOENT: rb_sysopen - Audio/BGM/TITULO.ogg
++ *   Audio:92:in `open' -> getPlayTime2 -> playBGM
++ *
++ * El apano tiene tres condiciones, y las tres importan para no romper nada:
++ *
++ *   1. Solo si el fichero NO esta de verdad en la tarjeta. Lo que ya funcionaba
++ *      sigue yendo por el camino de siempre, byte a byte.
++ *   2. Solo en modo lectura. Escribir en un contenedor no tiene sentido y las
++ *      partidas guardadas se escriben con File.open("wb"): esas ni se tocan.
++ *   3. Solo si PhysFS lo tiene montado. Si tampoco esta ahi, se deja pasar la
++ *      llamada original para que el error sea exactamente el de siempre.
++ *
++ * Devuelve un FileInt, que es la clase IO respaldada por PhysFS que mkxp-z ya
++ * usa para load_data: lee en flujo, sin cargarse el fichero entero en memoria
++ * para averiguar la duracion de un OGG. */
++static VALUE nxCerrarIO(VALUE io) {
++    return rb_funcall(io, rb_intern("close"), 0);
++}
++
++static VALUE nxYield(VALUE io) {
++    return rb_yield(io);
++}
++
++static bool nxSoloLectura(VALUE modo) {
++    const char *m;
++
++    if (NIL_P(modo))
++        return true;                       /* sin modo, File.open lee */
++    if (!RB_TYPE_P(modo, T_STRING))
++        return false;                      /* entero o hash de opciones: no nos metemos */
++    m = RSTRING_PTR(modo);
++    if (!m || !*m || m[0] != 'r')
++        return false;
++    /* "r", "rb", "r:UTF-8"... pero no "r+", que puede escribir. */
++    for (const char *c = m; *c; c++)
++        if (*c == '+' || *c == 'w' || *c == 'a')
++            return false;
++    return true;
++}
++
++RB_METHOD(nxFileOpen) {
++    RB_UNUSED_PARAM;
++
++    VALUE ruta = Qnil, modo = Qnil, resto = Qnil;
++    rb_scan_args(argc, argv, "11*", &ruta, &modo, &resto);
++
++    if (RB_TYPE_P(ruta, T_STRING) || rb_respond_to(ruta, rb_intern("to_path"))) {
++        VALUE conv = rb_get_path(ruta);
++        const char *p = RSTRING_PTR(conv);
++
++        /* El nombre, tal como esta escrito de verdad. El juego viene de Windows
++           y pide "Audio/BGM/TITULO.ogg" donde el fichero se llama "Titulo.ogg":
++           en FAT32 da igual, dentro de un zip no. desensitize() lo resuelve con
++           el indice de rutas, que es el mismo apano por el que el juego
++           funciona con las carpetas sueltas. */
++        const char *real = (p && *p && shState) ? shState->fileSystem().desensitize(p) : p;
++
++        if (p && *p && access(p, F_OK) != 0 && nxSoloLectura(modo)
++            && shState && real && shState->fileSystem().exists(real)) {
++            VALUE io = fileIntForPath(real, true);
++            if (rb_block_given_p())
++                return rb_ensure(RUBY_METHOD_FUNC(nxYield), io,
++                                 RUBY_METHOD_FUNC(nxCerrarIO), io);
++            return io;
++        }
++    }
++
++    /* Todo lo demas, tal cual estaba: se llama al File.open de Ruby, con su
++       bloque si lo hay. */
++    return rb_funcall_passing_block(rb_cFile, rb_intern("nx_open_original"),
++                                    argc, argv);
++}
++#endif
++
+ void fileIntBindingInit() {
+     VALUE klass = rb_define_class("FileInt", rb_cIO);
+ #if RAPI_FULL > 187
+@@ -282,6 +442,20 @@
+     rb_define_alias(klass, "getc", "getbyte");
+     _rb_define_method(klass, "pos", fileIntPos);
+ #endif
++#ifdef __SWITCH__
++    /* FUERA del bloque de Ruby 1.8.7, que es donde estos metodos vivian y donde
++     * con Ruby 3.1 no se compilan. mkxp-z da por hecho que el IO moderno se
++     * apana solo, y para un FileInt no es cierto: no hay descriptor debajo, hay
++     * un SDL_RWops, y cualquier metodo heredado contesta Errno::EBADF. */
++    _rb_define_method(klass, "pos", fileIntPosNX);
++    rb_define_alias(klass, "getc", "getbyte");
++    _rb_define_method(klass, "pos=", fileIntSetPos);
++    _rb_define_method(klass, "seek", fileIntSeek);
++    _rb_define_method(klass, "rewind", fileIntRewind);
++    _rb_define_method(klass, "eof?", fileIntEof);
++    rb_define_alias(klass, "eof", "eof?");
++    _rb_define_method(klass, "size", fileIntSize);
++#endif
+     _rb_define_method(klass, "binmode", fileIntBinmode);
+     _rb_define_method(klass, "close", fileIntClose);
+     
+@@ -295,5 +469,13 @@
+     VALUE marsh = rb_const_get(rb_cObject, rb_intern("Marshal"));
+     rb_define_alias(rb_singleton_class(marsh), "_mkxp_load_alias", "load");
+     _rb_define_module_function(marsh, "load", _marshalLoad);
++
++#ifdef __SWITCH__
++    /* Se guarda el original con otro nombre y se sustituye: asi el camino
++       normal sigue siendo el de Ruby y solo se desvia lo que no esta en la
++       tarjeta. Ver el comentario de nxFileOpen. */
++    rb_define_alias(rb_singleton_class(rb_cFile), "nx_open_original", "open");
++    rb_define_singleton_method(rb_cFile, "open", RUBY_METHOD_FUNC(nxFileOpen), -1);
++#endif
+ #endif
+ }
