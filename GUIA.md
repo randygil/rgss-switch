@@ -34,8 +34,8 @@ copia de Pokémon Añil 4.0 para PC**, y la entrega de este port.
 
 Mientras carga verás el logo del juego con una barra: **es normal que tarde**.
 Con los recursos sueltos son unos 20 segundos; con el contenedor
-(`anil-datos.zip`) unos 13 más, porque el motor tiene que leer su índice y
-volver a construir su tabla de rutas. Si la barra se mueve, va bien.
+(`anil-datos.zip`) unos segundos más, porque el motor tiene que abrir el archivo
+y leer su índice antes de empezar. Si la barra se mueve, va bien.
 
 Las partidas se guardan en `SD:/switch/pokemon-anil/` como en PC.
 

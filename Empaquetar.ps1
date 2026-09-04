@@ -27,10 +27,10 @@
 #                         ahora. Es lo que hay que usar para parchear ficheros
 #                         del juego uno a uno.
 #
-# EL TRATO, medido y sin adornos. El contenedor cuesta unos TRECE SEGUNDOS MAS
-# de arranque cada vez que se abre el juego: PhysFS tiene que leer el indice del
-# zip (8 s) y volver a construir su tabla de rutas (5 s), y eso no se paga con
-# las carpetas sueltas. En cambio se ahorra en cada copia: 22.148 ficheros a una
+# EL TRATO, medido y sin adornos. El contenedor cuesta unos segundos mas de
+# arranque cada vez que se abre el juego: hay que abrir el archivo y leer su
+# indice antes de empezar, y eso no se paga con las carpetas sueltas. (Eran
+# trece segundos hasta que el indice paso a leerse de una pasada, README 5.63.) En cambio se ahorra en cada copia: 22.148 ficheros a una
 # tarjeta SD no van a la velocidad de la tarjeta, van a la del sistema de
 # ficheros, y ahi la diferencia se cuenta en decenas de minutos.
 #
@@ -420,7 +420,7 @@ function Empaqueta([string]$juego, [string]$salida, [string]$modo, [scriptblock]
     $tam = [math]::Round(((Get-ChildItem $destino -Recurse -File | Measure-Object Length -Sum).Sum / 1MB))
     $cuantos = (Get-ChildItem $destino -Recurse -File).Count
     $comoQuedo = "recursos sueltos: el arranque mas rapido, 22.148 ficheros que copiar"
-    if ($modo -eq "zip") { $comoQuedo = "un solo contenedor: copia rapida, ~13 s mas de arranque" }
+    if ($modo -eq "zip") { $comoQuedo = "un solo contenedor: copia rapida, unos segundos mas de arranque" }
     return "Listo: $destino ($tam MB en $cuantos ficheros, $comoQuedo). Copia la carpeta 'switch' a la raiz de la tarjeta SD."
 }
 
@@ -498,7 +498,7 @@ $explica.Location = New-Object System.Drawing.Point(36, 155)
 $explica.Size = New-Object System.Drawing.Size(580, 46)
 $explica.ForeColor = [System.Drawing.Color]::FromArgb(90, 90, 90)
 $explica.Text = ("MARCADA: un solo fichero de ~650 MB. Copiar a la tarjeta pasa de decenas de minutos a unos pocos," + [Environment]::NewLine +
-                 "y se envia y comprueba de una pieza. A cambio el juego tarda unos 13 s mas en arrancar, siempre." + [Environment]::NewLine +
+                 "y se envia y comprueba de una pieza. A cambio el juego tarda unos segundos mas en arrancar, siempre." + [Environment]::NewLine +
                  "SIN MARCAR: 22.148 ficheros sueltos. Arranca lo mas rapido posible y permite cambiar graficos a mano.")
 $f.Controls.Add($explica)
 
