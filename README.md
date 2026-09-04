@@ -2457,6 +2457,59 @@ Con esto el contenedor deja de costar trece segundos y medio de arranque y pasa
 a costar los ocho del montaje, que es la siguiente piedra: PhysFS lee la
 cabecera de cada entrada campo por campo, y el nombre byte a byte.
 
+### 5.64 Una textura sin memoria detrás mata el proceso sin decir nada
+
+El juego se cayó configurando el Nuzlocke. Ni pantalla de error, ni excepción de
+Ruby, ni línea en `mkxp-ruby.log`: la consola volvió al menú y se acabó. Lo
+único que quedó fue el volcado de `nx_excepcion.c`, y con el `.elf` y
+`addr2line` la pila se lee entera:
+
+```
+[exc] otra (acceso a datos) desc=0x101 esr=0x92000006 far=0xe
+[exc]   #0  st_render_texture
+[exc]   #1  _mesa_framebuffer_texture
+[exc]   #2  _mesa_FramebufferTexture2D
+[exc]   #3  TexPool::request         texpool.cpp:156
+[exc]   #4  Bitmap::Bitmap(int,int)  bitmap.cpp:883
+[exc]   #5  Bitmap::drawText         bitmap.cpp:2023
+```
+
+`far=0xe` es la dirección que se intentó leer: el campo que hay a catorce bytes
+de un puntero nulo. Y el sitio donde aparece ese nulo está en Mesa:
+`st_render_texture` guarda lo que devuelva `st_get_texobj_resource(att->Texture)`
+y sigue adelante **sin mirar si es nulo**. Si `glTexImage2D` no pudo reservar y
+dejó `GL_OUT_OF_MEMORY`, la textura existe como nombre y no tiene recurso
+detrás; dos líneas más abajo se desreferencia. No es un fallo nuestro, pero el
+que se muere es nuestro proceso, y quien le pasa la textura vacía somos
+nosotros.
+
+**Por qué se quedó sin memoria de vídeo**, que es la parte que importa. El
+contador de objetos del fondo de texturas —`TexPoolPrivate::objCount`— era
+`uint16_t`. El presupuesto del fondo en la consola son 512 MB (§5.53) y una caja
+de texto de 64×32 ocupa ocho kilobytes: **65.536 cajas son exactamente 512 MB, y
+65.536 es exactamente lo que cabe en `uint16_t`**. Al dar la vuelta a cero, el
+bucle de desalojo de `release()` sale por su `if (objCount == 0) break;` sin
+haber borrado nada, `memSize` se actualiza igual que siempre y a partir de ese
+punto el fondo crece **sin techo** hasta que el driver dice que no.
+
+Y una pantalla de configuración es texto, y nada más que texto: es la forma más
+rápida que tiene este juego de fabricar decenas de miles de texturas diminutas.
+Por eso apareció ahí y no en el mapa.
+
+**Arreglo, en tres piezas.** Ensanchar el contador a `uint32_t`, que es el fallo
+de verdad. Preguntar por `glGetError()` después de reservar y **antes** de
+colgar la textura del FBO: si el driver dijo que no, se sueltan todas las
+texturas que el fondo estaba guardando por si acaso y se vuelve a pedir; si
+tampoco a la segunda, se lanza una excepción de mkxp —el jugador ve un error, no
+una consola apagada— y el presupuesto del fondo se queda a la mitad, porque el
+techo estaba más bajo de lo que creíamos. Y contar en `[tiron]` cuántas texturas
+hay guardadas, no solo cuántos megas: ese es el número que habría visto venir el
+desbordamiento.
+
+`patches/mkxpz-textura-sin-memoria.patch`.
+
+---
+
 ## 5-bis. Criterio de diseño para los stubs
 
 Auditando `libc.a`, `libsysbase.a` y `libnx.a` con `nm`, el reparto es:

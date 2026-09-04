@@ -1,0 +1,206 @@
+Una textura sin memoria detras mata el proceso sin decir nada.
+
+El 4 de septiembre de 2026 el juego murio configurando el Nuzlocke. El volcado:
+
+  [exc] otra (acceso a datos) desc=0x101 esr=0x92000006 far=0xe
+  [exc]   #0  st_render_texture
+  [exc]   #1  _mesa_framebuffer_texture
+  [exc]   #2  _mesa_FramebufferTexture2D
+  [exc]   #3  TexPool::request        texpool.cpp:156
+  [exc]   #4  Bitmap::Bitmap(int,int) bitmap.cpp:883
+  [exc]   #5  Bitmap::drawText        bitmap.cpp:2023
+
+far=0xe: se leyo el campo que hay a catorce bytes de un puntero nulo. Mesa, en
+st_render_texture, hace pipe_resource_reference con lo que devuelva
+st_get_texobj_resource y no mira si es nulo; si glTexImage2D no pudo reservar y
+dejo GL_OUT_OF_MEMORY, la textura existe como nombre y no tiene recurso detras.
+Dos lineas mas abajo se desreferencia. El proceso muere sin excepcion de Ruby,
+sin pantalla de error y sin nada que contar: solo el volcado.
+
+Dos cambios, y el segundo explica por que se llego ahi.
+
+1. Preguntar antes de enlazar. Se vacia la cola de errores de GL, se reserva, y
+   se mira. Si el driver dijo que no: se sueltan TODAS las texturas que el fondo
+   estaba guardando por si acaso -cientos de megas- y se vuelve a pedir. Si
+   tampoco a la segunda, se lanza una excepcion de mkxp, que el jugador ve como
+   un error y no como una consola apagada. Y el presupuesto del fondo se queda a
+   la mitad, porque el techo estaba mas bajo de lo que creiamos.
+
+2. El contador de objetos del fondo era uint16_t. El presupuesto en la consola
+   son 512 MB (README 5.53) y una caja de texto de 64x32 ocupa ocho kilobytes:
+   65.536 cajas son exactamente 512 MB, y 65.536 es exactamente lo que cabe en
+   uint16_t. Al dar la vuelta a cero, el bucle de desalojo de release() sale por
+   el `if (objCount == 0) break;` sin haber borrado nada, memSize se actualiza
+   igual y a partir de ahi el fondo crece sin techo hasta que el driver dice que
+   no. Una pantalla de configuracion es texto y nada mas que texto, que es la
+   forma mas rapida que tiene este juego de fabricar decenas de miles de
+   texturas diminutas.
+
+De paso, el registro de tirones cuenta ahora cuantas texturas hay guardadas y no
+solo cuantos megas: ese es el numero que habria visto venir el desbordamiento.
+
+--- display/gl/texpool.cpp.orig	2026-09-04 00:35:04.816203200 -0400
++++ display/gl/texpool.cpp	2026-09-04 00:36:42.644894900 -0400
+@@ -59,14 +59,27 @@
+ 	/* Contains all cached TexFBOs, sorted by release time */
+ 	std::list<TEXFBO> priorityQueue;
+ 
+-	/* Maximal allowed cache memory */
++	/* Maximal allowed cache memory.
++	 *
++	 * Deja de ser const en Horizon: si el driver dice que no hay sitio para una
++	 * textura mas, el presupuesto baja y se queda bajo. Ver nxSinSitio(). */
++#ifdef __SWITCH__
++	uint32_t maxMemSize;
++#else
+ 	const uint32_t maxMemSize;
++#endif
+ 
+ 	/* Current amound of memory consumed by the cache */
+ 	uint32_t memSize;
+ 
+-	/* Current amount of TexFBOs cached */
+-	uint16_t objCount;
++	/* Current amount of TexFBOs cached.
++	 *
++	 * Era uint16_t, y con el presupuesto de la consola eso se desbordaba: 512 MB
++	 * en cajas de texto de 64x32 -ocho kilobytes cada una- son 65.536 objetos
++	 * clavados, justo el limite. Al dar la vuelta a cero, el bucle de desalojo de
++	 * release() sale por el `if (objCount == 0) break;` sin haber borrado nada y
++	 * el fondo crece ya sin techo. */
++	uint32_t objCount;
+ 
+ 	/* Has this pool been disabled? */
+ 	bool disabled;
+@@ -108,7 +121,35 @@
+ extern "C" u64  nx_entra(void);
+ extern "C" void nx_sale(int cual, u64 t0);
+ extern "C" void nx_pool_acierto(void);
+-extern "C" void nx_pool_tamano(unsigned bytes);
++extern "C" void nx_pool_tamano(unsigned bytes, unsigned objetos);
++#endif
++
++#ifdef __SWITCH__
++/* Devuelve al driver TODAS las texturas guardadas y deja el fondo a cero. No es
++ * lo mismo que disable(): el fondo sigue vivo y volvera a llenarse. */
++static void nxVaciarFondo(TexPoolPrivate *p)
++{
++	for (std::list<TEXFBO>::iterator it = p->priorityQueue.begin();
++	     it != p->priorityQueue.end(); ++it)
++	{
++		TEXFBO obj = *it;
++		TEXFBO::fini(obj);
++	}
++
++	p->priorityQueue.clear();
++	p->poolHash.clear();
++	p->memSize = 0;
++	p->objCount = 0;
++}
++
++/* Vacia la cola de errores de GL. Hasta ahora nadie la miraba, asi que puede
++ * traer cualquier cosa de antes; el tope evita quedarse aqui si el driver se
++ * empena en devolver error. */
++static void nxTiraErrores(void)
++{
++	for (int i = 0; i < 8 && gl.GetError() != GL_NO_ERROR; i++)
++		;
++}
+ #endif
+ 
+ TEXFBO TexPool::request(int width, int height)
+@@ -131,7 +172,7 @@
+ 		--p->objCount;
+ #ifdef __SWITCH__
+ 		nx_pool_acierto();
+-		nx_pool_tamano(p->memSize);
++		nx_pool_tamano(p->memSize, p->objCount);
+ #endif
+ 
+ //		Debug() << "TexPool: <?+> (" << width << height << ")";
+@@ -148,13 +189,71 @@
+ 	/* Nope, create it instead */
+ #ifdef __SWITCH__
+ 	u64 nxT0 = nx_entra();
++
++	/* Aqui hay que preguntar si la textura existe de verdad antes de colgarla
++	 * del FBO, y esta es la razon: el 4 de septiembre de 2026 el juego murio
++	 * configurando el Nuzlocke con un acceso a datos en la direccion 0xe, y la
++	 * pila decia glFramebufferTexture2D -> st_render_texture ->
++	 * st_update_renderbuffer_surface. Mesa hace ahi
++	 * `pipe_resource_reference(&strb->texture, st_get_texobj_resource(tex))` y
++	 * sigue adelante sin mirar: si la textura no tiene recurso detras -porque
++	 * glTexImage2D no pudo reservar y dejo GL_OUT_OF_MEMORY-, lo que se
++	 * desreferencia dos lineas mas abajo es un puntero nulo. El proceso muere
++	 * sin excepcion de Ruby, sin pantalla de error y sin nada que contar.
++	 *
++	 * Con la comprobacion, un "no hay sitio" se convierte en lo que deberia
++	 * haber sido siempre: se sueltan las texturas que estabamos guardando por si
++	 * acaso -que son cientos de megas- y se vuelve a pedir. */
++	nxTiraErrores();
+ #endif
+ 	TEXFBO::init(cnode.obj);
+ 	TEXFBO::allocEmpty(cnode.obj, width, height);
++#ifdef __SWITCH__
++	{
++		GLenum err = gl.GetError();
++
++		if (err != GL_NO_ERROR)
++		{
++			uint32_t rescatado = p->memSize;
++
++			Debug() << "[fondo] la GPU no da una textura de" << width << "x"
++			        << height << "(error" << (int)err << ") -> se sueltan"
++			        << (unsigned)(rescatado / (1024 * 1024)) << "MB del fondo"
++			        << "y se reintenta";
++
++			TEXFBO::fini(cnode.obj);
++			nxVaciarFondo(p);
++			nxTiraErrores();
++
++			TEXFBO::init(cnode.obj);
++			TEXFBO::allocEmpty(cnode.obj, width, height);
++			err = gl.GetError();
++
++			if (err != GL_NO_ERROR)
++			{
++				TEXFBO::fini(cnode.obj);
++				nx_sale(NX_G_POOL, nxT0);
++				throw Exception(Exception::MKXPError,
++				                "No hay memoria de video para una textura de "
++				                "%dx%d (GL error %d)", width, height, (int)err);
++			}
++
++			/* Salio a la segunda, pero el techo estaba mas bajo de lo que
++			 * creiamos. Se baja el presupuesto para no volver a chocar contra
++			 * el cada pocos fotogramas; no se vuelve a subir nunca. */
++			if (p->maxMemSize > 64u * 1024 * 1024)
++			{
++				p->maxMemSize /= 2;
++				Debug() << "[fondo] presupuesto del fondo bajado a"
++				        << (unsigned)(p->maxMemSize / (1024 * 1024)) << "MB";
++			}
++		}
++	}
++#endif
+ 	TEXFBO::linkFBO(cnode.obj);
+ #ifdef __SWITCH__
+ 	nx_sale(NX_G_POOL, nxT0);
+-	nx_pool_tamano(p->memSize);
++	nx_pool_tamano(p->memSize, p->objCount);
+ #endif
+ 
+ //	Debug() << "TexPool: <?-> (" << width << height << ")";
+@@ -225,6 +324,12 @@
+ 
+ 	++p->objCount;
+ 
++#ifdef __SWITCH__
++	/* El fondo crece aqui, no en request(): si el contador solo se leyera al
++	 * crear, el registro contaria siempre lo de antes de guardar. */
++	nx_pool_tamano(p->memSize, p->objCount);
++#endif
++
+ //	Debug() << "TexPool: <!+> (" << obj.width << obj.height << ") Current size:" << p->memSize;
+ }
+ 

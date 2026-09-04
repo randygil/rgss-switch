@@ -192,15 +192,21 @@ void nx_io_abre(void)
  * entonces el presupuesto no arregla nada. */
 static u32 pool_aciertos;
 static u32 pool_mb;
+/* Cuantas texturas hay guardadas, no solo cuantos megas. El contador de
+ * objetos del fondo era de 16 bits y 512 MB en cajas de texto de 64x32 son
+ * exactamente 65.536: con el numero a la vista se ve venir el desbordamiento en
+ * vez de descubrirlo por un volcado de pila. */
+static u32 pool_tex;
 
 void nx_pool_acierto(void)
 {
     pool_aciertos++;
 }
 
-void nx_pool_tamano(unsigned bytes)
+void nx_pool_tamano(unsigned bytes, unsigned objetos)
 {
     pool_mb = bytes / (1024u * 1024u);
+    pool_tex = objetos;
 }
 
 /* El fondo de texturas recicla el hueco en la GPU, pero no el trabajo de
@@ -294,10 +300,11 @@ void nx_marco(void)
 
         if (n > 0 && n < (int)sizeof(linea))
             snprintf(linea + n, sizeof(linea) - n,
-                     " %u ficheros | fondo %u aciertos %u MB"
+                     " %u ficheros | fondo %u aciertos %u MB %u tex"
                      " | img %u/%u %u MB | cad %u/%u %u MB | resto %llu ms",
                      (unsigned)io_abiertos,
                      (unsigned)pool_aciertos, (unsigned)pool_mb,
+                     (unsigned)pool_tex,
                      (unsigned)img_ac, (unsigned)(img_ac + img_fa), (unsigned)img_mb,
                      (unsigned)txt_ac, (unsigned)(txt_ac + txt_fa), (unsigned)txt_mb,
                      MS(transcurrido > cubierto ? transcurrido - cubierto : 0));
