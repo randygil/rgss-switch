@@ -3293,15 +3293,18 @@ Pero redondear **no es gratis**: reserva memoria de más, y en una consola donde
 la GPU ya dice que no, gastar por si acaso es exactamente lo que no se hace a
 ciegas. Así que se mide lo único que decide —de todos los fallos, cuántos
 habrían sido aciertos con el tamaño redondeado— y se ponen las dos reglas
-candidatas una al lado de la otra:
+candidatas una al lado de la otra. La forma de la línea —los números son de
+ejemplo, la medida todavía no está hecha— es ésta:
 
 ```
-[fondo] fallos 1204 | con multiplo de 16 serian aciertos 913 (75%, 61 tamanos)
-        | con potencia de 2, 1150 (95%, 18)
+[fondo] fallos N | con multiplo de 16 serian aciertos N (N%, N tamanos)
+        | con potencia de 2, N (N%, N)
 ```
 
 Múltiplo de 16 gasta poco y agrupa poco; potencia de dos gasta mucho y agrupa
 mucho. Con los dos números delante, la decisión es una resta y no una corazonada.
+Lo mismo vale para el ejemplo de `[lento]` de más arriba: ese nombre de fichero
+está inventado para enseñar el formato.
 El censo son dos tablas abiertas de tamaño fijo, y si se llenan lo dice: un
 número corto que se sabe corto es útil, uno que miente no.
 
