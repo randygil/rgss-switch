@@ -20,6 +20,18 @@
    - sin `gh`, la acción `release.yml` crea un **borrador** con las notas; entra
      en GitHub → Releases, adjunta el zip y publica.
 
+## Preparar la entrega sin soltarla
+
+`./publicar.sh --sin-empujar` hace todo lo de los pasos 3 y 4 que ocurre en esta
+máquina —comprobar la entrega, marcar los símbolos, escribir las notas, poner la
+etiqueta local— y no toca el remoto. Al terminar te dice las dos órdenes que
+faltan para soltarla, y la que la deshace.
+
+Las dos mitades tienen dueño distinto y conviene no mezclarlas: la local se
+rehace y se borra cuando quieras; la de fuera, una vez que un jugador se ha
+bajado el zip, ya no. Poder mirar la entrega entera antes de soltarla es la
+diferencia entre publicar y publicar a ciegas.
+
 ## Cuando un jugador manda un volcado
 
 El registro trae la línea `[build] 1.0.1 bNN ...` y una o varias líneas `[exc]`

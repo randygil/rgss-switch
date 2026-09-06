@@ -7,12 +7,23 @@
 #
 #   ./publicar.sh            usa la version de VERSION
 #   ./publicar.sh 1.0.1      cambia VERSION, y hay que haber compilado antes
+#   ./publicar.sh --sin-empujar [version]   solo la mitad local
 #
 # Con `gh` instalado (winget install GitHub.cli) crea la release y adjunta el
 # zip. Sin gh, empuja la etiqueta —.github/workflows/release.yml crea un
 # BORRADOR con las notas generadas— y te dice donde arrastrar el zip.
+#
+# --sin-empujar hace todo lo de esta maquina —comprobar la entrega, marcar los
+# simbolos como publicados, escribir las notas y poner la etiqueta local— y no
+# toca el remoto. Existe porque las dos mitades tienen dueno distinto: la local
+# se puede rehacer y deshacer, y la de fuera, una vez que un jugador se ha
+# bajado el zip, ya no. Poder preparar una entrega entera y mirarla antes de
+# soltarla es la diferencia entre publicar y publicar a ciegas.
 set -eu
 RAIZ=$(cd "$(dirname "$0")" && pwd); cd "$RAIZ"
+
+SIN_EMPUJAR=""
+if [ "${1:-}" = "--sin-empujar" ]; then SIN_EMPUJAR=1; shift; fi
 
 if [ -n "${1:-}" ]; then echo "$1" > VERSION; fi
 VERSION=$(cat VERSION)
@@ -68,6 +79,22 @@ cat "$NOTAS"
 
 echo "=== etiqueta ==="
 git tag -a "$TAG" -m "Port $VERSION"
+
+if [ -n "$SIN_EMPUJAR" ]; then
+  echo "etiqueta $TAG puesta SOLO en local (--sin-empujar)."
+  echo
+  echo "La entrega esta lista y nadie de fuera la ha visto todavia:"
+  echo "    $RAIZ/$ZIP"
+  echo "    $RAIZ/$NOTAS"
+  echo
+  echo "Cuando quieras soltarla:"
+  echo "    git push origin $TAG"
+  echo "    gh release create $TAG '$ZIP' --title 'Port $VERSION' --notes-file '$NOTAS'"
+  echo
+  echo "Y si te arrepientes antes de eso:  git tag -d $TAG"
+  exit 0
+fi
+
 git push origin "$TAG"
 
 if command -v gh >/dev/null; then
