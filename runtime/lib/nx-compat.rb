@@ -221,7 +221,10 @@ module NXDonde
       n = (mapa.name rescue nil)
       return n if n && !n.to_s.empty?
     end
-    if respond_to?(:pbGetMapNameFromId)
+    # respond_to? con el segundo argumento a true. Un `def` de primer nivel en
+    # Ruby es un metodo PRIVADO de Object, y este modulo es un Object: sin ese
+    # true la comprobacion diria que no y el nombre del mapa no saldria nunca.
+    if respond_to?(:pbGetMapNameFromId, true)
       n = (pbGetMapNameFromId(id) rescue nil)
       return n if n && !n.to_s.empty?
     end
