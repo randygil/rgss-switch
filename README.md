@@ -3354,22 +3354,28 @@ La sospecha de §5.55 era correcta y el número es contundente: **el 97 % de los
 y la potencia de dos sólo añade un punto por mucho más gasto. La regla barata es
 la buena.
 
-**Pero no se implementa todavía, y el motivo merece quedar escrito.** El fondo
-guarda la textura por tamaño, y quien la recibe llama a `TEX::uploadImage`, que
-es un `glTexImage2D`: eso **reespecifica la textura entera** al tamaño exacto de
-la imagen. Con cubos de tamaño exacto eso no se nota, porque el tamaño pedido y
-el real coinciden siempre. Con cubos redondeados dejaría de ser cierto: una
-textura devuelta a un cubo de 48×48 podría llevar dentro una asignación real de
-33×41, y el siguiente que la pida creyendo que tiene 48×48 —`Bitmap.new(w,h)`,
-que no sube ninguna imagen y sólo hace `clear()`— escribiría fuera.
+**Y la trampa que había que esquivar para implementarlo.** El fondo guarda la
+textura por tamaño, y quien la recibe llama a `TEX::uploadImage`, que es un
+`glTexImage2D`: eso **reespecifica la textura entera** al tamaño exacto de la
+imagen. Con cubos de tamaño exacto no se nota, porque el pedido y el real
+coinciden siempre. Con cubos redondeados dejaría de ser cierto: una textura
+devuelta al cubo de 48×48 puede llevar dentro una asignación real de 33×41, y el
+siguiente que la pida creyendo que tiene 48×48 —`Bitmap.new(w,h)`, que no sube
+ninguna imagen y sólo hace `clear()`— dibujaría contra una textura más pequeña
+que su área, y el mapa saldría recortado sin que nada diera error.
 
-O sea que redondear no es cambiar la clave del cubo: es cambiar el contrato del
-fondo, que ahora mismo dice «te devuelvo una textura de exactamente este
-tamaño». Hace falta decidir qué lo sustituye —reservar al tamaño del cubo al
-entregarla, y perder parte de la ganancia; o que quien la recibe no pueda dar
-por hecho su tamaño— y eso es un diseño, no una edición. El número ya está
-medido y no se va a mover: cuando se aborde, se aborda sabiendo que hay un 97 %
-esperando.
+**Así que redondear cambia dónde se busca, no lo que se entrega.** El contrato
+del fondo sigue intacto —«te devuelvo una textura de exactamente el tamaño que
+pides»—: si la que se encuentra en el cubo no mide lo pedido, se reespecifica
+antes de devolverla, por el guardián de §5.64 como cualquier otra reserva. Y el
+presupuesto se descuenta por lo que ocupaba **esa** textura y no por lo que se
+ha pedido, que con cubos exactos era el mismo número y ahora no.
+
+Lo que se gana, entonces, no es la reserva —ésa se paga igual— sino el nombre de
+textura, el FBO y el enlace entre los dos: `TEXFBO::init` y `linkFBO`. Cuánto de
+los 198 ms de `nue` en un fotograma de menú con 393 texturas nuevas es cada cosa
+lo dirá el próximo registro; el cambio está hecho para poder medirlo, y el censo
+sigue puesto, así que los fallos que queden se cuentan solos.
 
 ---
 

@@ -389,7 +389,7 @@ dos. Se aplican en ese orden.
  }
  
  TexPool::~TexPool()
-@@ -108,12 +260,179 @@
+@@ -108,16 +260,226 @@
  extern "C" u64  nx_entra(void);
  extern "C" void nx_sale(int cual, u64 t0);
  extern "C" void nx_pool_acierto(void);
@@ -533,6 +533,44 @@ dos. Se aplican en ese orden.
 +	return GL_NO_ERROR;
 +}
 +
++#endif
++
++#ifdef __SWITCH__
++/* El cubo al que va una textura, que ya no es su tamano exacto.
++ *
++ * EL NUMERO QUE LO PIDE. El fondo guardaba por tamano EXACTO, y los sprites de
++ * este juego son de tamanos todos distintos: un cubo con una sola textura
++ * dentro no se reaprovecha jamas. Medido en la consola el 6 de septiembre de
++ * 2026, sobre 5.488 fallos de una sesion de cuatro minutos:
++ *
++ *     con multiplo de 16 serian aciertos 5.338 (97%, 150 tamanos)
++ *     con potencia de 2,                 5.427 (98%,  61)
++ *
++ * El 97% con el multiplo de 16, y la potencia de dos solo anade un punto a
++ * cambio de agrupar mucho mas grueso. La regla barata es la buena.
++ *
++ * LO QUE NO CAMBIA, QUE ES LO IMPORTANTE. El contrato del fondo sigue siendo
++ * "te devuelvo una textura de EXACTAMENTE el tamano que has pedido". Redondear
++ * solo cambia donde se BUSCA, no lo que se entrega: si la que se encuentra no
++ * mide lo pedido, se reespecifica antes de devolverla.
++ *
++ * Y eso no es un detalle de limpieza. Quien recibe una textura de imagen la
++ * reespecifica el mismo con glTexImage2D al tamano exacto de su PNG, asi que
++ * una textura devuelta al cubo de 48x48 puede llevar dentro una asignacion real
++ * de 33x41. Si el fondo la entregara tal cual a un Bitmap.new(48,48) -que no
++ * sube ninguna imagen y solo hace clear()-, el FBO tendria detras una textura
++ * mas pequena que el area en la que se dibuja, y el mapa saldria recortado sin
++ * que nada diera error. Por eso se comprueba y se reespecifica.
++ *
++ * LO QUE SE GANA, ENTONCES. No la reserva -esa se paga igual-, sino el nombre
++ * de textura, el FBO y el enlace entre los dos: TEXFBO::init y linkFBO, que en
++ * los registros son la mayor parte de los 198 ms de "nue" en un fotograma de
++ * menu con 393 texturas nuevas. Cuanto de esos 198 ms es cada cosa lo dira el
++ * proximo registro; el cambio esta hecho para poder medirlo. */
++static Size nxCubo(int ancho, int alto)
++{
++	return Size((ancho + 15) & ~15, (alto + 15) & ~15);
++}
  #endif
  
  TEXFBO TexPool::request(int width, int height)
@@ -568,18 +606,56 @@ dos. Se aplican en ese orden.
 +		                "colgarla del FBO mata el proceso", width, height);
 +
  	Size size(width, height);
++#ifdef __SWITCH__
++	Size clave = nxCubo(width, height);
++#else
++	Size clave = size;
++#endif
  
  	/* See if we can statisfy request from cache */
-@@ -131,7 +450,7 @@
+-	CNodeList &bucket = p->poolHash[size];
++	CNodeList &bucket = p->poolHash[clave];
+ 
+ 	if (!bucket.empty())
+ 	{
+@@ -127,11 +489,34 @@
+ 
+ 		p->priorityQueue.erase(cnode.prioIter);
+ 
+-		p->memSize -= byteCount(size);
++		/* Lo que se descuenta es lo que ESTA textura ocupaba, no lo que se ha
++		 * pedido. Con cubos de tamano exacto daba igual porque eran el mismo
++		 * numero; con cubos redondeados dejaria de cuadrar el presupuesto en
++		 * cada peticion, poco a poco y sin que nada avisara. */
++		Size suya(cnode.obj.width, cnode.obj.height);
++		p->memSize -= byteCount(suya);
  		--p->objCount;
  #ifdef __SWITCH__
  		nx_pool_acierto();
 -		nx_pool_tamano(p->memSize);
++
++		/* Y si no mide lo pedido, se reespecifica: el fondo entrega texturas
++		 * del tamano exacto que se le pide, siempre. Va por el guardian de
++		 * §5.64 como cualquier otra reserva. */
++		if (cnode.obj.width != width || cnode.obj.height != height)
++		{
++			GLenum err = nxReservaTexturaFBO(cnode.obj, width, height);
++
++			if (err != GL_NO_ERROR)
++			{
++				TEXFBO::fini(cnode.obj);
++				nx_pool_tamano(p->memSize, p->objCount);
++				throw Exception(Exception::MKXPError,
++				                "No hay memoria de video para una textura de "
++				                "%dx%d (GL error %d)", width, height, (int)err);
++			}
++		}
++
 +		nx_pool_tamano(p->memSize, p->objCount);
  #endif
  
  //		Debug() << "TexPool: <?+> (" << width << height << ")";
-@@ -139,22 +458,46 @@
+@@ -139,22 +524,46 @@
  		return cnode.obj;
  	}
  
@@ -634,7 +710,29 @@ dos. Se aplican en ese orden.
  #endif
  
  //	Debug() << "TexPool: <?-> (" << width << height << ")";
-@@ -225,6 +568,12 @@
+@@ -195,8 +604,11 @@
+ 		CacheNode last;
+ 		last.obj = p->priorityQueue.back();
+ 		Size removedSize(last.obj.width, last.obj.height);
+-
++#ifdef __SWITCH__
++		CNodeList &bucket = p->poolHash[nxCubo(last.obj.width, last.obj.height)];
++#else
+ 		CNodeList &bucket = p->poolHash[removedSize];
++#endif
+ 
+ 		std::list<CacheNode>::iterator toRemove =
+ 		        std::find(bucket.begin(), bucket.end(), last);
+@@ -220,11 +632,21 @@
+ 	CacheNode cnode;
+ 	cnode.obj = obj;
+ 	cnode.prioIter = p->priorityQueue.begin();
++#ifdef __SWITCH__
++	CNodeList &bucket = p->poolHash[nxCubo(obj.width, obj.height)];
++#else
+ 	CNodeList &bucket = p->poolHash[size];
++#endif
+ 	bucket.push_back(cnode);
  
  	++p->objCount;
  
@@ -647,8 +745,8 @@ dos. Se aplican en ese orden.
  //	Debug() << "TexPool: <!+> (" << obj.width << obj.height << ") Current size:" << p->memSize;
  }
  
---- display/gl/texpool.h.orig	2026-09-06 00:55:50.545088200 -0400
-+++ display/gl/texpool.h	2026-09-06 01:03:32.298413600 -0400
+--- display/gl/texpool.h.orig
++++ display/gl/texpool.h
 @@ -24,12 +24,75 @@
  
  #include "gl-util.h"
@@ -725,8 +823,8 @@ dos. Se aplican en ese orden.
  	~TexPool();
  
  	TEXFBO request(int width, int height);
---- display/window.cpp.orig	2026-09-06 01:03:02.056272500 -0400
-+++ display/window.cpp	2026-09-06 01:05:42.635567500 -0400
+--- display/window.cpp.orig
++++ display/window.cpp
 @@ -33,6 +33,7 @@
  #include "quadarray.h"
  #include "texpool.h"
@@ -801,8 +899,8 @@ dos. Se aplican en ese orden.
  		TEX::unbind();
  
  		FBO::bind(baseTex.fbo);
---- display/tilemap.cpp.orig	2026-09-06 01:03:02.079207700 -0400
-+++ display/tilemap.cpp	2026-09-06 01:07:41.506136200 -0400
+--- display/tilemap.cpp.orig
++++ display/tilemap.cpp
 @@ -511,8 +511,17 @@
  	{
  		updateAtlasInfo();
@@ -822,8 +920,8 @@ dos. Se aplican en ese orden.
  		shState->requestAtlasTex(atlas.size.x, atlas.size.y, atlas.gl);
  
  		atlasDirty = true;
---- display/graphics.cpp.antes-rutas	2026-09-06 01:09:24.292030500 -0400
-+++ display/graphics.cpp	2026-09-06 01:07:21.204888900 -0400
+--- display/graphics.cpp.antes-rutas
++++ display/graphics.cpp
 @@ -441,7 +441,7 @@
      : srcInd(0), dstInd(1), screenW(screenW), screenH(screenH) {
          for (int i = 0; i < 2; ++i) {
@@ -884,8 +982,8 @@ dos. Se aplican en ese orden.
      
      FloatRect screenRect(0, 0, width, height);
      p->screenQuad.setTexPosRect(screenRect, screenRect);
---- sharedstate.cpp.antes-rutas	2026-09-06 01:09:24.313032700 -0400
-+++ sharedstate.cpp	2026-09-06 01:06:43.171065800 -0400
+--- sharedstate.cpp.antes-rutas
++++ sharedstate.cpp
 @@ -29,6 +29,7 @@
  #include "glstate.h"
  #include "shader.h"
