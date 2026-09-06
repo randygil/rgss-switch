@@ -3169,6 +3169,26 @@ cronómetros de §5.55. Ahora están en `patches/mkxpz-gl-util.patch` y
 `patches/mkxpz-alijos-bitmap.patch`, y una comprobación de que ningún `.orig` del
 árbol difiere de su fichero sin tener un parche que lo cubra sale limpia.
 
+**Y una trampa de despliegue que costo veinte minutos.** Se subio el binario
+nuevo a la consola, se jugo, y el registro seguia diciendo `1.0.0 b14`. En la
+tarjeta habia **dos instalaciones** —`/switch/pokemon-anil`, con los datos en el
+contenedor, y `/switch/pokemon-anil-off`, con las carpetas sueltas— y se lanzo la
+segunda, que llevaba el binario de cinco dias antes. El registro de arranque no
+podia delatarlo: su ruta esta fijada en `nx/nx_boot.c` y no depende de donde este
+el `.nro`, asi que las dos instalaciones escriben en el **mismo**
+`mkxp-boot.log`, una detras de otra, sin nada que las distinga salvo el sello de
+compilacion —que era justo el dato en duda—. Ahora el arranque escribe tambien
+`[nro]` con la ruta de `argv[0]`, cuatro lineas despues del sello: una dice
+**que** binario y la otra **de donde** salio.
+
+De ahi salio tambien el arreglo del directorio de trabajo. `chdir()` puede salir
+bien y dejarte igual de perdido: con el `.nro` en la raiz de `/switch` —que es
+donde hbmenu lo ensena en la primera pantalla, sin tener que bajar dos carpetas—
+el directorio que sale de `argv[0]` es `/switch`, `chdir` funciona, y mkxp-z se
+pone a buscar `mkxp.json` y `Data/` donde no hay nada. La comprobacion ahora es
+la unica que decide —si `mkxp.json` esta ahi— y las ubicaciones de reserva son
+las dos instalaciones convenidas, probadas por orden.
+
 **Lo que queda por medir.** Con el contador puesto, la siguiente pregunta tiene
 por fin dónde apoyarse: si las texturas vivas suben sin techo durante una partida
 larga, el problema es que algo no se suelta; si se estabilizan alto, el problema
