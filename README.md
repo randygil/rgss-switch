@@ -3028,8 +3028,19 @@ cincuenta y cinco segundos. De los 55,4 s no debería quedar más que traer 2,1 
 y el trabajo que PhysFS hace en memoria armando sus 22.591 entradas —que es el
 mismo con ventana y sin ella, y que en §5.63 se midió en 107 ms para una pasada
 comparable—. **La previsión es medio segundo largo de montaje y el arranque
-entero de vuelta a los dos segundos de la 1.0.0.** Falta confirmarlo en la
-consola: es lo primero que hay que mirar en el próximo registro.
+entero de vuelta a los dos segundos de la 1.0.0.**
+
+**Confirmado en la consola** el 6 de septiembre de 2026, 1.1.1 b66:
+
+```
+[  1089] [boot] 10a miembros construidos (shaders compilados)
+[  1657] [boot] 10a+ contenedor anil-datos.zip montado
+[  1991] [boot] 10c pathCache construido
+[  2132] [boot] 11 SharedState OK, arrancando el interprete Ruby
+```
+
+**568 ms de montaje** para 653 MB y 22.186 entradas, y el intérprete arrancando
+a los **2,1 s**. La previsión era la buena, decimal arriba o abajo.
 
 **Por qué 64 KiB y no 256.** Para el montaje daría igual —serían ocho lecturas
 en vez de treinta y tres, tres milisegundos de diferencia—. Quien decide es el
@@ -3189,12 +3200,42 @@ pone a buscar `mkxp.json` y `Data/` donde no hay nada. La comprobacion ahora es
 la unica que decide —si `mkxp.json` esta ahi— y las ubicaciones de reserva son
 las dos instalaciones convenidas, probadas por orden.
 
-**Lo que queda por medir.** Con el contador puesto, la siguiente pregunta tiene
-por fin dónde apoyarse: si las texturas vivas suben sin techo durante una partida
-larga, el problema es que algo no se suelta; si se estabilizan alto, el problema
-es el tamaño de lo que se carga —y ahí lo primero a mirar son las tiras de
-animación, que se redondean a potencia de dos en las dos dimensiones—. Hasta el
-próximo registro de un jugador no hay forma de saber cuál de las dos.
+**Medido, y con una corrección.** Primera sesión con el contador puesto, 1.1.1
+b66 en la consola, tres minutos de partida
+(`docs/consola/20260906-121847/analisis.md`):
+
+```
+                 13,7 s      164 s     crece
+malloc en uso     348 MB     777 MB     +429
+  fondo             0 MB     189 MB     +189
+  img               0 MB      73 MB      +73
+  cad               0 MB       6 MB       +6
+  resto           348 MB     509 MB     +161
+    de ahí: texturas vivas
+                    2 MB     245 MB     +243
+    o sea, motor + ruby
+                  346 MB     264 MB      -82
+```
+
+Aquí arriba se dijo que el `resto` era, en su mayor parte, texturas vivas. **No
+lo es**: son menos de la mitad —245 de 509—. La etiqueta «texturas vivas + motor
++ ruby» era prudente y hacía bien en serlo.
+
+Lo que sí resuelve la medida es §5.66, que quedó sin diagnosticar. **El motor y
+Ruby no crecen: bajan.** Todo lo que sube son los tres alijos y las texturas que
+el juego tiene abiertas, o sea cachés llenándose por diseño mientras se va
+conociendo el mapa. El «gigabyte de montón en menos de diez minutos» no era una
+fuga.
+
+Y el presupuesto de §5.64 queda validado por el otro lado: el fondo se mueve
+entre 149 y 189 MB toda la sesión, por debajo de los 192 sin llegar a rozarlos,
+y el guardián no tuvo que reintentar ni una vez.
+
+**Lo que queda por medir.** Tres minutos no son una partida. El pico de 272 MB de
+texturas vivas es de los primeros cuarenta segundos y no se volvió a superar, que
+es buena señal, pero hace falta una sesión larga para saber si se estabilizan o
+siguen subiendo —y ahí, si suben, lo primero a mirar son las tiras de animación,
+que se redondean a potencia de dos en las dos dimensiones—.
 
 ---
 
