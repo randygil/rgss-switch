@@ -3354,28 +3354,53 @@ La sospecha de §5.55 era correcta y el número es contundente: **el 97 % de los
 y la potencia de dos sólo añade un punto por mucho más gasto. La regla barata es
 la buena.
 
-**Y la trampa que había que esquivar para implementarlo.** El fondo guarda la
-textura por tamaño, y quien la recibe llama a `TEX::uploadImage`, que es un
-`glTexImage2D`: eso **reespecifica la textura entera** al tamaño exacto de la
-imagen. Con cubos de tamaño exacto no se nota, porque el pedido y el real
-coinciden siempre. Con cubos redondeados dejaría de ser cierto: una textura
-devuelta al cubo de 48×48 puede llevar dentro una asignación real de 33×41, y el
-siguiente que la pida creyendo que tiene 48×48 —`Bitmap.new(w,h)`, que no sube
-ninguna imagen y sólo hace `clear()`— dibujaría contra una textura más pequeña
-que su área, y el mapa saldría recortado sin que nada diera error.
+**Se implementó, se midió, y no servía.** La predicción era de sesenta y siete
+puntos; lo medido, dos:
 
-**Así que redondear cambia dónde se busca, no lo que se entrega.** El contrato
-del fondo sigue intacto —«te devuelvo una textura de exactamente el tamaño que
-pides»—: si la que se encuentra en el cubo no mide lo pedido, se reespecifica
-antes de devolverla, por el guardián de §5.64 como cualquier otra reserva. Y el
-presupuesto se descuenta por lo que ocupaba **esa** textura y no por lo que se
-ha pedido, que con cubos exactos era el mismo número y ahora no.
+```
+acierto del fondo    b72 (sin redondeo): 2.488 de 8.306  (30 %)
+                     b77 (con redondeo): 1.902 de 6.004  (32 %)
+```
 
-Lo que se gana, entonces, no es la reserva —ésa se paga igual— sino el nombre de
-textura, el FBO y el enlace entre los dos: `TEXFBO::init` y `linkFBO`. Cuánto de
-los 198 ms de `nue` en un fotograma de menú con 393 texturas nuevas es cada cosa
-lo dirá el próximo registro; el cambio está hecho para poder medirlo, y el censo
-sigue puesto, así que los fallos que queden se cuentan solos.
+**El censo contestaba a otra pregunta.** Contaba cuántos fallos eran de un tamaño
+redondeado *ya visto antes*, y de ahí se dedujo que agrupar los cubos los
+convertiría en aciertos. Pero un fallo del fondo no ocurre porque el tamaño sea
+nuevo: ocurre porque **el cubo está vacío en ese momento**, o sea porque todas
+las texturas de ese tamaño están vivas a la vez en manos del juego. Agrupar
+tamaños no crea texturas libres donde no las hay.
+
+El redondeo se quitó. No hacía daño —el contrato del fondo se mantuvo intacto,
+reespecificando al entregar— pero añadía un camino de código y una sutileza de
+contabilidad a cambio de nada. El razonamiento quedó escrito en `texpool.cpp`,
+donde se lo encontrará quien vuelva a tener la idea, y el censo se quedó puesto
+porque ahora se sabe leer: dice cuántos tamaños se repiten, no cuántos aciertos
+se ganarían.
+
+**Y redirige el trabajo.** Lo que sube el acierto del fondo no es la clave del
+cubo: es tener menos texturas vivas simultáneas, o más presupuesto. En esa sesión
+había **1.541 texturas vivas ocupando 257 MB** y el fondo tiene 192. Ahí está el
+número que hay que mover, y es el mismo que §5.69 dejó apuntado.
+
+### 5.70-ter Lo que sí funcionó: 31 segundos parados que pasan a 11
+
+El alijo de mega surfaces, medido en la consola con la misma partida:
+
+```
+b72:  21 x Graphics/Tilesets/Exterior1  a ~225 ms
+       4 x Graphics/Tilesets/Interior1  a ~195 ms
+b77:   1 x Exterior1,  1 x Interior1
+```
+
+| | b72 | b77 |
+|---|---|---|
+| ficheros lentos (>40 ms) | 25 | **2** |
+| tirones | 36 | **14** |
+| tiempo total parado | 31,0 s | **11,2 s** |
+| peor fotograma | 1.692 ms | 1.376 ms |
+
+Cada tileset se descomprime exactamente una vez por sesión. Veinte segundos de
+fotogramas parados que desaparecen en cuatro minutos de juego, arreglando una
+rama del `if` que no guardaba en el alijo.
 
 ---
 
