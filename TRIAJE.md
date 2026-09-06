@@ -28,11 +28,21 @@ de la herramienta, para poder compararlos.
 
 ## Qué mira
 
-* **La compilación**: la primera línea de `mkxp-boot.log` —`[build] 1.0.0 b14
-  01/09 17:43`— y, contra la tabla `ARREGLOS` del propio guion, si esa
-  compilación lleva los arreglos conocidos. Cuando salga una publicación que
-  lleve el guardián de §5.64, se añade a esa tabla y todos los informes
-  siguientes lo saben.
+* **La compilación**: la línea `[build] 1.0.0 b14 01/09 17:43` de la **última**
+  sesión del registro, no la de la primera, y contra la tabla `ARREGLOS` del
+  propio guion, si esa compilación lleva los arreglos conocidos. Cuando salga
+  una publicación que lleve el guardián de §5.64, se añade a esa tabla y todos
+  los informes siguientes lo saben.
+
+  Que sea la última importa: `mkxp-boot.log` no se trunca, y un registro real
+  puede traer veintitrés sesiones de seis compilaciones distintas, la más vieja
+  de hace días. Encabezar con la primera hacía que el informe respondiera «NO
+  lleva el arreglo» sobre una compilación que el jugador ya no usa. Si hay más
+  de una, el resumen lo dice.
+* **De qué compilación es cada caída**. Por el mismo motivo: «hay dos caídas» no
+  dice nada mientras no se sepa si son de la que se está jugando o de una de
+  hace tres días que ya está arreglada. Cada grupo de volcados sale con su sello
+  y, si no es el de arriba, con un aviso al lado.
 * **Los volcados `[exc]`**: el desplazamiento relativo (`pc` menos `base`, que
   es lo único comparable entre arranques), los registros, la pila, y si dos
   volcados son el mismo camino de código o el mismo sitio alcanzado por
@@ -53,10 +63,18 @@ de la herramienta, para poder compararlos.
 * **La partida**: sesiones, duración de cada una, y si Essentials dejó
   excepción en `errorlog.txt`. Que no haya `errorlog.txt` también es un dato:
   significa que la muerte fue por debajo de Ruby.
-* **Dónde estaba el jugador**: en un registro real, en ningún sitio. El informe
-  lo dice con esas palabras en lugar de prometer lo que no hay, y remite a la
-  especificación de la línea `[donde]` que haría falta en el motor
-  (`docs/consola/20260906-dos-jugadores.md`).
+* **Dónde estaba el jugador**: con un registro anterior a la 1.1.1, en ningún
+  sitio, y el informe lo dice con esas palabras en lugar de prometer lo que no
+  hay. Desde la 1.1.1 el motor escribe `[donde] mapa 8 Bosque Verde en (35,65)`
+  en cada cambio de mapa, y el resumen enseña el último.
+* **Lo que la 1.1.1 empezó a medir**, cuando el registro lo trae: de dónde salió
+  el binario (`[nro]`, que despeja de una vez qué copia se está jugando cuando
+  hay más de una instalación en la tarjeta); cuánto tardó en montarse el
+  contenedor y en arrancar el intérprete; las texturas vivas y su pico —el
+  término que crece y que hasta entonces no contaba nadie—; el censo de fallos
+  del fondo con lo que ganaría redondear los tamaños; y los ficheros que tardan
+  más de 40 ms en abrirse, con los tres peores. Un registro sin ninguna de estas
+  líneas es, por sí solo, un registro anterior a la 1.1.1.
 * **Los casos ya archivados** en `docs/consola/`: si el desplazamiento coincide
   y la compilación es la misma, el informe lo dice. La compilación que se
   compara es la de la sesión de cada volcado, no el primer `[build]` del

@@ -203,6 +203,19 @@ RE_FONDO = re.compile(r"fondo (\d+) aciertos (\d+) MB(?: (\d+) tex)?")
 # el tiempo de una consola dormida, de modo que no verlo era no ver las
 # suspensiones que no pasaban por `comp`.
 RE_RESTO = re.compile(r"\|\s*resto (\d+) ms")
+# Lineas que la 1.1.1 anadio al registro. Antes de ella no existe ninguna, asi
+# que un registro sin estas es, por si solo, un registro viejo.
+RE_DONDE = re.compile(r"^mapa (\d+)(?: (.*?))? en \((\d+),(\d+)\)$")
+RE_LENTO = re.compile(r"^(\d+) ms abriendo (.+)$")
+RE_TEXVIVAS = re.compile(r"texturas vivas: (\d+) MB en (\d+) \| pico (\d+) MB en (\d+)")
+RE_REPARTO = re.compile(r"reparto: fondo (\d+) \| img (\d+) \| cad (\d+) \| resto (\d+) MB")
+RE_MALLOC = re.compile(r"malloc (\d+) MB en uso")
+RE_CENSO = re.compile(r"fallos (\d+) \| con multiplo de 16 serian aciertos (\d+) "
+                      r"\((\d+)%, (\d+) tamanos\) \| con potencia de 2, (\d+) \((\d+)%, (\d+)\)")
+RE_PRESUPUESTO = re.compile(r"presupuesto inicial (\d+) MB")
+RE_MONTADO = re.compile(r"^10a\+ contenedor (.+) montado$")
+RE_INTERPRETE = re.compile(r"^11 SharedState OK")
+
 RE_EXC_CAB = re.compile(r"^(.*?)\s*desc=(\S+)\s+esr=(\S+)\s+far=(\S+)")
 RE_EXC_BASE = re.compile(r"base=(\S+)\s+pc=(\S+)\s+\(\+(\S+)\)(?:\s+lr=\+(\S+))?"
                          r"(?:\s+sp=(\S+))?")
@@ -230,6 +243,17 @@ class Sesion(object):
         # dice que estaba jugando y no en un menu.
         self.eventos = []
         self.termino_en_exc = False
+        # Lo que la 1.1.1 empezo a contar. Vacio en cualquier registro anterior.
+        self.nro = None          # de donde salio el binario
+        self.donde = []          # (ms, id, nombre, x, y) en cada cambio de mapa
+        self.lentos = []         # (ms, coste_ms, fichero)
+        self.texturas = []       # (ms, mb, n, pico_mb, pico_n)
+        self.reparto = []        # (ms, malloc, fondo, img, cad, resto)
+        self.censo = None        # el ultimo censo de fallos del fondo
+        self.presupuesto = None  # MB con los que arranco el fondo
+        self.montaje = None      # (ms_montado, nombre del contenedor)
+        self.interprete_ms = None
+        self.malloc_pendiente = None
 
 
 def analiza_boot(texto):
@@ -282,6 +306,56 @@ def analiza_boot(texto):
             actual.gfx = cuerpo
         elif tag == "fs":
             actual.fs.append((ms, cuerpo))
+        elif tag == "nro":
+            # Solo la primera linea. Las lineas de la pantalla de diagnostico
+            # -"Busco el juego en:", los [ OK ]- llevan sello de tiempo pero no
+            # etiqueta, asi que el troceador las pega al cuerpo de la anterior.
+            actual.nro = cuerpo.splitlines()[0].strip() if cuerpo else ""
+        elif tag == "donde":
+            m = RE_DONDE.match(cuerpo)
+            if m:
+                actual.donde.append((ms, int(m.group(1)), m.group(2) or "",
+                                     int(m.group(3)), int(m.group(4))))
+        elif tag == "lento":
+            m = RE_LENTO.match(cuerpo)
+            if m:
+                actual.lentos.append((ms, int(m.group(1)), m.group(2)))
+        elif tag == "monton":
+            # El bloque sale siempre en el mismo orden -malloc, reparto,
+            # texturas vivas, ruby- asi que el malloc se guarda al vuelo y lo
+            # recoge la linea de reparto, que es la que abre la muestra.
+            m = RE_MALLOC.search(cuerpo)
+            if m:
+                actual.malloc_pendiente = int(m.group(1))
+            m = RE_REPARTO.search(cuerpo)
+            if m:
+                actual.reparto.append((ms, actual.malloc_pendiente,
+                                       int(m.group(1)), int(m.group(2)),
+                                       int(m.group(3)), int(m.group(4))))
+                actual.malloc_pendiente = None
+            m = RE_TEXVIVAS.search(cuerpo)
+            if m:
+                actual.texturas.append((ms, int(m.group(1)), int(m.group(2)),
+                                        int(m.group(3)), int(m.group(4))))
+        elif tag == "fondo":
+            m = RE_PRESUPUESTO.search(cuerpo)
+            if m:
+                actual.presupuesto = int(m.group(1))
+            m = RE_CENSO.search(cuerpo)
+            if m:
+                actual.censo = {
+                    "fallos": int(m.group(1)),
+                    "r16": int(m.group(2)), "p16": int(m.group(3)),
+                    "d16": int(m.group(4)),
+                    "rp2": int(m.group(5)), "pp2": int(m.group(6)),
+                    "dp2": int(m.group(7)),
+                }
+        elif tag == "boot":
+            m = RE_MONTADO.match(cuerpo)
+            if m:
+                actual.montaje = (ms, m.group(1))
+            if RE_INTERPRETE.match(cuerpo):
+                actual.interprete_ms = ms
         elif tag == "me":
             actual.eventos.append((ms, cuerpo))
         elif tag == "tiron":
@@ -776,6 +850,12 @@ def agrupa_volcados(sesiones):
     for i, s in enumerate(sesiones):
         for v in s.volcados:
             v["sesion"] = i + 1
+            # De que compilacion es ESTE volcado. Un mkxp-boot.log no se trunca
+            # y acumula sesiones de varias compilaciones, asi que "hay dos
+            # caidas" no dice nada mientras no se sepa si son de la que se esta
+            # jugando o de una de hace tres dias que ya se arreglo.
+            v["sello"] = ("%s b%d" % (s.compilacion["version"], s.compilacion["b"])
+                          if s.compilacion else None)
             grupos.setdefault(v["rel"], []).append(v)
     salida = []
     for rel, vs in sorted(grupos.items(), key=lambda kv: -len(kv[1])):
@@ -799,6 +879,7 @@ def agrupa_volcados(sesiones):
                 distintos.append(reg)
         salida.append({
             "rel": rel, "volcados": vs, "n": len(vs),
+            "sellos": sorted(set(v["sello"] for v in vs if v["sello"])),
             "mismo_camino": len(pilas) == 1, "pilas": len(pilas),
             "marcos_comunes": comun,
             "regs_comunes": comunes, "regs_distintos": distintos,
@@ -1353,7 +1434,27 @@ def triaje(carpeta, etiqueta, fecha, relato, destino, nombre, archivar):
     errorlog = analiza_errorlog(lee(ficheros["errorlog.txt"])) \
         if "errorlog.txt" in ficheros else None
 
-    comp = next((s.compilacion for s in sesiones if s.compilacion), None)
+    # La compilacion que se ensena arriba es la de la ULTIMA sesion, no la de
+    # la primera.
+    #
+    # mkxp-boot.log no se trunca: crece durante toda la vida de la instalacion,
+    # y en el registro del 6 de septiembre de 2026 habia veintitres sesiones de
+    # seis compilaciones distintas, la mas vieja de tres dias antes. Quedarse
+    # con el primer [build] hacia que el informe encabezara con una compilacion
+    # que el jugador ya no usa y respondiera "NO lleva el arreglo" sobre ella.
+    # La que importa es la ultima: es la que se estaba jugando.
+    con_build = [s.compilacion for s in sesiones if s.compilacion]
+    comp = con_build[-1] if con_build else None
+
+    # Y se dice cuantas hay, porque cambia como se lee todo lo demas: los rangos
+    # de fondo y monton de un registro con seis compilaciones no describen
+    # ninguna de ellas.
+    distintas = []
+    for c in con_build:
+        clave = (c["version"], c["b"])
+        if clave not in [(d["version"], d["b"]) for d in distintas]:
+            distintas.append(c)
+
     grupos = agrupa_volcados(sesiones)
 
     # El numero que decide si la memoria de video toco el techo no es el minimo
@@ -1411,6 +1512,7 @@ def triaje(carpeta, etiqueta, fecha, relato, destino, nombre, archivar):
     total_ms = sum(s.ultimo_ms for s in sesiones)
     datos = {
         "fecha": fecha, "sesiones": sesiones, "compilacion": comp,
+        "compilaciones": distintas,
         "memoria": next((s.memoria for s in sesiones if s.memoria), None),
         "reloj": next((s.reloj for s in sesiones if s.reloj), None),
         "debug": debug, "ruby": ruby, "errorlog": errorlog,
@@ -1464,8 +1566,10 @@ def resumen_en_pantalla(camino, datos):
     comp = datos["compilacion"]
     print("informe: %s" % camino)
     if comp:
-        print("compilacion: %s b%d (%s)"
-              % (comp["version"], comp["b"], fecha_es(comp["fecha"])))
+        otras = len(datos.get("compilaciones") or []) - 1
+        print("compilacion: %s b%d (%s)%s"
+              % (comp["version"], comp["b"], fecha_es(comp["fecha"]),
+                 "  [la ultima; el registro trae %d mas]" % otras if otras > 0 else ""))
     for arr, estado, _p in datos["arreglos"]:
         print("  %-50s %s" % (arr["nombre"], estado))
     print("sesiones: %d | volcados: %d en %d sitio(s)"
@@ -1478,8 +1582,14 @@ def resumen_en_pantalla(camino, datos):
             camino = "%d marcos comunes, luego se separan" % g["marcos_comunes"]
         else:
             camino = "pilas distintas desde el marco 0"
-        print("  +%s x%d far=%s (%s)"
-              % (g["rel"], g["n"], g["volcados"][0]["far"], camino))
+        de = ", ".join(g.get("sellos") or []) or "compilacion desconocida"
+        aviso = ""
+        if comp and g.get("sellos"):
+            mio = "%s b%d" % (comp["version"], comp["b"])
+            if mio not in g["sellos"]:
+                aviso = "  <- NO es de la compilacion de arriba"
+        print("  +%s x%d far=%s (%s) en %s%s"
+              % (g["rel"], g["n"], g["volcados"][0]["far"], camino, de, aviso))
     f, m = datos["serie_fondo"], datos["serie_monton"]
     if f:
         print("fondo: %d-%d MB%s" % (f["min"], f["max"],
@@ -1489,6 +1599,37 @@ def resumen_en_pantalla(camino, datos):
                                       " (monotono)" if m["monotona"] else ""))
     print("tirones: %d reales, %d suspensiones"
           % (len(datos["tirones_reales"]), len(datos["suspensiones"])))
+
+    # Lo que la 1.1.1 mide y antes no existia. Se ensena solo de la ultima
+    # sesion: mezclar sesiones aqui seria mezclar compilaciones.
+    ult = next((x for x in reversed(datos["sesiones"]) if x.compilacion), None)
+    if ult is not None:
+        if ult.nro:
+            print("lanzado desde: %s" % ult.nro)
+        if ult.montaje and ult.interprete_ms:
+            # En milisegundos y no en segundos: aqui la diferencia entre 568 ms
+            # y 55 s es el asunto entero, y redondear a "2 s" lo borra.
+            print("arranque: %s montado a los %d ms, interprete a los %d ms"
+                  % (ult.montaje[1], ult.montaje[0], ult.interprete_ms))
+        if ult.texturas:
+            mb = [t[1] for t in ult.texturas]
+            print("texturas vivas: %d-%d MB (pico %d MB en %d texturas)"
+                  % (min(mb), max(mb), ult.texturas[-1][3], ult.texturas[-1][4]))
+        if ult.censo:
+            c = ult.censo
+            print("fallos del fondo: %d | redondeando a 16 serian aciertos el "
+                  "%d%%, a potencia de 2 el %d%%"
+                  % (c["fallos"], c["p16"], c["pp2"]))
+        if ult.lentos:
+            peor = sorted(ult.lentos, key=lambda x: -x[1])[:3]
+            print("ficheros lentos: %d por encima de 40 ms; los peores:"
+                  % len(ult.lentos))
+            for _ms, coste, fich in peor:
+                print("  %4d ms  %s" % (coste, fich))
+        if ult.donde:
+            print("ultimo sitio: mapa %d %s en (%d,%d)"
+                  % (ult.donde[-1][1], ult.donde[-1][2] or "?",
+                     ult.donde[-1][3], ult.donde[-1][4]))
     if datos["descartados"]:
         print("OJO: %d fichero(s) de otra carpeta fuera del triaje (otro "
               "jugador):" % len(datos["descartados"]))
