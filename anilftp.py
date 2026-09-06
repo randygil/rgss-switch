@@ -79,6 +79,50 @@ def tam_remoto(ftp, ruta):
         return None
 
 
+# sys-ftpd se atraganta cuando se le pide sin pausa.
+#
+# El 6 de septiembre de 2026, subiendo los mismos 109 ficheros a la misma
+# carpeta, la misma orden fallaba entera —"550 Failed to create file" en los
+# 109, y ni un SIZE contestando— y funcionaba a la vez que se le metian unos
+# print por medio. Esa es toda la diferencia: el tiempo entre ordenes. A pelo,
+# la misma escritura hecha a mano desde otra sesion salia bien.
+#
+# No se sabe que le pasa por dentro al servidor y no hace falta saberlo: lo que
+# hace falta es que una subida no se caiga por eso. Se reintenta con una pausa
+# que crece, y a la tercera se abre una conexion nueva, que es lo unico que
+# arregla una sesion que ya esta ida. Si despues de eso sigue fallando, es un
+# fallo de verdad y se cuenta como tal.
+def con_reintento(sesion, hacer, veces=3):
+    """Ejecuta hacer(sesion["ftp"]) reintentando.
+
+    La conexion viva vive en el diccionario y no en una variable local a
+    proposito: cuando se acaban los intentos hay que dejarla utilizable para el
+    siguiente fichero. Devolviendola solo en el camino bueno, un fallo dejaba en
+    manos de quien llama el socket que acabamos de cerrar, y a partir de ahi
+    fallaba todo con un AttributeError en vez de con el error de verdad."""
+    ultimo = None
+    for intento in range(veces):
+        try:
+            return hacer(sesion["ftp"])
+        except Exception as e:
+            ultimo = e
+            if intento == veces - 1:
+                break
+            time.sleep(0.3 * (intento + 1))
+            if intento == veces - 2:
+                try:
+                    sesion["ftp"].quit()
+                except Exception:
+                    pass
+                sesion["ftp"] = conectar(*RECONEXION)
+    raise ultimo
+
+
+# Lo que hace falta para volver a conectar cuando la sesion se estropea. Lo
+# rellena main() en cuanto conoce los argumentos.
+RECONEXION = ()
+
+
 def asegura_dir(ftp, ruta, creados):
     """Crea la ruta remota entera, recordando lo ya creado para no preguntar dos veces."""
     if ruta in creados:
@@ -120,6 +164,7 @@ def guarda_estado(estado):
 
 
 def subir(ftp, solo):
+    sesion = {"ftp": ftp}
     lista = []
     for raiz, _, ficheros in os.walk(LOCAL):
         for f in ficheros:
@@ -150,10 +195,16 @@ def subir(ftp, solo):
             verificados += 1
         else:
             asegura_dir(ftp, os.path.dirname(destino), creados)
-            try:
+
+            def sube(f, abs_=abs_, destino=destino):
                 with open(abs_, "rb") as fh:
-                    ftp.storbinary("STOR " + destino, fh, blocksize=64 * 1024)
+                    f.storbinary("STOR " + destino, fh, blocksize=64 * 1024)
+
+            try:
+                con_reintento(sesion, sube)
+                ftp = sesion["ftp"]
             except Exception as e:
+                ftp = sesion["ftp"]
                 fallos.append("%s: %s" % (rel, e))
                 continue
             subidos += 1
@@ -223,6 +274,8 @@ def main():
                     help="nro = solo el binario; ruby = configuracion; todo = el juego entero")
     a = ap.parse_args()
     REMOTO = a.remoto.rstrip("/")
+    global RECONEXION
+    RECONEXION = (a.host, a.puerto, a.usuario, a.clave)
 
     # El estado se guarda por ruta relativa, y dos instalaciones tienen las
     # mismas rutas relativas con contenidos distintos. Compartir el fichero de
