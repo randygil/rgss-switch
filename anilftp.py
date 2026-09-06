@@ -30,6 +30,11 @@ Uso:
 import argparse, ftplib, hashlib, json, os, sys, time, datetime
 
 LOCAL  = "C:/anilswitch/out/sdcard/switch/pokemon-anil"
+# La carpeta de la consola. Se puede cambiar con --remoto porque en la tarjeta
+# suele haber mas de una instalacion -una con el contenedor y otra con las
+# carpetas sueltas- y el 6 de septiembre de 2026 se subio el binario nuevo a una
+# y se jugo la otra sin enterarse. El registro de arranque no lo delataba: su
+# ruta esta fijada en nx/nx_boot.c, asi que las dos escriben en el mismo fichero.
 REMOTO = "/switch/pokemon-anil"
 # Que se subio la ultima vez, por ruta: {"rel": [tamano, md5]}. Hace falta
 # porque el servidor solo sabe decir tamanos, y el 1 de septiembre de 2026 una
@@ -205,15 +210,26 @@ def traer(ftp):
 
 
 def main():
+    global REMOTO
     ap = argparse.ArgumentParser()
     ap.add_argument("accion", choices=["subir", "traer"])
     ap.add_argument("host")
     ap.add_argument("--puerto", type=int, default=5000)
+    ap.add_argument("--remoto", default=REMOTO,
+                    help="carpeta en la consola (por defecto %s)" % REMOTO)
     ap.add_argument("--usuario", default="anonymous")
     ap.add_argument("--clave", default="anonymous")
     ap.add_argument("--solo", choices=sorted(SOLO), default="todo",
                     help="nro = solo el binario; ruby = configuracion; todo = el juego entero")
     a = ap.parse_args()
+    REMOTO = a.remoto.rstrip("/")
+
+    # El estado se guarda por ruta relativa, y dos instalaciones tienen las
+    # mismas rutas relativas con contenidos distintos. Compartir el fichero de
+    # estado haria que subir a una diera la otra por subida. Uno por carpeta.
+    if REMOTO != "/switch/pokemon-anil":
+        global ESTADO
+        ESTADO = ESTADO.replace(".json", REMOTO.replace("/", "-") + ".json")
 
     try:
         ftp = conectar(a.host, a.puerto, a.usuario, a.clave)

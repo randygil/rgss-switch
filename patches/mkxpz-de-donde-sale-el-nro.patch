@@ -1,0 +1,54 @@
+De donde salio el binario que esta corriendo, en el registro de arranque.
+
+El 6 de septiembre de 2026 se subio la b61 a la consola, se jugo, y el registro
+seguia diciendo "1.0.0 b14". Veinte minutos despues aparecio el motivo: en la
+tarjeta hay DOS instalaciones -/switch/pokemon-anil, con los datos en el
+contenedor, y /switch/pokemon-anil-off, con las carpetas sueltas- y se lanzo la
+segunda, que tenia el binario de hace cinco dias.
+
+El registro de arranque no podia delatarlo. Su ruta esta fijada en
+nx/nx_boot.c —sdmc:/switch/pokemon-anil/mkxp-boot.log— y no depende de donde
+este el .nro, asi que las dos instalaciones escriben en el MISMO fichero, una
+detras de otra, sin nada que las distinga salvo el sello de compilacion; que es
+justo el dato que estaba en duda. La ruta si estaba en mkxp-debug.log, en la
+linea de argv[0], pero ahi hay que ir a buscarla sabiendo ya que se busca.
+
+Asi que la ruta del .nro se escribe tambien en el registro de arranque, cuatro
+lineas despues del sello. Las dos juntas contestan la pregunta entera: el sello
+dice QUE binario y esta dice DE DONDE salio.
+
+Va contra .antes-nro y no contra el .orig de mkxp-z porque main.cpp lo tocan ya
+otros tres parches -mkxpz-main.cpp, mkxpz-aviso-pantalla y mkxpz-nucleo-rgss- y
+un diff contra el original se llevaria por delante lo suyo. Mismo criterio que
+el trozo de sharedstate.cpp en mkxpz-textura-sin-memoria.patch.
+
+--- src/main.cpp.antes-nro
++++ src/main.cpp
+@@ -312,6 +312,27 @@
+     Debug() << "[nx] mkxp-z arrancando en Horizon OS; argc =" << argc
+             << "argv[0] =" << (argc > 0 && argv[0] ? argv[0] : "(vacio)");
+ 
++    /* De donde se lanzo ESTE proceso, en el registro de arranque y no solo en
++     * el de depuracion.
++     *
++     * El 6 de septiembre de 2026 costo veinte minutos entender por que la
++     * consola seguia arrancando la b14 con la b61 recien subida: habia dos
++     * instalaciones en la tarjeta -una con el contenedor y otra con las
++     * carpetas sueltas- y se jugo la otra. El registro de arranque no podia
++     * decirlo, porque la ruta del registro esta fijada en nx/nx_boot.c y las
++     * dos instalaciones escriben en el MISMO fichero. O sea que dos binarios
++     * distintos dejaban sus lineas mezcladas sin nada que los distinguiera mas
++     * que el sello de compilacion, que es justo lo que estaba en duda.
++     *
++     * Con esta linea, la siguiente vez se ve de un vistazo: el sello dice QUE
++     * binario y esta dice DE DONDE salio. */
++    {
++        char linea[320];
++        snprintf(linea, sizeof(linea), "[nro] %s",
++                 (argc > 0 && argv[0]) ? argv[0] : "(sin ruta: lanzado sin argumentos)");
++        nx_boot_trace(linea);
++    }
++
+     nxSetupWorkdir(argc, argv);
+     {
+         char cwd[512] = {0};
