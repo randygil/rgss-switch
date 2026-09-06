@@ -3239,6 +3239,74 @@ que se redondean a potencia de dos en las dos dimensiones—.
 
 ---
 
+### 5.70 Los tirones, y qué se está midiendo antes de tocar nada
+
+La primera sesión de la 1.1.1 en la consola no tuvo ni una caída, pero sí
+**veintiocho tirones en tres minutos, el peor de 1,38 s**. No se pierde nada
+—el proceso sigue vivo y la partida también— pero un fotograma de segundo y
+medio se nota, y ahora que el proceso ya no se muere es lo siguiente.
+
+El reparto de un tirón típico:
+
+```
+marco 945 ms | dec 1x 222 ms | abr 2x 236 ms | fis 2x 1 ms | resto 592 ms
+```
+
+**Hay una trampa de lectura ahí que conviene deshacer: `abr` no mide abrir.**
+Mide `FileSystem::openRead` entera, y `openRead` llama al manejador, que para un
+`Bitmap` es descomprimir el PNG. Abrir de verdad es `fis`, y son **2,5–3,5 ms
+por fichero**: no es el problema. Los 220 ms son descomprimir **una** imagen. El
+peor de la sesión son **452 ms en una sola**.
+
+Y el otro término gordo es `resto` —hasta 832 ms con `cpu 825`—, que es Ruby
+ejecutando scripts. Y un tercero, en los fotogramas de menú:
+
+```
+pool 316x 193 ms | nue 393x 198 ms | fondo 108 aciertos 189 MB 1500 tex
+```
+
+**393 texturas creadas contra 108 aciertos** en un solo fotograma. Eso cuadra
+con la auditoría de los registros de los jugadores, que daba un 29–32% de
+acierto sostenido.
+
+**Lo que se ha puesto es instrumentación, no arreglos.** Dos medidas, las dos en
+producción, porque las dos son baratas y ninguna de las dos preguntas se puede
+contestar desde el PC:
+
+**1. Qué fichero es el que tarda.** Saber que una apertura costó 222 ms y no
+cuál es como no saber nada: no se puede juzgar si sobra resolución, si es una
+tira de animación de las que se redondean a potencia de dos, o si es una imagen
+que el juego pide en mitad de un fotograma pudiendo haberla pedido antes.
+Cualquier apertura que pase de 40 ms deja su nombre:
+
+```
+[ 34211] [lento] 222 ms abriendo Graphics/Battlebacks/field_bg
+```
+
+**2. Si redondear los tamaños serviría de algo.** La sospecha lleva escrita
+desde §5.55: los sprites de Pokémon son de tamaños **todos distintos**, y el
+fondo guarda por tamaño exacto, así que un cubo con una sola textura dentro no
+se reaprovecha jamás. Redondear —reservar un poco de más y declarar lo pedido—
+convertiría cientos de cubos de uno en unas pocas decenas de cubos llenos.
+
+Pero redondear **no es gratis**: reserva memoria de más, y en una consola donde
+la GPU ya dice que no, gastar por si acaso es exactamente lo que no se hace a
+ciegas. Así que se mide lo único que decide —de todos los fallos, cuántos
+habrían sido aciertos con el tamaño redondeado— y se ponen las dos reglas
+candidatas una al lado de la otra:
+
+```
+[fondo] fallos 1204 | con multiplo de 16 serian aciertos 913 (75%, 61 tamanos)
+        | con potencia de 2, 1150 (95%, 18)
+```
+
+Múltiplo de 16 gasta poco y agrupa poco; potencia de dos gasta mucho y agrupa
+mucho. Con los dos números delante, la decisión es una resta y no una corazonada.
+El censo son dos tablas abiertas de tamaño fijo, y si se llenan lo dice: un
+número corto que se sabe corto es útil, uno que miente no.
+
+---
+
 ## 5-bis. Criterio de diseño para los stubs
 
 Auditando `libc.a`, `libsysbase.a` y `libnx.a` con `nm`, el reparto es:

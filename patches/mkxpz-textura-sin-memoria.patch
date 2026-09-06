@@ -200,8 +200,8 @@ mkxpz-sharedstate-trazas-, asi que aqui van solo los trozos de §5.64, medidos
 contra .antes-rutas: el fichero tal y como quedaba despues de aplicar los otros
 dos. Se aplican en ese orden.
 
---- display/gl/texpool.cpp.orig	2026-09-04 00:35:04.816203200 -0400
-+++ display/gl/texpool.cpp	2026-09-06 01:04:49.841557400 -0400
+--- display/gl/texpool.cpp.orig
++++ display/gl/texpool.cpp
 @@ -51,6 +51,34 @@
  
  typedef std::list<CacheNode> CNodeList;
@@ -272,7 +272,7 @@ dos. Se aplican en ese orden.
  
  	/* Has this pool been disabled? */
  	bool disabled;
-@@ -79,9 +124,115 @@
+@@ -79,9 +124,116 @@
  	{}
  };
  
@@ -284,6 +284,7 @@ dos. Se aplican en ese orden.
 +static TexPoolPrivate *nxFondo = 0;
 +
 +extern "C" unsigned nx_pool_reales(void);
++extern "C" void nx_pool_falla(unsigned ancho, unsigned alto);
 +extern "C" unsigned nx_pool_reales(void)
 +{
 +	return nxFondo ? (unsigned)nxFondo->priorityQueue.size() : 0u;
@@ -388,7 +389,7 @@ dos. Se aplican en ese orden.
  }
  
  TexPool::~TexPool()
-@@ -108,12 +259,179 @@
+@@ -108,12 +260,179 @@
  extern "C" u64  nx_entra(void);
  extern "C" void nx_sale(int cual, u64 t0);
  extern "C" void nx_pool_acierto(void);
@@ -569,7 +570,7 @@ dos. Se aplican en ese orden.
  	Size size(width, height);
  
  	/* See if we can statisfy request from cache */
-@@ -131,7 +449,7 @@
+@@ -131,7 +450,7 @@
  		--p->objCount;
  #ifdef __SWITCH__
  		nx_pool_acierto();
@@ -578,7 +579,7 @@ dos. Se aplican en ese orden.
  #endif
  
  //		Debug() << "TexPool: <?+> (" << width << height << ")";
-@@ -139,22 +457,41 @@
+@@ -139,22 +458,46 @@
  		return cnode.obj;
  	}
  
@@ -591,6 +592,11 @@ dos. Se aplican en ese orden.
  	/* Nope, create it instead */
  #ifdef __SWITCH__
  	u64 nxT0 = nx_entra();
++
++	/* Un fallo del fondo, anotado con su tamano. No es contabilidad: es la
++	 * medida que decide si merece la pena redondear los tamanos (nx_texturas.c
++	 * lo cuenta y README 5.70 lo explica). Aqui solo se le pasa el dato. */
++	nx_pool_falla((unsigned)width, (unsigned)height);
  #endif
  	TEXFBO::init(cnode.obj);
 -	TEXFBO::allocEmpty(cnode.obj, width, height);
@@ -628,7 +634,7 @@ dos. Se aplican en ese orden.
  #endif
  
  //	Debug() << "TexPool: <?-> (" << width << height << ")";
-@@ -225,6 +562,12 @@
+@@ -225,6 +568,12 @@
  
  	++p->objCount;
  

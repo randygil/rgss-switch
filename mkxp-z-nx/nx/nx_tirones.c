@@ -72,6 +72,8 @@ int  nx_diagnostico(void);
 unsigned nx_pool_reales(void);
 unsigned nx_texturas_informe(unsigned *n_vivas, unsigned *pico_mb,
                              unsigned *n_pico, unsigned *n_perdidas);
+unsigned nx_pool_censo(unsigned *rep16, unsigned *repp2,
+                       unsigned *dist16, unsigned *distp2, unsigned *lleno);
 
 static void nx_pool_informe(unsigned bytes, unsigned objetos);
 
@@ -456,6 +458,25 @@ static void nx_monton_informe(void)
                  (unsigned)viejos,
                  (unsigned long long)(inc / 1024u));
         nx_boot_trace(linea);
+    }
+
+    /* Cuantos fallos del fondo habrian sido aciertos con el tamano redondeado.
+     * Es lo unico que decide si merece la pena redondear, que no es gratis:
+     * reserva de mas, y en una consola donde la GPU ya dice que no, gastar por
+     * si acaso es justo lo que no se hace a ciegas. Ver README 5.70. */
+    {
+        unsigned r16 = 0, rp2 = 0, d16 = 0, dp2 = 0, lleno = 0;
+        unsigned total = nx_pool_censo(&r16, &rp2, &d16, &dp2, &lleno);
+
+        if (total) {
+            snprintf(linea, sizeof(linea),
+                     "[fondo] fallos %u | con multiplo de 16 serian aciertos %u"
+                     " (%u%%, %u tamanos) | con potencia de 2, %u (%u%%, %u)%s",
+                     total, r16, (unsigned)(r16 * 100ull / total), d16,
+                     rp2, (unsigned)(rp2 * 100ull / total), dp2,
+                     lleno ? " [censo lleno: los distintos son un minimo]" : "");
+            nx_boot_trace(linea);
+        }
     }
 }
 
