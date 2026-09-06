@@ -3310,6 +3310,69 @@ número corto que se sabe corto es útil, uno que miente no.
 
 ---
 
+### 5.70-bis Lo que dijeron las dos medidas
+
+Cuatro minutos de partida con la instrumentación puesta, y las dos preguntas
+tienen respuesta.
+
+**La primera: el fichero que tarda es siempre el mismo.**
+
+```
+    6  225 ms abriendo Graphics/Tilesets/Exterior1
+    4  227 ms abriendo Graphics/Tilesets/Exterior1
+    2  226 ms abriendo Graphics/Tilesets/Exterior1
+    ...
+    2  193 ms abriendo Graphics/Tilesets/Interior1
+```
+
+**Veintiuna descompresiones de la misma imagen**, a 225 ms cada una: **4,7
+segundos** de una sesión de cuatro minutos, y cada una de ellas un fotograma
+parado. Más las cuatro de `Interior1`.
+
+Y el motivo estaba a la vista en cuanto se supo el nombre. `Exterior1.png` mide
+**256 × 23370** píxeles: es más alto que `maxTexSize`, así que no cabe en una
+textura y entra por la rama de **«mega surface»**, que se queda en RAM. Y el
+guardado en el alijo de imágenes estaba **en la otra rama del `if`**. O sea que
+las imágenes más caras del juego —las únicas que no caben en la GPU— eran
+justamente las únicas que no se reaprovechaban nunca.
+
+El arreglo es de tres líneas y una sutileza: el dueño de una mega surface es el
+`Bitmap` —`releaseResources()` la libera—, así que el alijo no puede quedarse
+con la que entrega. Guarda una copia y reparte copias. Copiar 23 MB son unos
+milisegundos; descomprimirla otra vez son 225.
+
+**La segunda: redondear agruparía, pero el fondo no está preparado para
+recibirlo.**
+
+```
+[fondo] fallos 5488 | con multiplo de 16 serian aciertos 5338 (97%, 150 tamanos)
+                    | con potencia de 2, 5427 (98%, 61)
+```
+
+La sospecha de §5.55 era correcta y el número es contundente: **el 97 % de los
+5.488 fallos habrían sido aciertos** redondeando al múltiplo de 16 más cercano,
+y la potencia de dos sólo añade un punto por mucho más gasto. La regla barata es
+la buena.
+
+**Pero no se implementa todavía, y el motivo merece quedar escrito.** El fondo
+guarda la textura por tamaño, y quien la recibe llama a `TEX::uploadImage`, que
+es un `glTexImage2D`: eso **reespecifica la textura entera** al tamaño exacto de
+la imagen. Con cubos de tamaño exacto eso no se nota, porque el tamaño pedido y
+el real coinciden siempre. Con cubos redondeados dejaría de ser cierto: una
+textura devuelta a un cubo de 48×48 podría llevar dentro una asignación real de
+33×41, y el siguiente que la pida creyendo que tiene 48×48 —`Bitmap.new(w,h)`,
+que no sube ninguna imagen y sólo hace `clear()`— escribiría fuera.
+
+O sea que redondear no es cambiar la clave del cubo: es cambiar el contrato del
+fondo, que ahora mismo dice «te devuelvo una textura de exactamente este
+tamaño». Hace falta decidir qué lo sustituye —reservar al tamaño del cubo al
+entregarla, y perder parte de la ganancia; o que quien la recibe no pueda dar
+por hecho su tamaño— y eso es un diseño, no una edición. El número ya está
+medido y no se va a mover: cuando se aborde, se aborda sabiendo que hay un 97 %
+esperando.
+
+---
+
 ### 5.71 `patches/` todavía no basta para rehacer `src/`
 
 `src/` está en `.gitignore`, así que **lo único que queda de todo el trabajo

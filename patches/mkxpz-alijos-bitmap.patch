@@ -40,6 +40,19 @@ no es dibujar, es preparar lo que se dibuja.
    media docena de salidas tempranas cada una y cronometrarlas a mano seria
    olvidarse de alguna. Es lo que hace legible la linea [tiron] del registro.
 
+Y guarda tambien las "mega surface" —las imagenes mas grandes de lo que la GPU
+admite como textura, que se quedan en RAM—. Hasta el 6 de septiembre de 2026 no
+lo hacia, porque el guardado estaba en la otra rama del if, y eso convertia a
+las imagenes MAS CARAS del juego en las unicas que no se reaprovechaban nunca.
+Medido en la consola: en una sesion de cuatro minutos,
+Graphics/Tilesets/Exterior1 —256 x 23370 pixeles, 22,8 MB en RGBA— se
+descomprimio VEINTIUNA veces a 225 ms cada una. Son 4,7 segundos de reloj, cada
+uno de ellos un fotograma parado, y era el tiron mas gordo de la sesion.
+
+El duenno de una mega surface es el Bitmap —releaseResources() la libera—, asi
+que el alijo no puede quedarse con la que se entrega: guarda una copia. Copiar
+23 MB son unos milisegundos; descomprimirla otra vez son 225.
+
 Los tamanos: 192 MB para las imagenes y 32 para el texto. El primero son
 superficies de SDL, que estan en el monton; el segundo son Bitmap, que si tienen
 textura detras y cuentan en la GPU. Ver nx/nx_tirones.c y README 5.55.
@@ -329,7 +342,7 @@ textura detras y cuentan en la GPU. Ver nx/nx_tirones.c y README 5.55.
          }
          return (surface || gif);
      }
-@@ -468,6 +702,32 @@
+@@ -468,6 +702,60 @@
  
  Bitmap::Bitmap(const char *filename)
  {
@@ -346,23 +359,91 @@ textura detras y cuentan en la GPU. Ver nx/nx_tirones.c y README 5.55.
 +
 +    if (hayImagen)
 +    {
-+        TEXFBO tex = shState->texPool().request(guardada->w, guardada->h);
++        /* Una imagen mas alta o mas ancha que maxTexSize no cabe en una
++         * textura y vive en RAM como "mega surface". El alijo guarda las dos
++         * clases, y aqui se distingue por el unico dato que las separa: su
++         * tamano. No hace falta anotarlo aparte porque el limite no cambia
++         * durante la ejecucion. */
++        if (guardada->w > glState.caps.maxTexSize ||
++            guardada->h > glState.caps.maxTexSize)
++        {
++            /* El duenno de una mega surface es el Bitmap: releaseResources()
++             * la libera. Asi que el alijo se queda con la suya y entrega una
++             * COPIA. Copiar 23 MB son unos milisegundos; descomprimirla otra
++             * vez son 225. */
++            SDL_Surface *copia = SDL_ConvertSurface(guardada, guardada->format, 0);
 +
-+        p = new BitmapPrivate(this);
-+        p->gl = tex;
++            if (copia)
++            {
++                p = new BitmapPrivate(this);
++                p->megaSurface = copia;
++                SDL_SetSurfaceBlendMode(p->megaSurface, SDL_BLENDMODE_NONE);
++                p->addTaintedArea(rect());
++                return;
++            }
++            /* Sin memoria para la copia: se sigue por el camino largo, que
++             * descomprime otra vez pero funciona. */
++        }
++        else
++        {
++            TEXFBO tex = shState->texPool().request(guardada->w, guardada->h);
 +
-+        TEX::bind(p->gl.tex);
-+        TEX::uploadImage(p->gl.width, p->gl.height, guardada->pixels, GL_RGBA);
++            p = new BitmapPrivate(this);
++            p->gl = tex;
 +
-+        p->addTaintedArea(rect());
-+        return;
++            TEX::bind(p->gl.tex);
++            TEX::uploadImage(p->gl.width, p->gl.height, guardada->pixels, GL_RGBA);
++
++            p->addTaintedArea(rect());
++            return;
++        }
 +    }
 +#endif
 +
      BitmapOpenHandler handler;
      shState->fileSystem().openRead(handler, filename);
      
-@@ -606,15 +866,23 @@
+@@ -581,10 +869,38 @@
+     
+     if (imgSurf->w > glState.caps.maxTexSize || imgSurf->h > glState.caps.maxTexSize)
+     {
+-        /* Mega surface */
++        /* Mega surface: mas grande de lo que la GPU admite como textura, asi
++         * que se queda en RAM.
++         *
++         * Y hasta el 6 de septiembre de 2026 tampoco se guardaba en el alijo,
++         * porque el guardado estaba en la otra rama. Eso convertia a las
++         * imagenes MAS CARAS del juego en las unicas que no se reaprovechaban
++         * nunca. En una sesion de cuatro minutos, Graphics/Tilesets/Exterior1
++         * -256 x 23370 pixeles, 22,8 MB en RGBA- se descomprimio VEINTIUNA
++         * veces a 225 ms cada una: 4,7 segundos de reloj, y cada una de ellas
++         * un fotograma parado. Es el tiron mas gordo que hay, y era este.
++         *
++         * El duenno de una mega surface es el Bitmap -releaseResources() la
++         * libera-, asi que el alijo no puede quedarse con esta: se guarda una
++         * copia y el Bitmap conserva la suya. A partir de la segunda vez, el
++         * camino corto de arriba entrega copias del alijo sin descomprimir
++         * nada. */
+         p = new BitmapPrivate(this);
+         p->megaSurface = imgSurf;
+         SDL_SetSurfaceBlendMode(p->megaSurface, SDL_BLENDMODE_NONE);
++
++#ifdef __SWITCH__
++        {
++            SDL_Surface *paraElAlijo =
++                SDL_ConvertSurface(imgSurf, imgSurf->format, 0);
++
++            if (paraElAlijo &&
++                !alijoImagen.guarda(claveImg, paraElAlijo,
++                                    (size_t)paraElAlijo->h *
++                                    (size_t)paraElAlijo->pitch))
++                SDL_FreeSurface(paraElAlijo);
++        }
++#endif
+     }
+     else
+     {
+@@ -606,15 +922,23 @@
          
          TEX::bind(p->gl.tex);
          TEX::uploadImage(p->gl.width, p->gl.height, imgSurf->pixels, GL_RGBA);
@@ -388,7 +469,7 @@ textura detras y cuentan en la GPU. Ver nx/nx_tirones.c y README 5.55.
      if (width <= 0 || height <= 0)
          throw Exception(Exception::RGSSError, "failed to create bitmap");
      
-@@ -808,6 +1076,7 @@
+@@ -808,6 +1132,7 @@
                          const Bitmap &source, const IntRect &sourceRect,
                          int opacity)
  {
@@ -396,7 +477,7 @@ textura detras y cuentan en la GPU. Ver nx/nx_tirones.c y README 5.55.
      guardDisposed();
      
      // Don't need this, right? This function is fine with megasurfaces it seems
-@@ -958,6 +1227,7 @@
+@@ -958,6 +1283,7 @@
  
  void Bitmap::fillRect(const IntRect &rect, const Vec4 &color)
  {
@@ -404,7 +485,7 @@ textura detras y cuentan en la GPU. Ver nx/nx_tirones.c y README 5.55.
      guardDisposed();
      
      GUARD_MEGA;
-@@ -987,6 +1257,7 @@
+@@ -987,6 +1313,7 @@
                                const Vec4 &color1, const Vec4 &color2,
                                bool vertical)
  {
@@ -412,7 +493,7 @@ textura detras y cuentan en la GPU. Ver nx/nx_tirones.c y README 5.55.
      guardDisposed();
      
      GUARD_MEGA;
-@@ -1034,6 +1305,7 @@
+@@ -1034,6 +1361,7 @@
  
  void Bitmap::clearRect(const IntRect &rect)
  {
@@ -420,7 +501,7 @@ textura detras y cuentan en la GPU. Ver nx/nx_tirones.c y README 5.55.
      guardDisposed();
      
      GUARD_MEGA;
-@@ -1188,6 +1460,7 @@
+@@ -1188,6 +1516,7 @@
  
  void Bitmap::clear()
  {
@@ -428,7 +509,7 @@ textura detras y cuentan en la GPU. Ver nx/nx_tirones.c y README 5.55.
      guardDisposed();
      
      GUARD_MEGA;
-@@ -1232,7 +1505,16 @@
+@@ -1232,7 +1561,16 @@
          
          glState.viewport.pushSet(IntRect(0, 0, width(), height()));
          
@@ -446,7 +527,7 @@ textura detras y cuentan en la GPU. Ver nx/nx_tirones.c y README 5.55.
          
          glState.viewport.pop();
      }
-@@ -1245,6 +1527,70 @@
+@@ -1245,6 +1583,70 @@
                   (pixel >> p->format->Ashift) & 0xFF);
  }
  
@@ -517,7 +598,7 @@ textura detras y cuentan en la GPU. Ver nx/nx_tirones.c y README 5.55.
  void Bitmap::setPixel(int x, int y, const Color &color)
  {
      guardDisposed();
-@@ -1260,20 +1606,30 @@
+@@ -1260,20 +1662,30 @@
          (uint8_t) clamp<double>(color.alpha, 0, 255)
      };
      
@@ -560,7 +641,7 @@ textura detras y cuentan en la GPU. Ver nx/nx_tirones.c y README 5.55.
      p->onModified(false);
  }
  
-@@ -1289,7 +1645,10 @@
+@@ -1289,7 +1701,10 @@
      }
      else {
          FBO::bind(getGLTypes().fbo);
@@ -572,7 +653,7 @@ textura detras y cuentan en la GPU. Ver nx/nx_tirones.c y README 5.55.
      }
      return true;
  }
-@@ -1518,62 +1877,49 @@
+@@ -1518,62 +1933,49 @@
      in = out;
  }
  
@@ -661,7 +742,7 @@ textura detras y cuentan en la GPU. Ver nx/nx_tirones.c y README 5.55.
          SDL_SetSurfaceBlendMode(txtSurf, SDL_BLENDMODE_BLEND);
          SDL_BlitSurface(txtSurf, NULL, outline, &outRect);
          SDL_FreeSurface(txtSurf);
-@@ -1581,7 +1927,187 @@
+@@ -1581,7 +1983,187 @@
          /* reset outline to 0 */
          TTF_SetFontOutline(font, 0);
      }
@@ -850,7 +931,7 @@ textura detras y cuentan en la GPU. Ver nx/nx_tirones.c y README 5.55.
      int alignX = rect.x;
      
      switch (align)
-@@ -1611,6 +2137,13 @@
+@@ -1611,6 +2193,13 @@
      
      FloatRect posRect(alignX, alignY, txtSurf->w * squeeze, txtSurf->h);
      
@@ -864,7 +945,7 @@ textura detras y cuentan en la GPU. Ver nx/nx_tirones.c y README 5.55.
      Vec2i gpTexSize;
      shState->ensureTexSize(txtSurf->w, txtSurf->h, gpTexSize);
      
-@@ -1729,11 +2262,16 @@
+@@ -1729,11 +2318,16 @@
          
          p->popViewport();
      }
@@ -883,7 +964,7 @@ textura detras y cuentan en la GPU. Ver nx/nx_tirones.c y README 5.55.
  }
  
  /* http://www.lemoda.net/c/utf8-to-ucs2/index.html */
-@@ -1782,6 +2320,7 @@
+@@ -1782,6 +2376,7 @@
  
  IntRect Bitmap::textSize(const char *str)
  {
@@ -891,7 +972,7 @@ textura detras y cuentan en la GPU. Ver nx/nx_tirones.c y README 5.55.
      guardDisposed();
      
      GUARD_MEGA;
-@@ -2123,6 +2662,8 @@
+@@ -2123,6 +2718,8 @@
  
  void Bitmap::releaseResources()
  {
