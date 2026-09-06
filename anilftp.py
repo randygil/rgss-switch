@@ -49,6 +49,12 @@ SOLO = {
     # veinte segundos (README 5.60). Si la carpeta de la consola viene de un
     # empaquetado con contenedor, esto es lo que la completa.
     "ruby": ["mkxp.json", "preload.rb", "Game.rgssad"],
+    # Todo lo que sale de compilar, y nada mas. Es lo que hay que subir despues
+    # de un ./construir.sh: el binario, la configuracion y los shims de Ruby,
+    # que son los tres sitios donde vive el motor. Un prefijo de carpeta vale
+    # como entrada -"lib" se lleva lib/ entera- porque la comparacion de abajo
+    # mira tanto la igualdad como el prefijo con barra.
+    "motor": ["pokemon-anil.nro", "mkxp.json", "lib"],
     "todo": None,
 }
 
@@ -117,8 +123,6 @@ def subir(ftp, solo):
             if solo is not None and not any(rel == s or rel.startswith(s + "/") for s in solo):
                 continue
             lista.append((abs_, rel))
-    if solo and "lib" in [s.split("/")[0] for s in solo]:
-        pass
     print("ficheros a considerar: %d" % len(lista))
 
     creados, subidos, iguales, verificados, fallos = set(), 0, 0, 0, []
