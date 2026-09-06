@@ -65,6 +65,19 @@ echo "    para leer una pila:  python resolver-pila.py --sello '$SELLO_NRO' mkxp
 echo "=== notas ==="
 ULTIMA=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
 NOTAS="release/NOTAS-$VERSION.md"
+
+# Si ya hay notas escritas, se respetan.
+#
+# Lo que sale de aqui es el volcado de los asuntos de los commits, que sirve
+# para no publicar sin notas pero no le dice nada a quien juega: "El contador
+# del fondo de texturas cabia en 65.536" no es una novedad, es un recordatorio
+# para nosotros. Las de la 1.1.0 se escribieron a mano, y este guion las habria
+# borrado dos veces en la misma manana si no fuera por esto. Para rehacerlas,
+# borra el fichero y vuelve a ejecutar.
+if [ -f "$NOTAS" ]; then
+  echo "ok: $NOTAS ya existe y se respeta (borralo si quieres regenerarlo)"
+  cat "$NOTAS"
+else
 {
   echo "## Pokémon Añil 4.0 para Switch — port $VERSION"
   echo
@@ -76,6 +89,7 @@ NOTAS="release/NOTAS-$VERSION.md"
   echo "El juego no está incluido: hace falta tu propia copia de Pokémon Añil 4.0 para PC."
 } > "$NOTAS"
 cat "$NOTAS"
+fi
 
 echo "=== etiqueta ==="
 git tag -a "$TAG" -m "Port $VERSION"
