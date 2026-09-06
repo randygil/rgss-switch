@@ -7,20 +7,27 @@ File.exist? contesten tambien por lo que PhysFS tiene montado; sin eso, con los
 datos en un contenedor el juego se queda sin efectos de sonido. El detalle, en
 mkxpz-lector-contenedor.patch y en README 5.62.
 
+Y el enganche de nx_donde_init(), que define NXReg.traza: un solo metodo para
+que un script pueda escribir una linea en mkxp-boot.log, con sello de tiempo y
+al lado de los [monton], los [fondo] y el [exc] de una caida. Existe porque de
+los diecisiete volcados de jugadores del 5 y 6 de septiembre de 2026 no se sabe
+en que mapa estaba ninguno. Ver nx/nx_donde.cpp y README 5.69.
+
 --- a/binding/binding-mri.cpp
 +++ b/binding/binding-mri.cpp
-@@ -151,6 +151,10 @@
+@@ -151,6 +151,11 @@
  VALUE json2rb(json5pp::value const &v);
  json5pp::value rb2json(VALUE v);
  
 +#ifdef __SWITCH__
 +extern "C" void nx_ficheros_init(void);   /* nx/nx_ficheros.cpp */
++extern "C" void nx_donde_init(void);      /* nx/nx_donde.cpp */
 +#endif
 +
  static void mriBindingInit() {
      tableBindingInit();
      etcBindingInit();
-@@ -255,6 +259,16 @@
+@@ -255,6 +260,22 @@
      _rb_define_module_function(cmod, "[]=", mkxpSetJSONSetting);
      _rb_define_module_function(cmod, "to_hash", mkxpGetAllJSONSettings);
      
@@ -32,12 +39,18 @@ mkxpz-lector-contenedor.patch y en README 5.62.
 +       hay nada. Va aqui, con el resto de constantes globales, porque tiene que
 +       estar puesto antes de que corra el primer script. */
 +    nx_ficheros_init();
++
++    /* nx/nx_donde.cpp: NXReg.traza, para que un script pueda escribir en
++       mkxp-boot.log y su linea quede con sello de tiempo al lado de los
++       [monton], los [fondo] y el [exc]. Es lo que hace falta para que el
++       proximo volcado de un jugador diga en que mapa estaba. */
++    nx_donde_init();
 +#endif
 +
      /* Load global constants */
      rb_gv_set("MKXP", Qtrue);
      
-@@ -843,8 +857,22 @@
+@@ -843,8 +864,22 @@
          return;
      }
      

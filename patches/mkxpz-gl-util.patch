@@ -1,0 +1,125 @@
+Instrumentacion de gl-util.h para Horizon: el cronometro de subida de texturas
+y la contabilidad de texturas vivas.
+
+Este fichero llevaba desde el 31 de agosto de 2026 con cambios y sin parche.
+Existia un gl-util.h.orig al lado, pero src/ esta en .gitignore, asi que lo unico
+que quedaba de esos cambios era la copia de trabajo de una maquina. Es el mismo
+descuido que texpool.h y se arregla igual: aqui esta todo lo que este motor le
+hace a gl-util.h, y se puede volver a aplicar sobre mkxp-z 2.4.2 limpio.
+
+Lleva dos cosas.
+
+1. EL CRONOMETRO DE SUBIDA (NX_G_SUBIR). glTexImage2D con datos es el unico sitio
+   del bucle donde el coste lo pone la GPU y no el interprete de Ruby. Sin
+   medirlo aparte, un tiron por subir un tileset grande y un tiron por un script
+   lento se parecen demasiado en el registro. Va contado en nx/nx_tirones.c.
+
+2. LA CONTABILIDAD DE TEXTURAS VIVAS. El informe del monton repartia la memoria
+   en fondo, imagenes, cadenas y un "resto" de entre 557 y 752 MB etiquetado
+   "texturas vivas + motor + ruby", que era lo unico honesto que se podia decir
+   porque nadie las contaba. Y ese resto es el termino que manda: es lo que
+   explica que la GPU se niegue a dar una textura con el fondo en 259 MB, que es
+   lo que le paso al jugador del Pidgey.
+
+   Se cuenta aqui y no en el fondo de texturas porque el fondo SOLO VE las que se
+   reaprovechan. Las que el juego tiene abiertas ahora mismo -cada sprite en
+   pantalla, cada tileset, cada retrato- no pasan por el. Los tres sitios por los
+   que pasa toda textura de este motor son TEX::allocEmpty, TEX::uploadImage y
+   TEX::del, y los tres estan en este fichero.
+
+   glTexImage2D no dice sobre que textura trabaja: trabaja sobre la que este
+   atada. De ahi el nxAtada() de TEX::bind, que es el unico sitio donde ese dato
+   existe. Es una variable estatica sin candado a proposito: OpenGL en mkxp-z lo
+   toca un solo hilo, y el informe sale de nx_marco(), que es ese mismo hilo.
+
+Los numeros salen por [monton] texturas vivas. La cuenta es en RGBA de cuatro
+bytes, que es lo que pide el juego y no lo que nouveau acaba reservando: sirve
+para compararse consigo misma a lo largo de una partida, que es para lo que se
+puso. Ver nx/nx_texturas.c y README 5.69.
+
+--- src/display/gl/gl-util.h.orig
++++ src/display/gl/gl-util.h
+@@ -25,6 +25,20 @@
+ #include "gl-fun.h"
+ #include "etc-internal.h"
+ 
++#ifdef __SWITCH__
++#include <switch.h>
++enum { NX_G_SUBIR = 2 };   /* mismo orden que nx/nx_tirones.c */
++extern "C" u64  nx_entra(void);
++extern "C" void nx_sale(int cual, u64 t0);
++
++/* La contabilidad de texturas vivas (nx/nx_texturas.c). Se engancha aqui, en
++ * gl-util.h, y no en el fondo de texturas, porque el fondo solo ve las que se
++ * reaprovechan: las que el juego tiene abiertas ahora mismo no pasan por el, y
++ * son justo las que faltaban por contar en el "resto" del informe del monton. */
++extern "C" void nx_textura_reserva(unsigned nombre, unsigned ancho, unsigned alto);
++extern "C" void nx_textura_borra(unsigned nombre);
++#endif
++
+ /* Struct wrapping GLuint for some light type safety */
+ #define DEF_GL_ID \
+ struct ID \
+@@ -63,12 +77,35 @@
+ 
+ 	static inline void del(ID id)
+ 	{
++#ifdef __SWITCH__
++		nx_textura_borra(id.gl);
++#endif
+ 		gl.DeleteTextures(1, &id.gl);
+ 	}
+ 
++#ifdef __SWITCH__
++	/* glTexImage2D no dice sobre que textura trabaja: trabaja sobre la que este
++	 * atada. Para poder apuntar el gasto en la cuenta correcta hay que
++	 * recordarlo, y el unico sitio donde se sabe es aqui. Es del hilo de
++	 * dibujo, que es el unico que toca OpenGL en este motor. */
++	inline ID &nxAtada()
++	{
++		static ID atada;
++		return atada;
++	}
++
++	static inline ID nxCual()
++	{
++		return TEX::nxAtada();
++	}
++#endif
++
+ 	static inline void bind(ID id)
+ 	{
+ 		gl.BindTexture(GL_TEXTURE_2D, id.gl);
++#ifdef __SWITCH__
++		TEX::nxAtada() = id;
++#endif
+ 	}
+ 
+ 	static inline void unbind()
+@@ -78,7 +115,16 @@
+ 
+ 	static inline void uploadImage(GLsizei width, GLsizei height, const void *data, GLenum format)
+ 	{
++#ifdef __SWITCH__
++		/* Subir una textura es el unico sitio donde el coste depende de la GPU
++		 * y no del interprete, asi que va contado aparte (nx/nx_tirones.c). */
++		u64 nxT0 = nx_entra();
++#endif
+ 		gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, format, GL_UNSIGNED_BYTE, data);
++#ifdef __SWITCH__
++		nx_sale(NX_G_SUBIR, nxT0);
++		nx_textura_reserva(nxCual().gl, (unsigned)width, (unsigned)height);
++#endif
+ 	}
+ 
+ 	static inline void uploadSubImage(GLint x, GLint y, GLsizei width, GLsizei height, const void *data, GLenum format)
+@@ -89,6 +135,9 @@
+ 	static inline void allocEmpty(GLsizei width, GLsizei height)
+ 	{
+ 		gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
++#ifdef __SWITCH__
++		nx_textura_reserva(nxCual().gl, (unsigned)width, (unsigned)height);
++#endif
+ 	}
+ 
+ 	static inline void setRepeat(bool mode)

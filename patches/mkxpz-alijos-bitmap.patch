@@ -1,0 +1,902 @@
+Los dos alijos de bitmap.cpp, el pegado diferido de set_pixel y los cronometros.
+
+Como gl-util.h y texpool.h, este fichero llevaba semanas cambiado y sin parche:
+existia el .orig al lado, pero src/ esta en .gitignore, asi que veintitres
+trozos de trabajo -y toda la prosa que explica por que estan- vivian solo en la
+copia de trabajo de una maquina. Aqui quedan, y se pueden volver a aplicar sobre
+mkxp-z 2.4.2 limpio.
+
+Lleva tres cosas, y las tres nacen de la misma medida: en esta consola lo caro
+no es dibujar, es preparar lo que se dibuja.
+
+1. DOS ALIJOS DE SUPERFICIES YA COCINADAS. El fondo de texturas recicla el HUECO
+   en la GPU y eso ya funcionaba; lo que no reciclaba nadie era el TRABAJO de
+   llenarlo. Un cambio de pestana en la mochila reabria los mismos veintiun PNG
+   del microSD, los descomprimia y los volvia a subir: 179 ms de abrir mas 51 de
+   descomprimir, cada vez que pulsas izquierda o derecha. Y con el texto era
+   peor: 312 cadenas por fotograma a un milisegundo cada una, porque Essentials
+   dibuja con borde y TTF_SetFontOutline tira el cache de glifos de la fuente
+   cada vez que se toca -dos veces por cadena-. Se guarda la superficie
+   TERMINADA, con su sombra y su borde ya puestos, indexada por lo que la
+   determina y no por quien la pidio: dos Bitmap que dibujen "POCION" con la
+   misma fuente y el mismo color quieren los mismos pixeles.
+
+   El contrato de guarda() dice si el alijo se ha quedado con lo que le das, y
+   eso no es un detalle de estilo. La primera version se quedaba con la
+   propiedad pasara lo que pasara y liberaba lo que no le cabia; el que dibuja
+   necesita el objeto DESPUES de ofrecerlo, asi que un alijo lleno le dejaba un
+   puntero muerto en la mano.
+
+2. EL PEGADO DIFERIDO DE set_pixel. Bitmap::setPixel hacia un glTexSubImage2D
+   de 1x1 por llamada, y cada subida sincroniza con el driver. El plugin Marin
+   Better Bitmaps dibuja los hexagonos de estadisticas linea a linea con
+   set_pixel, decenas de miles de veces por pagina. Ahora set_pixel escribe en
+   la copia en RAM -la misma que lee get_pixel- y agranda un rectangulo sucio;
+   la subida ocurre una sola vez, en vuelca(), llamada desde los tres unicos
+   sitios por los que la textura sale hacia la GPU.
+
+3. LOS CRONOMETROS. NX_MIDE apunta cada tramo -decodificar, leer pixeles,
+   texto, pegar, medir- con un destructor, porque drawText y stretchBlt tienen
+   media docena de salidas tempranas cada una y cronometrarlas a mano seria
+   olvidarse de alguna. Es lo que hace legible la linea [tiron] del registro.
+
+Los tamanos: 192 MB para las imagenes y 32 para el texto. El primero son
+superficies de SDL, que estan en el monton; el segundo son Bitmap, que si tienen
+textura detras y cuentan en la GPU. Ver nx/nx_tirones.c y README 5.55.
+
+--- src/display/bitmap.cpp.orig
++++ src/display/bitmap.cpp
+@@ -49,10 +49,188 @@
+ 
+ #include "debugwriter.h"
+ 
++#ifdef __SWITCH__
++#include <switch.h>
++/* NX_G_SUBIR lo declara gl/gl-util.h, que ya esta incluido. */
++enum { NX_G_DECODE = 1, NX_G_LEERPIX = 3, NX_G_TEXTO = 4, NX_G_BLIT = 5,
++       NX_G_MEDIR = 12, NX_G_NUEVA = 15, NX_G_LIMPIA = 16, NX_G_TIRA = 17,
++       NX_G_PEGA = 18 };
++
++/* drawText y stretchBlt tienen media docena de salidas tempranas cada una.
++ * Cronometrarlas a mano seria olvidarse de alguna, asi que el destructor lo
++ * hace por nosotros. */
++extern "C" void nx_pixeles(int ancho, int alto, u64 ticks);
++
++struct NxMide
++{
++    int cual;
++    u64 t0;
++    NxMide(int c) : cual(c), t0(nx_entra()) {}
++    ~NxMide() { nx_sale(cual, t0); }
++};
++#define NX_MIDE(c) NxMide nxMide__(c)
++
++extern "C" void nx_cache_imagen(int acierto, unsigned bytes);
++extern "C" void nx_cache_texto(int acierto, unsigned bytes);
++
++/* --------------------------------------------------------------------------
++ * Dos alijos de superficies ya cocinadas.
++ *
++ * El fondo de texturas (TexPool) recicla el HUECO en la GPU, y eso ya funciona:
++ * en un cambio de pestana el registro dice "fondo 259 aciertos" y cero
++ * creaciones. Lo que no recicla es el TRABAJO de llenar ese hueco. El mismo
++ * fotograma dice:
++ *
++ *   marco 676 ms | abr 21x 179 ms | dec 21x 51 ms | sub 21x 52 ms | resto 333
++ *
++ * Son los mismos veintiun PNG, abiertos del microSD, descomprimidos y subidos
++ * otra vez, cada vez que pulsas izquierda o derecha. Abrir cuesta 8,5 ms por
++ * fichero —el directorio de Graphics tiene miles de entradas y FAT32 los
++ * recorre en fila— y descomprimir cuesta otro tanto. Nada de eso cambia entre
++ * una visita y la siguiente.
++ *
++ * Con el texto pasa lo mismo pero peor. La lista de objetos gasta
++ * "txt 312x 328 ms": 312 cadenas dibujadas, un milisegundo cada una, y las
++ * mismas cadenas fotograma tras fotograma. Un milisegundo por cadena corta es
++ * mucho, y el motivo esta cuatro lineas mas abajo: Essentials dibuja el texto
++ * con borde, y TTF_SetFontOutline tira el cache de glifos de la fuente cada
++ * vez que se toca. Se toca dos veces por cadena. O sea que cada nombre de
++ * objeto rasteriza sus letras desde cero, dos veces, sesenta veces por segundo.
++ *
++ * Se guarda la superficie TERMINADA, con su sombra y su borde ya aplicados, no
++ * los ingredientes. Y se guarda por valor de lo que la determina, no por el
++ * puntero de quien la pidio: dos Bitmap distintos que dibujen "POCION" con la
++ * misma fuente y el mismo color quieren exactamente los mismos pixeles.
++ *
++ * guarda() dice si se ha quedado con lo que le das; si dice que no, lo sueltas
++ * tu. Con dos caminos de salida —acierto y fallo— y cosas que antes se
++ * liberaban siempre, dejar el dueno escrito en una sola linea es la unica forma
++ * de no acabar con una fuga o con un uso despues de liberar segun por donde se
++ * saliera.
++ */
++#include <unordered_map>
++#include <list>
++#include <string>
++
++namespace {
++
++/* Una cadena ya rasterizada y subida a la GPU. Lleva sus tres medidas porque
++ * ninguna se deduce de las otras:
++ *
++ *   el Bitmap mide la CAJA, redondeada hacia arriba (ver mas abajo)
++ *   ancho/alto  son los pixeles que de verdad ocupa la cadena dentro
++ *   altoCrudo   es el alto ANTES de sombra y borde, con el que se centra */
++struct Cocida
++{
++    Bitmap *bmp;
++    int ancho, alto, altoCrudo;
++};
++
++/* Que hacer con cada cosa cuando el alijo la echa. Sobrecargas en vez de un
++ * parametro de plantilla: se leen mejor y el compilador elige solo. */
++inline void sueltaGuardado(SDL_Surface *s) { SDL_FreeSurface(s); }
++inline void sueltaGuardado(const Cocida &c) { delete c.bmp; }
++
++template <class T>
++class Alijo
++{
++public:
++    explicit Alijo(size_t tope) : tope(tope), bytes(0) {}
++
++    bool busca(const std::string &clave, T *salida)
++    {
++        typename std::unordered_map<std::string, Nodo>::iterator it =
++            mapa.find(clave);
++        if (it == mapa.end())
++            return false;
++
++        /* Al frente de la cola de uso. splice mueve el nodo sin reasignar, asi
++         * que el iterador que guarda el Nodo sigue valiendo. */
++        usos.splice(usos.begin(), usos, it->second.uso);
++        *salida = it->second.dato;
++        return true;
++    }
++
++    /* Dice si se ha quedado con ello. Si dice que no, el dueno sigue siendo el
++     * que llama y tiene que soltarlo el mismo.
++     *
++     * La primera version se quedaba con la propiedad pasara lo que pasara y
++     * liberaba lo que no le cabia. Era mas corto de escribir y una trampa de
++     * usar: el que dibuja necesita el objeto DESPUES de ofrecerlo, y con aquel
++     * contrato un alijo lleno le dejaba un puntero muerto en la mano. */
++    bool guarda(const std::string &clave, const T &dato, size_t peso)
++    {
++        /* Una sola cosa que se comiera un cuarto del presupuesto echaria fuera
++         * todo lo demas cada vez que apareciera, y el alijo trabajaria en
++         * contra. Esas se quedan sin guardar. */
++        if (peso * 4 > tope || mapa.count(clave))
++            return false;
++
++        while (bytes + peso > tope && !usos.empty())
++            echa();
++
++        usos.push_front(clave);
++
++        Nodo n;
++        n.dato = dato;
++        n.peso = peso;
++        n.uso = usos.begin();
++        mapa[clave] = n;
++        bytes += peso;
++        return true;
++    }
++
++    unsigned ocupado() const { return (unsigned)bytes; }
++
++private:
++    struct Nodo
++    {
++        T dato;
++        size_t peso;
++        std::list<std::string>::iterator uso;
++    };
++
++    void echa()
++    {
++        typename std::unordered_map<std::string, Nodo>::iterator it =
++            mapa.find(usos.back());
++        if (it != mapa.end()) {
++            bytes -= it->second.peso;
++            sueltaGuardado(it->second.dato);
++            mapa.erase(it);
++        }
++        usos.pop_back();
++    }
++
++    std::unordered_map<std::string, Nodo> mapa;
++    std::list<std::string> usos;    /* frente = usado hace menos tiempo */
++    size_t tope;
++    size_t bytes;
++};
++
++/* El monton de la consola son 3.262 MB y el pico medido jugando fue 1.042. El
++ * fondo de texturas se lleva 192 de salida y puede bajar hasta 96 si la GPU
++ * dice que no (§5.64). Estos 224 caben de sobra, y si algun dia no cupieran el
++ * sintoma seria memoria agotada, no lentitud: se veria.
++ *
++ * Ojo con leer estos 224 como memoria de video: no lo son. Lo que guarda el
++ * alijo de imagenes son superficies de SDL, que estan en el monton; lo que
++ * guarda el de texto son Bitmap, y esos SI tienen textura detras y cuentan en
++ * la GPU. De ahi que el segundo sea seis veces mas pequeno que el primero. */
++Alijo<SDL_Surface *> alijoImagen(192u * 1024u * 1024u);
++Alijo<Cocida>        alijoTexto(32u * 1024u * 1024u);
++
++}  /* namespace */
++
++#else
++#define NX_MIDE(c) do {} while (0)
++#endif
++
+ #include "sigslot/signal.hpp"
+ 
+ #include <math.h>
+ #include <algorithm>
++#include <vector>
+ 
+ extern "C" {
+ #include "libnsgif/libnsgif.h"
+@@ -244,6 +422,7 @@
+     surface(0)
+     {
+         format = SDL_AllocFormat(SDL_PIXELFORMAT_ABGR8888);
++        hayPendiente = false;
+         
+         animation.width = 0;
+         animation.height = 0;
+@@ -268,7 +447,57 @@
+         pixman_region_fini(&tainted);
+     }
+     
++    /* ------------------------------------------------------------------
++     * Pixeles escritos con set_pixel que aun no han subido a la GPU.
++     *
++     * Bitmap::setPixel hacia un glTexSubImage2D de 1x1 por llamada. El plugin
++     * Marin Better Bitmaps dibuja los hexagonos de estadisticas linea a linea
++     * con set_pixel, decenas de miles de veces por pagina, y cada una de esas
++     * subidas sincroniza con el driver. En la misma consola, 257 pegados de
++     * textura a textura costaron 5 ms; 312 subidas de texto, 299 ms. La
++     * subida es lo caro, no el pixel.
++     *
++     * Asi que set_pixel ya no sube nada: escribe en la copia en RAM (la misma
++     * que usa get_pixel) y agranda un rectangulo sucio. La subida ocurre una
++     * sola vez, en vuelca(), y vuelca() se llama desde los tres unicos sitios
++     * por los que la textura sale hacia la GPU: getGLTypes(), bindTexture() y
++     * bindFBO(). Quien pinte encima o pegue desde aqui ve los pixeles ya
++     * puestos; quien lea con get_pixel lee la RAM, que es la que manda.
++     * ------------------------------------------------------------------ */
++    IntRect pendiente;
++    bool hayPendiente;
++
++    void vuelca()
++    {
++        if (!hayPendiente)
++            return;
++        hayPendiente = false;
++        if (!surface || animation.enabled)
++            return;
++        TEX::bind(gl.tex);
++        GLMeta::subRectImageUpload(surface->w, pendiente.x, pendiente.y,
++                                   pendiente.x, pendiente.y,
++                                   pendiente.w, pendiente.h,
++                                   surface, GL_RGBA);
++        GLMeta::subRectImageEnd();
++    }
++
++    void apunta(int x, int y)
++    {
++        if (!hayPendiente) {
++            pendiente = IntRect(x, y, 1, 1);
++            hayPendiente = true;
++            return;
++        }
++        int x0 = std::min(pendiente.x, x);
++        int y0 = std::min(pendiente.y, y);
++        int x1 = std::max(pendiente.x + pendiente.w, x + 1);
++        int y1 = std::max(pendiente.y + pendiente.h, y + 1);
++        pendiente = IntRect(x0, y0, x1 - x0, y1 - y0);
++    }
++
+     TEXFBO &getGLTypes() {
++        vuelca();
+         return (animation.enabled) ? animation.currentFrame() : gl;
+     }
+     
+@@ -328,6 +557,7 @@
+     
+     void bindTexture(ShaderBase &shader)
+     {
++        vuelca();
+         if (animation.enabled) {
+             TEXFBO cframe = animation.currentFrame();
+             TEX::bind(cframe.tex);
+@@ -340,6 +570,7 @@
+     
+     void bindFBO()
+     {
++        vuelca();
+         FBO::bind((animation.enabled) ? animation.currentFrame().fbo : gl.fbo);
+     }
+     
+@@ -460,7 +691,10 @@
+                 return false;
+             }
+         } else {
+-            surface = IMG_LoadTyped_RW(&ops, 1, ext);
++            {
++                NX_MIDE(NX_G_DECODE);
++                surface = IMG_LoadTyped_RW(&ops, 1, ext);
++            }
+         }
+         return (surface || gif);
+     }
+@@ -468,6 +702,32 @@
+ 
+ Bitmap::Bitmap(const char *filename)
+ {
++#ifdef __SWITCH__
++    /* La clave es el nombre tal y como lo pidio el juego, antes de que
++     * openRead pruebe extensiones. Es lo unico que tenemos aqui, y es estable:
++     * el resolutor de rutas de Essentials ya esta memoizado del lado de Ruby y
++     * devuelve siempre la misma cadena para la misma imagen. */
++    const std::string claveImg(filename);
++    SDL_Surface *guardada = NULL;
++    const bool hayImagen = alijoImagen.busca(claveImg, &guardada);
++
++    nx_cache_imagen(hayImagen ? 1 : 0, alijoImagen.ocupado());
++
++    if (hayImagen)
++    {
++        TEXFBO tex = shState->texPool().request(guardada->w, guardada->h);
++
++        p = new BitmapPrivate(this);
++        p->gl = tex;
++
++        TEX::bind(p->gl.tex);
++        TEX::uploadImage(p->gl.width, p->gl.height, guardada->pixels, GL_RGBA);
++
++        p->addTaintedArea(rect());
++        return;
++    }
++#endif
++
+     BitmapOpenHandler handler;
+     shState->fileSystem().openRead(handler, filename);
+     
+@@ -606,15 +866,23 @@
+         
+         TEX::bind(p->gl.tex);
+         TEX::uploadImage(p->gl.width, p->gl.height, imgSurf->pixels, GL_RGBA);
+-        
++
++#ifdef __SWITCH__
++        /* Las mega y los GIF no llegan hasta esta linea. */
++        if (!alijoImagen.guarda(claveImg, imgSurf,
++                                (size_t)imgSurf->h * (size_t)imgSurf->pitch))
++            SDL_FreeSurface(imgSurf);
++#else
+         SDL_FreeSurface(imgSurf);
++#endif
+     }
+-    
++
+     p->addTaintedArea(rect());
+ }
+ 
+ Bitmap::Bitmap(int width, int height)
+ {
++    NX_MIDE(NX_G_NUEVA);
+     if (width <= 0 || height <= 0)
+         throw Exception(Exception::RGSSError, "failed to create bitmap");
+     
+@@ -808,6 +1076,7 @@
+                         const Bitmap &source, const IntRect &sourceRect,
+                         int opacity)
+ {
++    NX_MIDE(NX_G_BLIT);
+     guardDisposed();
+     
+     // Don't need this, right? This function is fine with megasurfaces it seems
+@@ -958,6 +1227,7 @@
+ 
+ void Bitmap::fillRect(const IntRect &rect, const Vec4 &color)
+ {
++    NX_MIDE(NX_G_LIMPIA);
+     guardDisposed();
+     
+     GUARD_MEGA;
+@@ -987,6 +1257,7 @@
+                               const Vec4 &color1, const Vec4 &color2,
+                               bool vertical)
+ {
++    NX_MIDE(NX_G_LIMPIA);
+     guardDisposed();
+     
+     GUARD_MEGA;
+@@ -1034,6 +1305,7 @@
+ 
+ void Bitmap::clearRect(const IntRect &rect)
+ {
++    NX_MIDE(NX_G_LIMPIA);
+     guardDisposed();
+     
+     GUARD_MEGA;
+@@ -1188,6 +1460,7 @@
+ 
+ void Bitmap::clear()
+ {
++    NX_MIDE(NX_G_LIMPIA);
+     guardDisposed();
+     
+     GUARD_MEGA;
+@@ -1232,7 +1505,16 @@
+         
+         glState.viewport.pushSet(IntRect(0, 0, width(), height()));
+         
+-        gl.ReadPixels(0, 0, width(), height(), GL_RGBA, GL_UNSIGNED_BYTE, p->surface->pixels);
++        {
++            NX_MIDE(NX_G_LEERPIX);
++#ifdef __SWITCH__
++            u64 nxPix = armGetSystemTick();
++#endif
++            gl.ReadPixels(0, 0, width(), height(), GL_RGBA, GL_UNSIGNED_BYTE, p->surface->pixels);
++#ifdef __SWITCH__
++            nx_pixeles(width(), height(), armGetSystemTick() - nxPix);
++#endif
++        }
+         
+         glState.viewport.pop();
+     }
+@@ -1245,6 +1527,70 @@
+                  (pixel >> p->format->Ashift) & 0xFF);
+ }
+ 
++/* --------------------------------------------------------------------------
++ * findCenter, del plugin [MUI] Pokemon UI, centra el sprite del Pokemon
++ * buscando su primer pixel opaco desde cada uno de los cuatro bordes. Lo hace
++ * con get_pixel desde Ruby, y medido en la consola sale asi en CADA cambio de
++ * pestana de la vista de datos:
++ *
++ *   Bmp#get_pixel 41.430x / 289 ms / 290.011 objetos
++ *
++ * Cuarenta y un mil llamadas de Ruby a C, cada una con su objeto Color, para
++ * contestar cuatro numeros que se calculan en un barrido de la copia en RAM.
++ * Ese barrido es este. La lectura de la textura (el glReadPixels, contado en
++ * "pix") se hace una vez como en get_pixel; el resto es recorrer memoria.
++ *
++ * Las reglas de barrido reproducen las del plugin, rarezas incluidas: la
++ * busqueda por la izquierda empieza en la columna 1 y la de arriba en la fila
++ * 1, porque el original itera (1..ancho); las de derecha y abajo llegan hasta
++ * el 0. Cambiar eso cambiaria en un pixel donde se pintan los Pokemon, y no
++ * es lo que se esta arreglando.
++ * -------------------------------------------------------------------------- */
++void Bitmap::opaqueBounds(int &left, int &right, int &top, int &bottom) const
++{
++    guardDisposed();
++
++    GUARD_MEGA;
++    GUARD_ANIMATED;
++
++    left = right = top = bottom = -1;
++
++    const int w = width(), h = height();
++    if (w <= 0 || h <= 0)
++        return;
++
++    if (!p->surface)
++    {
++        p->allocSurface();
++        FBO::bind(p->gl.fbo);
++        glState.viewport.pushSet(IntRect(0, 0, w, h));
++        {
++            NX_MIDE(NX_G_LEERPIX);
++            gl.ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, p->surface->pixels);
++        }
++        glState.viewport.pop();
++    }
++
++    const SDL_Surface *sf = p->surface;
++    const uint32_t amask = p->format->Amask;
++    const uint8_t *base = (const uint8_t *) sf->pixels;
++
++    /* Una fila y una columna de "hay algo opaco aqui", en un solo paso por la
++     * memoria. Despues los bordes salen de mirar esos dos vectores. */
++    std::vector<char> filaOpaca(h, 0), columnaOpaca(w, 0);
++    for (int y = 0; y < h; ++y)
++    {
++        const uint32_t *fila = (const uint32_t *) (base + (size_t) y * sf->pitch);
++        for (int x = 0; x < w; ++x)
++            if (fila[x] & amask) { filaOpaca[y] = 1; columnaOpaca[x] = 1; }
++    }
++
++    for (int x = 1; x < w; ++x)       if (columnaOpaca[x]) { left = x; break; }
++    for (int x = w - 1; x >= 0; --x)  if (columnaOpaca[x]) { right = x; break; }
++    for (int y = 1; y < h; ++y)       if (filaOpaca[y])    { top = y; break; }
++    for (int y = h - 1; y >= 0; --y)  if (filaOpaca[y])    { bottom = y; break; }
++}
++
+ void Bitmap::setPixel(int x, int y, const Color &color)
+ {
+     guardDisposed();
+@@ -1260,20 +1606,30 @@
+         (uint8_t) clamp<double>(color.alpha, 0, 255)
+     };
+     
+-    TEX::bind(p->gl.tex);
+-    TEX::uploadSubImage(x, y, 1, 1, &pixel, GL_RGBA);
+-    
+-    p->addTaintedArea(IntRect(x, y, 1, 1));
+-    
+-    /* Setting just a single pixel is no reason to throw away the
+-     * whole cached surface; we can just apply the same change */
+-    
+-    if (p->surface)
++    if (x < 0 || y < 0 || x >= width() || y >= height())
++        return;
++
++    /* Sin copia en RAM no hay donde escribir: se trae la textura una vez. Es
++     * el mismo glReadPixels que hace get_pixel, y se cuenta en "pix". Cuesta
++     * una sincronizacion, la primera vez, en vez de una por pixel. */
++    if (!p->surface)
+     {
+-        uint32_t &surfPixel = getPixelAt(p->surface, p->format, x, y);
+-        surfPixel = SDL_MapRGBA(p->format, pixel[0], pixel[1], pixel[2], pixel[3]);
++        p->allocSurface();
++        FBO::bind(p->gl.fbo);
++        glState.viewport.pushSet(IntRect(0, 0, width(), height()));
++        {
++            NX_MIDE(NX_G_LEERPIX);
++            gl.ReadPixels(0, 0, width(), height(), GL_RGBA, GL_UNSIGNED_BYTE,
++                          p->surface->pixels);
++        }
++        glState.viewport.pop();
+     }
+-    
++
++    uint32_t &surfPixel = getPixelAt(p->surface, p->format, x, y);
++    surfPixel = SDL_MapRGBA(p->format, pixel[0], pixel[1], pixel[2], pixel[3]);
++    p->apunta(x, y);
++
++    p->addTaintedArea(IntRect(x, y, 1, 1));
+     p->onModified(false);
+ }
+ 
+@@ -1289,7 +1645,10 @@
+     }
+     else {
+         FBO::bind(getGLTypes().fbo);
+-        gl.ReadPixels(0,0,width(),height(),GL_RGBA,GL_UNSIGNED_BYTE,output);
++        {
++            NX_MIDE(NX_G_LEERPIX);
++            gl.ReadPixels(0,0,width(),height(),GL_RGBA,GL_UNSIGNED_BYTE,output);
++        }
+     }
+     return true;
+ }
+@@ -1518,62 +1877,49 @@
+     in = out;
+ }
+ 
+-void Bitmap::drawText(const IntRect &rect, const char *str, int align)
++/* Rasterizar la cadena a una superficie, ya con su sombra y su borde puestos.
++ * Sale de dentro de drawText para que el camino con alijo y el camino sin el
++ * usen exactamente el mismo rasterizador y no se separen con el tiempo. */
++static SDL_Surface *rasterizaTexto(TTF_Font *font, const char *str, Font *fnt,
++                                   SDL_PixelFormat *fmt, const SDL_Color &c,
++                                   const Color &outColor, int *altoCrudo)
+ {
+-    guardDisposed();
+-    
+-    GUARD_MEGA;
+-    GUARD_ANIMATED;
+-    
+-    std::string fixed = fixupString(str);
+-    str = fixed.c_str();
+-    
+-    if (*str == '\0')
+-        return;
+-    
+-    if (str[0] == ' ' && str[1] == '\0')
+-        return;
+-    
+-    TTF_Font *font = p->font->getSdlFont();
+-    const Color &fontColor = p->font->getColor();
+-    const Color &outColor = p->font->getOutColor();
+-    
+-    SDL_Color c = fontColor.toSDLColor();
+-    c.a = 255;
+-    
+-    float txtAlpha = fontColor.norm.w;
+-    
+     SDL_Surface *txtSurf;
+-    
+-    if (p->font->isSolid())
++
++    if (fnt->isSolid())
+         txtSurf = TTF_RenderUTF8_Solid(font, str, c);
+     else
+         txtSurf = TTF_RenderUTF8_Blended(font, str, c);
+-    
+-    p->ensureFormat(txtSurf, SDL_PIXELFORMAT_ABGR8888);
+-    
+-    int rawTxtSurfH = txtSurf->h;
+-    
+-    if (p->font->getShadow())
+-        applyShadow(txtSurf, *p->format, c);
+-    
++
++    if (!txtSurf)
++        return NULL;
++
++    BitmapPrivate::ensureFormat(txtSurf, SDL_PIXELFORMAT_ABGR8888);
++
++    /* Antes de que sombra y borde la crezcan: es la altura con la que se
++     * centra en vertical, y de la superficie terminada ya no se deduce. */
++    *altoCrudo = txtSurf->h;
++
++    if (fnt->getShadow())
++        applyShadow(txtSurf, *fmt, c);
++
+     /* outline using TTF_Outline and blending it together with SDL_BlitSurface
+      * FIXME: outline is forced to have the same opacity as the font color */
+-    if (p->font->getOutline())
++    if (fnt->getOutline())
+     {
+         SDL_Color co = outColor.toSDLColor();
+         co.a = 255;
+         SDL_Surface *outline;
+         /* set the next font render to render the outline */
+         TTF_SetFontOutline(font, OUTLINE_SIZE);
+-        if (p->font->isSolid())
++        if (fnt->isSolid())
+             outline = TTF_RenderUTF8_Solid(font, str, co);
+         else
+             outline = TTF_RenderUTF8_Blended(font, str, co);
+-        
+-        p->ensureFormat(outline, SDL_PIXELFORMAT_ABGR8888);
++
++        BitmapPrivate::ensureFormat(outline, SDL_PIXELFORMAT_ABGR8888);
+         SDL_Rect outRect = {OUTLINE_SIZE, OUTLINE_SIZE, txtSurf->w, txtSurf->h};
+-        
++
+         SDL_SetSurfaceBlendMode(txtSurf, SDL_BLENDMODE_BLEND);
+         SDL_BlitSurface(txtSurf, NULL, outline, &outRect);
+         SDL_FreeSurface(txtSurf);
+@@ -1581,7 +1927,187 @@
+         /* reset outline to 0 */
+         TTF_SetFontOutline(font, 0);
+     }
+-    
++
++    return txtSurf;
++}
++
++void Bitmap::drawText(const IntRect &rect, const char *str, int align)
++{
++    NX_MIDE(NX_G_TEXTO);
++    guardDisposed();
++
++    GUARD_MEGA;
++    GUARD_ANIMATED;
++
++    std::string fixed = fixupString(str);
++    str = fixed.c_str();
++
++    if (*str == '\0')
++        return;
++
++    if (str[0] == ' ' && str[1] == '\0')
++        return;
++
++    TTF_Font *font = p->font->getSdlFont();
++    const Color &fontColor = p->font->getColor();
++    const Color &outColor = p->font->getOutColor();
++
++    SDL_Color c = fontColor.toSDLColor();
++    c.a = 255;
++
++    float txtAlpha = fontColor.norm.w;
++
++#ifdef __SWITCH__
++    /* --------------------------------------------------------------------
++     * La lista de objetos gastaba "txt 312x 307 ms", y al partir drawText en
++     * dos resulto que 299 de esos 307 estaban en la mitad de abajo, la que
++     * habla con la GPU. Rasterizar las letras costaba 8 ms. O sea que guardar
++     * la superficie ya dibujada, que es lo que hacia la version anterior de
++     * esto, ahorraba los 8 y dejaba los 299.
++     *
++     * Lo caro es TEX::uploadSubImage: meter pixeles de la CPU en una textura
++     * que ademas es el destino que la GPU esta leyendo. Cada llamada sincroniza
++     * y son 312 por fotograma. En el mismo fotograma, 257 pegados de textura a
++     * textura costaron 5 ms en total. La diferencia no es de grado.
++     *
++     * Asi que lo que se guarda no es la superficie sino un Bitmap: la cadena ya
++     * subida a la GPU, una vez. Dibujarla pasa a ser un stretchBlt normal, el
++     * mismo camino de 0,02 ms que ya usa todo lo demas.
++     * -------------------------------------------------------------------- */
++    SDL_Color coClave = outColor.toSDLColor();
++    char cab[80];
++    int nCab = snprintf(cab, sizeof(cab), "%p|%d%d%d%d%d|%02x%02x%02x|%02x%02x%02x|",
++                        (void *)font,
++                        (int)p->font->getBold(), (int)p->font->getItalic(),
++                        (int)p->font->isSolid(), (int)p->font->getShadow(),
++                        (int)p->font->getOutline(),
++                        c.r, c.g, c.b, coClave.r, coClave.g, coClave.b);
++    if (nCab < 0 || nCab > (int)sizeof(cab))
++        nCab = (int)sizeof(cab) - 1;   /* snprintf devuelve lo que HABRIA escrito */
++    const std::string claveTxt = std::string(cab, nCab) + str;
++
++    Cocida cocida;
++    bool reciente = false;
++    const bool hayTexto = alijoTexto.busca(claveTxt, &cocida);
++
++    nx_cache_texto(hayTexto ? 1 : 0, alijoTexto.ocupado());
++
++    if (!hayTexto)
++    {
++        SDL_Surface *txtSurf = rasterizaTexto(font, str, p->font, p->format,
++                                              c, outColor, &cocida.altoCrudo);
++        if (!txtSurf)
++            return;
++
++        cocida.ancho = txtSurf->w;
++        cocida.alto = txtSurf->h;
++
++        /* La caja se redondea hacia arriba, y esta es la leccion cara del
++         * intento anterior. El fondo de texturas indexa por medidas EXACTAS, y
++         * cada cadena tiene un ancho distinto: guardando la textura del tamano
++         * justo, ninguna se reciclaba jamas y cada fallo de alijo creaba una
++         * textura nueva contra el driver. Se cambiaron 299 ms de subidas por
++         * 190 ms de reservas y el fotograma salio peor que antes.
++         *
++         * Con la caja redondeada, todas las cadenas caen en un punado de
++         * tamanos y el fondo las recicla. Se sube solo el trozo de verdad, y el
++         * clear() que hace el constructor deja a cero lo que sobra, asi que no
++         * asoman pixeles de la cadena anterior por el borde. */
++        const int anchoCaja = (cocida.ancho + 63) & ~63;
++        const int altoCaja = (cocida.alto + 31) & ~31;
++
++        try
++        {
++            cocida.bmp = new Bitmap(anchoCaja, altoCaja);
++        }
++        catch (const Exception &)
++        {
++            SDL_FreeSurface(txtSurf);
++            throw;
++        }
++
++        TEX::bind(cocida.bmp->getGLTypes().tex);
++        TEX::uploadSubImage(0, 0, cocida.ancho, cocida.alto,
++                            txtSurf->pixels, GL_RGBA);
++        cocida.bmp->taintArea(IntRect(0, 0, anchoCaja, altoCaja));
++        SDL_FreeSurface(txtSurf);
++        reciente = true;
++    }
++
++    const int anchoTxt = cocida.ancho;
++    const int altoTxt = cocida.alto;
++
++    /* Antes esto no hacia falta: el camino viejo terminaba en un
++     * SDL_IntersectRect que descartaba solo lo degenerado. stretchBlt no
++     * descarta nada — con un ancho negativo pide una textura de destino de ese
++     * tamano, que al pasar por uint16_t se convierte en enorme. Es la unica
++     * forma en que este cambio podria colgar la consola sin dejar informe de
++     * fallo, asi que se corta aqui. */
++    if (anchoTxt <= 0 || altoTxt <= 0 || rect.w <= 0 || rect.h <= 0)
++    {
++        if (reciente &&
++            !alijoTexto.guarda(claveTxt, cocida,
++                               (size_t)cocida.bmp->width() *
++                               (size_t)cocida.bmp->height() * 4))
++            delete cocida.bmp;
++        return;
++    }
++
++    int alignX = rect.x;
++
++    switch (align)
++    {
++        default:
++        case Left :
++            break;
++
++        case Center :
++            alignX += (rect.w - anchoTxt) / 2;
++            break;
++
++        case Right :
++            alignX += rect.w - anchoTxt;
++            break;
++    }
++
++    if (alignX < rect.x)
++        alignX = rect.x;
++
++    int alignY = rect.y + (rect.h - cocida.altoCrudo) / 2;
++
++    float squeeze = (float) rect.w / anchoTxt;
++
++    if (squeeze > 1)
++        squeeze = 1;
++
++    int anchoDest = (int)(anchoTxt * squeeze);
++    if (anchoDest < 1)
++        anchoDest = 1;
++
++    IntRect destino(alignX, alignY, anchoDest, altoTxt);
++
++    {
++        NX_MIDE(NX_G_PEGA);
++        stretchBlt(destino, *cocida.bmp, IntRect(0, 0, anchoTxt, altoTxt),
++                   (int)(txtAlpha * 255.0f + 0.5f));
++    }
++
++    /* Se ofrece DESPUES de dibujar, porque si el alijo no lo quiere el dueno
++     * sigue siendo este de aqui. */
++    if (reciente &&
++        !alijoTexto.guarda(claveTxt, cocida,
++                           (size_t)cocida.bmp->width() *
++                           (size_t)cocida.bmp->height() * 4))
++        delete cocida.bmp;
++
++    return;
++#else
++    int rawTxtSurfH = 0;
++    SDL_Surface *txtSurf = rasterizaTexto(font, str, p->font, p->format,
++                                          c, outColor, &rawTxtSurfH);
++    if (!txtSurf)
++        return;
++
+     int alignX = rect.x;
+     
+     switch (align)
+@@ -1611,6 +2137,13 @@
+     
+     FloatRect posRect(alignX, alignY, txtSurf->w * squeeze, txtSurf->h);
+     
++    /* De aqui abajo ya no se rasterizan letras: se sube la superficie a la
++     * GPU y se pega. Va aparte porque el alijo de cadenas acierta 236 de 312
++     * veces y el coste no baja, y eso solo tiene sentido si lo caro esta en
++     * esta mitad y no en la de arriba. */
++    {
++    NX_MIDE(NX_G_PEGA);
++
+     Vec2i gpTexSize;
+     shState->ensureTexSize(txtSurf->w, txtSurf->h, gpTexSize);
+     
+@@ -1729,11 +2262,16 @@
+         
+         p->popViewport();
+     }
+-    
++
++    }
++
+     SDL_FreeSurface(txtSurf);
+     p->addTaintedArea(posRect);
+-    
++
+     p->onModified();
++    /* El camino con alijo sale por su propio return, mas arriba: alli el
++     * marcado y el aviso de modificado los hace stretchBlt. */
++#endif   /* __SWITCH__ */
+ }
+ 
+ /* http://www.lemoda.net/c/utf8-to-ucs2/index.html */
+@@ -1782,6 +2320,7 @@
+ 
+ IntRect Bitmap::textSize(const char *str)
+ {
++    NX_MIDE(NX_G_MEDIR);
+     guardDisposed();
+     
+     GUARD_MEGA;
+@@ -2123,6 +2662,8 @@
+ 
+ void Bitmap::releaseResources()
+ {
++    NX_MIDE(NX_G_TIRA);
++    p->hayPendiente = false;
+     if (p->megaSurface)
+         SDL_FreeSurface(p->megaSurface);
+     else if (p->animation.enabled) {

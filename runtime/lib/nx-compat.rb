@@ -182,3 +182,92 @@ module Marshal
   end
 end
 NX.log("[nx] Marshal.neverload definido (lo pide pbRgssOpen con contenedor)")
+
+# ---------------------------------------------------------------------------
+# El reportero de mapa: que el proximo volcado diga donde estaba el jugador.
+#
+# De los diecisiete volcados que mandaron los tres jugadores del 5 y 6 de
+# septiembre de 2026, solo uno se pudo entender, y fue porque el jugador conto
+# por escrito que estaba en la ruta 1 con un Pidgey delante. Los otros dieciseis
+# son una direccion de memoria. Y el sitio es la mitad del diagnostico: lo que
+# agota la memoria de video es lo que hay cargado, o sea el mapa y lo que hay
+# encima de el.
+#
+# Se escribe por NXReg.traza y no por NX.log a proposito: asi la linea cae en
+# mkxp-boot.log, con milisegundos delante y pegada a los [monton], los [fondo] y
+# el [exc] de la caida. El volcado se lee entonces de arriba abajo -"estaba
+# aqui, tenia esto reservado, y murio"- en vez de tener que casar dos ficheros
+# sin reloj comun.
+#
+# EL COSTE. El enganche esta en Graphics.update, que corre sesenta veces por
+# segundo, asi que dentro no hay mas que leer un entero y compararlo. Solo
+# cuando el mapa cambia -unas pocas veces por minuto- se arma la cadena y se
+# escribe. Si NXReg no existe (escritorio, o un motor viejo) el modulo se
+# desengancha en la primera pasada y no queda ni la comparacion.
+module NXDonde
+  @ultimo = nil
+  @avisado = false
+
+  def self.disponible?
+    defined?(NXReg) && NXReg.respond_to?(:traza)
+  end
+
+  # El nombre del mapa vive en Data/map_infos, que Essentials carga en
+  # $game_map.name o en pbGetMapNameFromId segun la version. Se prueban los dos
+  # y si ninguno esta, se queda el numero: un id es menos legible que un nombre
+  # pero identifica el mapa igual de bien, y este canal no puede fallar.
+  def self.nombre(mapa, id)
+    if mapa.respond_to?(:name)
+      n = (mapa.name rescue nil)
+      return n if n && !n.to_s.empty?
+    end
+    if respond_to?(:pbGetMapNameFromId)
+      n = (pbGetMapNameFromId(id) rescue nil)
+      return n if n && !n.to_s.empty?
+    end
+    nil
+  end
+
+  def self.revisar
+    mapa = $game_map
+    return if mapa.nil?
+
+    id = (mapa.map_id rescue nil)
+    return if id.nil?
+
+    return if id == @ultimo
+    @ultimo = id
+
+    x = ($game_player && $game_player.x rescue nil)
+    y = ($game_player && $game_player.y rescue nil)
+    nom = nombre(mapa, id)
+
+    linea = "[donde] mapa #{id}"
+    linea << " #{nom}" if nom
+    linea << " en (#{x},#{y})" if x && y
+    NXReg.traza(linea)
+  rescue StandardError, ScriptError
+    # Un fallo aqui no puede costarle la partida a nadie: se calla y sigue.
+    nil
+  end
+end
+
+module Graphics
+  class << self
+    alias_method :nx_update_sin_donde, :update
+
+    def update
+      if NXDonde.disponible?
+        NXDonde.revisar
+      else
+        # Ni siquiera la comprobacion se paga dos veces: se recupera el update
+        # original y este metodo desaparece del camino.
+        class << Graphics
+          alias_method :update, :nx_update_sin_donde
+        end
+      end
+      nx_update_sin_donde
+    end
+  end
+end
+NX.log("[nx] reportero de mapa puesto ([donde] en mkxp-boot.log)")

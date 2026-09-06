@@ -31,6 +31,26 @@ git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && { echo "la etiqueta $TA
 strings -a "$ENT/pokemon-anil.nro" | grep -q "\[build\] $VERSION " || { echo "el .nro de la entrega no lleva el sello $VERSION"; exit 1; }
 echo "ok: $ZIP ($(du -h "$ZIP" | cut -f1)) es la $VERSION"
 
+echo "=== simbolos ==="
+# Publicar sin archivar el .elf es publicar a ciegas: el dia que un jugador
+# mande un volcado, `+0x7abd30` no sera ningun nombre de funcion y habra que
+# desensamblar el .nro en crudo y adivinar (README 5.65). Asi que aqui se
+# comprueba que construir.sh dejo los simbolos de ESTA compilacion —mismo hash
+# de .nro, no solo mismo sello— y se marcan como publicados para que la poda de
+# construir.sh no los toque nunca mas.
+SELLO_NRO=$(strings -a "$ENT/pokemon-anil.nro" | grep -m1 '^\[build\] ' | sed 's/^\[build\] //')
+BNUM=$(printf '%s\n' "$SELLO_NRO" | awk '{print $2}')
+SIM="release/simbolos/$VERSION-$BNUM"
+[ -f "$SIM/pokemon-anil.elf" ] || { echo "no hay .elf archivado en $SIM: recompila con ./construir.sh (no se publica sin simbolos)"; exit 1; }
+HNRO_ENT=$(sha256sum "$ENT/pokemon-anil.nro" | awk '{print $1}')
+HNRO_SIM=$(sha256sum "$SIM/pokemon-anil.nro" | awk '{print $1}')
+[ "$HNRO_ENT" = "$HNRO_SIM" ] || { echo "el .nro archivado en $SIM no es el de la entrega; recompila con ./construir.sh"; exit 1; }
+sed -i 's/^publicada: .*/publicada: si/' "$SIM/SELLO.txt"
+grep -q '^publicada: si' "$SIM/SELLO.txt" || echo "publicada: si" >> "$SIM/SELLO.txt"
+printf '%-16s %-28s %s\n' "$VERSION-$BNUM" "$SELLO_NRO" "$HNRO_ENT" >> release/simbolos/INDICE.txt
+echo "ok: $SIM marcado como publicado (.elf $(du -h "$SIM/pokemon-anil.elf" | cut -f1))"
+echo "    para leer una pila:  python resolver-pila.py --sello '$SELLO_NRO' mkxp-boot.log"
+
 echo "=== notas ==="
 ULTIMA=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
 NOTAS="release/NOTAS-$VERSION.md"

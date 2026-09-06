@@ -28,6 +28,21 @@
 #define NX_BOOTLOG_B "mkxp-boot.log"
 #define NX_BOOTLOG_C "sdmc:/mkxp-boot.log"
 
+/* Cuando el registro deja de caber en una lectura.
+ *
+ * El fichero se abre en O_APPEND y no se trunca nunca, asi que crece durante
+ * toda la vida de la instalacion. En los registros de dos jugadores reales
+ * eran 182 KB despues de diecinueve partidas —1.636 lineas— y ese ritmo no se
+ * para solo. Lo que se pierde no es sitio en la tarjeta, que sobra: es la
+ * posibilidad de leerlo. Un mkxp-boot.log de varios megas ya no se adjunta a
+ * un informe ni se abre de un vistazo, y la sesion que interesa esta al final,
+ * detras de todas las que no interesan.
+ *
+ * Se guarda UNA generacion, no cero: la caida que se quiere entender suele ser
+ * la de la partida anterior, la que hizo al jugador cerrar y volver a abrir.
+ * Truncar sin mas seria borrar justo esa. */
+#define NX_LOG_MAX (1024u * 1024u)
+
 /* Cada linea lleva delante los milisegundos transcurridos desde la primera.
  *
  * Sin ellos, "el arranque tarda mucho" es una impresion; con ellos, el registro
@@ -56,12 +71,76 @@ int nx_diagnostico(void)
     return decidido;
 }
 
+static const char *nx_bootlog_paths[3] = {
+    NX_BOOTLOG_A, NX_BOOTLOG_B, NX_BOOTLOG_C
+};
+
+/* Aparta el registro de la instalacion anterior si ya no se puede leer.
+ *
+ * Se hace una sola vez por proceso y ANTES de abrir el descriptor de escritura,
+ * porque renombrar un fichero que tenemos abierto en O_APPEND deja el
+ * descriptor apuntando a un sitio que ya no se llama asi. Si el renombrado
+ * falla —la tarjeta esta protegida, el destino existe y no se deja borrar— no
+ * pasa nada: se sigue escribiendo en el fichero grande, que es peor que
+ * rotarlo pero mucho mejor que quedarse sin registro. */
+static void nx_boot_rota(void)
+{
+    unsigned i;
+
+    for (i = 0; i < 3; i++) {
+        struct stat st;
+        char viejo[128];
+        size_t l;
+
+        if (stat(nx_bootlog_paths[i], &st) != 0)
+            continue;
+        if ((unsigned)st.st_size < NX_LOG_MAX)
+            return;             /* el que vamos a usar cabe: nada que hacer */
+
+        /* ".log" -> ".1.log", para que el visor lo siga reconociendo. */
+        l = strlen(nx_bootlog_paths[i]);
+        if (l < 5 || l + 3 >= sizeof(viejo))
+            return;
+        memcpy(viejo, nx_bootlog_paths[i], l - 4);
+        memcpy(viejo + l - 4, ".1.log", 7);
+
+        unlink(viejo);
+        rename(nx_bootlog_paths[i], viejo);
+        return;
+    }
+}
+
+/* Una linea, una llamada a write().
+ *
+ * El sello, el mensaje y el salto de linea se escribian en tres write()
+ * seguidas sobre un descriptor compartido, y por ese descriptor escriben a la
+ * vez el hilo de dibujo (los [tiron] y los [mem]), el de la musica (los
+ * [nucleo]) y el principal. Entre dos de esas tres llamadas cabe otro hilo
+ * entero, y en los registros de los dos jugadores hay 41 lineas asi: un
+ * "[nucleo] musica: ... (OK)" con un "[tiron] marco ..." incrustado detras sin
+ * salto de linea, y a continuacion una linea vacia con el salto huerfano. No
+ * se pierde informacion —los bytes estan todos— pero se pierde el poder
+ * leerlos con una herramienta, que para un registro es casi lo mismo:
+ * resolver-pila.py y triaje.py van linea a linea.
+ *
+ * Se arregla por los dos lados a la vez, porque ninguno basta solo. El candado
+ * ordena a los escritores entre si; armar la linea entera en un buffer y
+ * soltarla de una write() hace que, aunque el candado no estuviera, lo peor
+ * que pueda pasar sea que dos lineas salgan en otro orden y no que salgan
+ * trenzadas. Es un Mutex de libnx, que en .bss vale cero y cero es
+ * "desbloqueado": vale desde el primer constructor estatico, que es antes de
+ * que exista nada a lo que llamar para inicializarlo. */
+static Mutex nx_log_mtx;
+
 static void nx_boot_mark(const char *msg)
 {
-    static const char *paths[3] = { NX_BOOTLOG_A, NX_BOOTLOG_B, NX_BOOTLOG_C };
-    char sello[16];
-    char nl = 0x0A;
+    static int fd_abierto = -1;
+    static int rotado;
+    char linea[512];
     unsigned ms, i, n = 0;
+    size_t largo;
+
+    mutexLock(&nx_log_mtx);
 
     if (!base_tick)
         base_tick = armGetSystemTick();
@@ -73,11 +152,21 @@ static void nx_boot_mark(const char *msg)
         if (!ms) t[k++] = '0';
         while (ms) { t[k++] = (char)('0' + ms % 10); ms /= 10; }
         while (k < 6) t[k++] = ' ';          /* a la derecha, hasta 6 huecos */
-        sello[n++] = '[';
-        while (k) sello[n++] = t[--k];
-        sello[n++] = ']';
-        sello[n++] = ' ';
+        linea[n++] = '[';
+        while (k) linea[n++] = t[--k];
+        linea[n++] = ']';
+        linea[n++] = ' ';
     }
+
+    /* El mensaje mas largo que se escribe es un [tiron], que nace de un
+     * snprintf de 448; con el sello y el salto cabe de sobra. Se recorta por si
+     * algun dia deja de caber: mejor una linea corta que una pila pisada. */
+    largo = strlen(msg);
+    if (largo > sizeof(linea) - n - 1)
+        largo = sizeof(linea) - n - 1;
+    memcpy(linea + n, msg, largo);
+    n += (unsigned)largo;
+    linea[n++] = 0x0A;
 
     /* Abrir, escribir y cerrar por cada linea costaba unos 40 ms en la SD:
      * las sesenta lineas del arranque eran mas de dos segundos de espera antes
@@ -85,26 +174,30 @@ static void nx_boot_mark(const char *msg)
      * vez y se queda; la ultima linea puede perderse si el proceso muere, pero
      * para eso esta el informe de fallo de Atmosphere. Con diagnostico.txt se
      * vuelve al modo lento y seguro, que es el que quiere quien depura. */
-    static int fd_abierto = -1;
     if (fd_abierto >= 0 && !nx_diagnostico()) {
-        write(fd_abierto, sello, n);
-        write(fd_abierto, msg, strlen(msg));
-        write(fd_abierto, &nl, 1);
+        write(fd_abierto, linea, n);
+        mutexUnlock(&nx_log_mtx);
         return;
     }
+
+    if (!rotado) {
+        rotado = 1;
+        nx_boot_rota();
+    }
+
     for (i = 0; i < 3; i++) {
-        int fd = open(paths[i], O_WRONLY | O_CREAT | O_APPEND, 0666);
+        int fd = open(nx_bootlog_paths[i], O_WRONLY | O_CREAT | O_APPEND, 0666);
         if (fd < 0)
             continue;
-        write(fd, sello, n);
-        write(fd, msg, strlen(msg));
-        write(fd, &nl, 1);
+        write(fd, linea, n);
         if (nx_diagnostico())
             close(fd);
         else
             fd_abierto = fd;
-        return;                 /* con que llegue a uno, basta */
+        break;                  /* con que llegue a uno, basta */
     }
+
+    mutexUnlock(&nx_log_mtx);
 }
 
 void nx_boot_trace(const char *msg);

@@ -12,6 +12,8 @@
 #   5. Monta release/anil-switch-<VERSION>/ con TODO lo que necesita un jugador
 #      que ya tiene el juego: .nro, .nsp, mkxp.json, lib/ (shims + stdlib),
 #      el empaquetador con interfaz y la guia. Y lo comprime.
+#   6. Archiva los simbolos de ESTA compilacion en release/simbolos/, que es lo
+#      que permite leer la pila de un volcado de un jugador (README 5.65).
 #
 # El juego no entra en la entrega. Lo pone cada uno con Empaquetar.cmd.
 set -eu
@@ -80,6 +82,51 @@ echo "lib/: $(ls runtime/lib/*.rb | wc -l) shims + $n de la stdlib"
 cp Empaquetar.ps1 Empaquetar.cmd GUIA.md LICENSE LICENCIAS.md "$ENT/"
 echo "$VERSION $(date '+%Y-%m-%d')" > "$ENT/VERSION.txt"
 ( cd release && rm -f "anil-switch-$VERSION.zip" && ( command -v zip >/dev/null && zip -qr "anil-switch-$VERSION.zip" "anil-switch-$VERSION" || 7z a -bso0 "anil-switch-$VERSION.zip" "anil-switch-$VERSION" >/dev/null ) )
+paso "6. Simbolos"
+# Sin el .elf SIN DESNUDAR de la compilacion exacta, un volcado de excepcion de
+# un jugador es una direccion relativa y nada mas: `+0x7abd30` no dice ninguna
+# funcion. La 1.0.0 se publico sin archivarlo y hubo que desensamblar el .nro en
+# crudo y comparar firmas de instrucciones contra una compilacion posterior para
+# ponerle nombre a la pila (README 5.65, docs/consola/20260905-pidgey/). Eso
+# funciono por suerte —la funcion no habia cambiado— y la suerte no se planifica.
+#
+# Asi que cada compilacion deja aqui su .elf, su .nro y un SELLO.txt con los
+# hashes: el .nro archivado es byte a byte el que se entrega, de modo que el
+# hash empareja sin dudas un registro de jugador con su compilacion.
+SELLO_NRO=$(strings -a "$ENT/pokemon-anil.nro" | grep -m1 '^\[build\] ' | sed 's/^\[build\] //')
+BNUM=$(printf '%s\n' "$SELLO_NRO" | awk '{print $2}')
+if [ -z "$BNUM" ]; then
+  echo "AVISO: el .nro no lleva sello legible; no se archivan simbolos"
+else
+  SIM="release/simbolos/$VERSION-$BNUM"
+  mkdir -p "$SIM"
+  cp mkxp-z-nx/pokemon-anil.elf "$SIM/pokemon-anil.elf"
+  cp "$ENT/pokemon-anil.nro"    "$SIM/pokemon-anil.nro"
+  {
+    echo "version:  $VERSION"
+    echo "sello:    $SELLO_NRO"
+    echo "fecha:    $(date '+%Y-%m-%d %H:%M:%S %z')"
+    echo "commit:   $(git rev-parse HEAD 2>/dev/null || echo 'sin git')$([ -n "$(git status --short 2>/dev/null)" ] && echo ' (con cambios sin confirmar)')"
+    echo "nro:      $(sha256sum "$SIM/pokemon-anil.nro" | awk '{print $1}')  $(stat -c %s "$SIM/pokemon-anil.nro") bytes"
+    echo "elf:      $(sha256sum "$SIM/pokemon-anil.elf" | awk '{print $1}')  $(stat -c %s "$SIM/pokemon-anil.elf") bytes"
+    echo "publicada: no"
+  } > "$SIM/SELLO.txt"
+  echo "$SIM  ($(du -sh "$SIM" | cut -f1))"
+
+  # Poda. Un .elf son noventa megas y aqui se compila muchas veces al dia; lo
+  # que interesa guardar para siempre es la compilacion que se PUBLICO, no las
+  # veinte de ese mismo dia. De cada version se conservan enteras las tres mas
+  # recientes y todas las que publicar.sh haya marcado; de las demas queda el
+  # SELLO.txt, que pesa nada y deja el rastro por si alguna vez aparece un
+  # registro de una compilacion intermedia que se probo en la consola.
+  ls -1dt release/simbolos/"$VERSION"-b* 2>/dev/null | tail -n +4 | while read -r v; do
+    grep -qE '^(publicada|conservar): si' "$v/SELLO.txt" 2>/dev/null && continue
+    [ -f "$v/pokemon-anil.elf" ] || continue
+    rm -f "$v/pokemon-anil.elf" "$v/pokemon-anil.nro"
+    echo "  podado (queda el SELLO.txt): $v"
+  done
+fi
+
 echo
 echo "Entrega: $ENT  ($(du -sh "$ENT" | cut -f1))  y release/anil-switch-$VERSION.zip"
 echo "Comprobacion: $(ls "$ENT" | wc -l) entradas en la raiz de la entrega:"; ls "$ENT"

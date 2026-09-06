@@ -2530,6 +2530,651 @@ tarjeta— y eso son mil milisegundos exactos. Cinco segundos de fotogramas mas
 uno de sonda: los 6.030 ms que separaban un tiron del siguiente. El instrumento
 pesaba mas que lo que estaba pesando.
 
+**Reproducido a escala, el 5 de septiembre.** Un segundo jugador conto lo mismo
+con otra ropa: al llegar a Ciudad Verde baja a la ruta 1, interactua con un
+Pidgey y el juego se cierra, devolviendolo al laboratorio -que es donde estaba
+su ultimo guardado, no una partida borrada-. Ni pantalla de error ni
+`errorlog.txt`. La misma firma.
+
+Reproducirlo tal cual exige tener 65.536 texturas guardadas a la vez, y eso en
+Ryujinx no se puede: cada FBO pasa por la Mesa del invitado y por la GPU
+emulada, y el ritmo se derrumba de 10.000 texturas por segundo a menos de 4.000
+antes de llegar a diez mil. Medido, no supuesto.
+
+Asi que se reproduce a escala, con dos interruptores en `texpool.cpp`:
+`NX_FONDO_MAQUETA` baja el presupuesto del fondo a 2 MB y `NX_FONDO_8BITS`
+estrecha el contador a 8 bits. **256 texturas de 8 KB son 2 MB, que es la misma
+relacion exacta que 65.536 y 512 MB**, por el mismo camino y en la misma linea
+de codigo. La sonda `runtime/diagnostico/nx-fondo-desborde.rb` hace lo que hace
+el juego durante media hora de cuadros de texto, en cincuenta milisegundos:
+tener muchas texturas diminutas vivas a la vez y soltarlas todas de golpe.
+
+Con el contador de 8 bits:
+
+```
+[fondo]  8193 peticiones |  1537 KB |  58 texturas contadas | 314 en cola
+[fondo]  8449 peticiones | 18376 KB |   1 texturas contadas | 257 en cola
+[fondo]  8705 peticiones | 76237 KB |   1 texturas contadas | 257 en cola
+```
+
+314 en la cola y 58 contadas: 314 menos 256. **El contador se ha dado la
+vuelta.** Y a partir de ahi el desalojo se rinde en cuanto su contador llega a
+cero, dejando 257 texturas que no ha mirado, y el fondo pasa de 2 MB de
+presupuesto a **76 MB: treinta y siete veces el techo**, subiendo.
+
+Con el mismo presupuesto y el contador de 32 bits, la misma sonda, el mismo
+combate contra el Pidgey: **maximo 2.042 KB, y el contador y la cola coinciden
+en todas las lineas**. Ese es el control.
+
+Lo que la maqueta no puede ensenar es el ultimo paso, porque el anfitrion tiene
+memoria de video de sobra y `glTexImage2D` nunca llega a decir que no. Que el
+fondo crezca sin techo esta demostrado; que ese crecimiento acabe matando el
+proceso lo demostro el volcado del 4 de septiembre.
+
+El instrumento que faltaba tambien queda puesto: `nx_pool_reales()` pregunta
+cuantas texturas hay **de verdad** en la cola, y el informe periodico `[fondo]`
+las escribe al lado de las contadas cada 256 peticiones, con `diagnostico.txt`
+puesto. La linea `[tiron]` ya llevaba el numero, pero solo se escribe cuando hay
+un tiron, y esto no da ninguno: el juego va fluido hasta que se apaga.
+
+**Confirmado en la consola de un jugador, con su propio volcado.** El mismo dia
+llegaron los registros del caso del Pidgey, de la 1.0.0 b14. Dos caidas, una por
+sesion, con el mismo `pc` y los mismos registros: `far=0xe`, `x20=0`. El `.elf`
+de esa compilacion no se archivo, pero el `.nro` publicado se puede desensamblar
+igual, y la instruccion es
+
+```
+7abd30:  ldrh  w7, [x20, #14]        con x20 = 0
+```
+
+Para ponerle nombre se busca esa misma secuencia en una compilacion que si
+conserve simbolos: aparece en la b52 con diecisiete instrucciones identicas byte
+a byte alrededor, saltos relativos incluidos. De ahi sale la pila entera:
+`st_render_texture` <- `_mesa_framebuffer_texture` <- `_mesa_FramebufferTexture2D`
+<- (`TexPool::request`) <- (`Bitmap::Bitmap`) <- `Bitmap::drawText`. Los dos
+marcos que no casan son los dos ficheros que este arreglo toco; que no casen es
+la confirmacion.
+
+Lo que pidio la textura fue **un cuadro de texto**: el «¡Un PIDGEY salvaje
+apareció!». El Pidgey solo tuvo la mala suerte de ser el primero despues de que
+se acabara el sitio.
+
+Y el caso corrige una suposicion: **ahi el contador de 16 bits no estaba
+implicado**. El fondo se mantuvo entre 250 y 330 MB las dos sesiones, sin crecer
+sin techo. La memoria de video se agoto con un fondo de tamano legitimo, o sea
+que el techo real esta por debajo de los 512 MB que el presupuesto supone. El
+guardian lo cubre igual —suelta el fondo y sigue—, pero el presupuesto inicial
+merece bajar. El detalle completo, en `docs/consola/20260905-pidgey/`.
+
+**Y el presupuesto inicial baja de 512 MB, con criterio.** Lo primero que hay
+que decir es lo que *no* se acabó: en el momento de la caída el montón iba por
+**1.042 MB de 3.166** y quedaban dos gigas sin repartir. `mallinfo().uordblks`
+incluye los búferes de la GPU (§5.53), así que el sitio de `malloc` no era el
+problema. Lo que se agotó es lo que el driver puede tener **mapeado a la vez**
+para la GPU, y eso no hay forma de preguntarlo desde el proceso: no se deduce,
+se mide. Y lo único medido es la banda en la que rompió, que son esos 250-330 MB
+de fondo.
+
+De ahí sale el techo nuevo: **192 MB**, una cuarta parte por debajo del borde
+bajo de la banda. Partirlo por la mitad no habría bastado —512 entre dos son
+256, que cae *dentro* de la banda, y eso es exactamente lo que hace el guardián
+al primer choque—. Y bajar más de 192 se paga: con 256 el fondo se quedaba
+clavado en su presupuesto y cada tira de animación nueva entraba creando contra
+el driver y salía borrando contra el driver, `pool 237x 429 ms` en un solo
+fotograma. 192 MB no es gratis; es el precio de no volver a pisar el sitio donde
+el proceso se moría, con el guardián detrás por si tampoco basta.
+
+Y deja de ser una constante, porque el mismo binario recibe presupuestos muy
+distintos según cómo se lance: 3,2 GB como aplicación instalada o como NRO
+suplantando un título, unos 448 MB como applet de biblioteca (§5.53). Guardar
+192 MB de texturas de un presupuesto de 448 sería absurdo. Así que se pide **un
+octavo del montón** —leído en `fake_heap_start`/`fake_heap_end`, los mismos
+símbolos que usa `sbrk`, que es el único techo que sí se puede leer— y se acota
+entre **64 y 192 MB**. En la consola de verdad manda el techo; en un applet
+manda el suelo; si algún día el reparto cambia, el fondo se entera solo.
+
+El registro de arranque lo dice ahora en una línea, para que el próximo informe
+de un jugador no obligue a adivinar con qué presupuesto arrancó su consola:
+
+```
+[fondo] presupuesto inicial 192 MB (monton 3166 MB, un octavo acotado entre 64 y 192 MB)
+```
+
+Y hay que decir que **192 es provisional**. Quien de verdad estrecha el sitio no
+es el fondo: es el montón de Ruby, que en esa partida subió a 1.042 MB en diez
+minutos de juego, monótono y siempre con veinte megas libres, sin que se sepa
+todavía por qué. Ese es otro problema y va aparte; cuando se arregle, este número
+podrá volver a subir.
+
+**Lo que esto significa para quien juega la 1.0.0 o la 1.1.0.** Las dos llevan
+el contador de 16 bits: el arreglo es posterior a la etiqueta `v1.1.0`. No hay
+nada que el jugador pueda hacer salvo guardar a menudo, y el consejo de "prueba
+otra vez" funciona porque cada arranque devuelve el contador a cero.
+
+
+
+### 5.65 Publicar sin guardar el `.elf` es publicar a ciegas
+
+El caso del Pidgey (§5.64) llegó como llegan todos los casos de un jugador: un
+`mkxp-boot.log` y ninguna posibilidad de reproducirlo. Lo único que decía el
+volcado era esto:
+
+```
+[exc] otra (acceso a datos) desc=0x101 esr=0x92000005 far=0xe
+[exc] base=0x440063d000 pc=0x4400de8d30 (+0x7abd30)
+```
+
+`+0x7abd30` es un desplazamiento dentro del binario, y para convertirlo en un
+nombre de función hace falta el `.elf` **sin desnudar de esa compilación
+exacta**. El de la 1.0.0 b14 no se archivó: `make` lo sobrescribió a la
+siguiente vuelta, y de una compilación de tres días antes no queda nada.
+
+Se resolvió igualmente, por el camino largo. El `.nro` publicado sí existe, y un
+`.nro` no es más que los segmentos del `.elf` copiados sin mover, así que el
+desplazamiento del volcado es a la vez el vaddr del `.elf` y el offset dentro
+del fichero:
+
+```
+$ aarch64-none-elf-objdump -D -b binary -m aarch64       --start-address=0x7abd30 release/anil-switch-1.0.0/pokemon-anil.nro
+  7abd2c:  97fd6961   bl   0x7062b0
+  7abd30:  79401e87   ldrh w7, [x20, #14]      <-- aqui
+```
+
+Con `x20 = 0` eso es leer a catorce bytes de un nulo, que es exactamente lo que
+decía `far=0xe`. Para ponerle **nombre** hubo que buscar esas mismas diez
+instrucciones en una compilación que sí conservara símbolos —la b52, que seguía
+en el árbol de trabajo por casualidad—, comprobar que las diecisiete de
+alrededor coincidían byte a byte (saltos relativos incluidos, o sea que es la
+misma función compilada igual) y leer el símbolo de allí. Marco a marco, seis
+veces.
+
+Funcionó **porque la función no había cambiado entre la b14 y la b52**. Eso no
+es un método: es suerte, y la suerte no se planifica. Los dos marcos que no
+casaron fueron justo los dos ficheros que el arreglo de §5.64 tocó.
+
+**Lo que se hace ahora.** `construir.sh` termina archivando en
+`release/simbolos/<version>-b<n>/` el `.elf` de esa compilación, el `.nro`
+byte a byte idéntico al que se entrega, y un `SELLO.txt` con la versión, el
+sello `NX_BUILD`, la fecha, el commit y el sha256 de los dos binarios. El hash
+del `.nro` es lo que empareja sin dudas un registro de jugador con su
+compilación: el sello podría repetirse si alguien tocara `build-numero.txt`, el
+hash no. `publicar.sh` se niega a etiquetar si esos símbolos no están, y marca
+la carpeta como publicada para que la poda no la toque jamás. Poda hay porque un
+`.elf` son noventa megas y aquí se compila veinte veces al día: de cada versión
+se guardan enteras las tres compilaciones más recientes y todas las publicadas;
+de las demás queda sólo el `SELLO.txt`, que no pesa nada y deja el rastro.
+
+`release/simbolos/` **no entra en git**, y es deliberado: noventa megas por
+compilación no tienen sitio en un repositorio. Viven en el disco de quien
+compila, que es el único que publica.
+
+**Y el camino largo se automatizó también.** `resolver-pila.py` coge un
+`mkxp-boot.log`, saca la compilación de la línea `[build]` que el motor escribe
+al arrancar, busca su carpeta de símbolos y pasa cada dirección por
+`addr2line`. Si el `.elf` está, la pila sale con nombres en un segundo. Si no
+está —las publicaciones anteriores a esto: la 1.0.0 y la 1.1.0—, degrada solo al
+método del Pidgey: desensambla el `.nro` publicado en crudo, enseña la
+instrucción exacta que falló, y busca las firmas de diez instrucciones en la
+compilación con símbolos más reciente para proponer nombres. Lo dice con todas
+las letras: son candidatos, valen si la función no cambió, y no hay forma de
+saberlo desde ahí. Sobre el registro del Pidgey reproduce la pila que costó una
+tarde a mano —`st_update_renderbuffer_surface`, `st_render_texture`,
+`_mesa_framebuffer_texture`— y deja en blanco, sin inventarlos, los mismos
+marcos que no casaban.
+
+Retroactivamente se archivó lo que quedaba: el `.nro` publicado de la 1.0.0 b14
+y el de la 1.1.0 b46, cada uno con su `SELLO.txt` diciendo que su `.elf` está
+perdido, y el `.elf` de la b52 que aún seguía en `mkxp-z-nx/` —el que sirvió de
+referencia para el caso del Pidgey— marcado para que no se pode. Los `.elf` de
+las dos versiones publicadas no se pueden recuperar: no existen.
+
+### 5.66 El montón que subía solo: qué medía ese número, y qué no
+
+El registro del caso del Pidgey (§5.64) deja una serie que da miedo leer. Los
+picos de montón de la segunda sesión, en orden:
+
+```
+366  696  769  808  849  889  930  963  1009  1042 MB
+```
+
+Monótono, sin bajar nunca, y un gigabyte en menos de diez minutos de juego.
+Antes de buscar la fuga hay que hacer lo de siempre: averiguar qué mide ese
+número. Mide algo distinto de lo que parecía, y de ahí sale casi todo lo demás.
+
+**Qué es.** Lo escribe `nx_memoria_latido()` (`nx/nx_memoria.c`) y es
+`mallinfo().uordblks`: los bytes que `malloc` tiene repartidos y sin devolver.
+No es lo reservado al sistema —eso es `svcGetInfo(UsedMemorySize)`, que está
+clavado en 3.185 MB desde el arranque porque `__libnx_initheap` mapea el montón
+entero y diría lo mismo con el juego cerrado (§5.53)—. No es el montón de
+objetos de Ruby, que son los *slots* del recolector y se miden con `GC.stat`. Y
+no es una categoría aparte de la memoria de vídeo, porque en Horizon **no hay
+memoria de vídeo aparte**: `nvmap` mapea memoria del proceso, así que las
+texturas están dentro de ese mismo número.
+
+**Dos cosas que el registro ya desmiente, sin medir nada nuevo.**
+
+La primera es la hipótesis natural en Horizon: que el asignador de newlib no
+devuelve páginas y por eso el montón se ve grande aunque por dentro no haya nada
+vivo. **No es eso.** En el `mallinfo` de newlib, `fordblks` es *todo* el espacio
+libre del arena —los huecos de las 128 listas más el trozo de arriba— y
+`arena = uordblks + fordblks`. En las diez muestras, `fordblks` va entre 10 y 47
+MB mientras `uordblks` sube a 1.042. `malloc` ha pedido 1.069 y tiene 1.042
+repartidos: **no hay huecos**. Si esto fuera fragmentación, el hueco sería justo
+lo que crece, y es lo único que no crece.
+
+Y de paso corrige la lectura de aquel «siempre con veinte o treinta megas
+libres». Esos veinte megas no son lo que le queda a la consola: son lo que le
+sobra a `malloc` **dentro de lo que ya ha pedido**. Cuando no le sobra, hace
+`sbrk` y pide más, y le quedaban 2.100 MB por pedir. En el momento de la caída
+el proceso no estaba corto de montón, cosa que §5.64 ya había establecido por
+otro camino.
+
+La segunda es más incómoda: **«monótono» es en parte una propiedad del
+instrumento**. `nx_memoria_latido()` guarda una marca de agua y sólo escribe
+cuando el pico sube un escalón de 32 MB. Esa línea no puede bajar nunca. Que la
+serie sea monótona no demuestra que el montón no baje; demuestra que el registro
+no está preparado para contarlo.
+
+**El reparto, hasta donde llegan los datos.** Las líneas `[tiron]` ya llevan el
+tamaño de los tres alijos del motor, así que se pueden restar:
+
+| t (s) | montón | fondo | img | cad | alijos | **resto** |
+|---:|---:|---:|---:|---:|---:|---:|
+| 15,7 | 366 | 57 | 16 | 0 | 73 | **293** |
+| 20,9 | 696 | 200 | 18 | 0 | 218 | **478** |
+| 96,0 | 889 | 275 | 45 | 3 | 323 | **566** |
+| 199,8 | 1.009 | 315 | 79 | 6 | 400 | **609** |
+| 2.927 | 1.042 | 306 | 87 | 12 | 405 | **637** |
+
+**Casi la mitad de ese gigabyte son los alijos llenándose, que es lo que hace un
+alijo.** De los 676 MB que crece el montón, 332 son el fondo de texturas, el
+alijo de imágenes y el de cadenas. Y no habían terminado: con los presupuestos
+de la b14 —fondo 512 MB, imágenes 192, cadenas 32— el techo *por diseño* eran
+**736 MB de alijo**, y iban por 405. Al montón le quedaban otros 330 MB de
+crecimiento correcto, sin ninguna fuga. La rebaja del fondo de §5.64 baja ese
+techo de diseño a **416 MB** de propina, aunque se hizo por la memoria de vídeo
+y no por esto.
+
+El resto —lo que queda al quitar los alijos— sube de 293 MB antes de cargar
+ningún mapa a 637 tres minutos después, y ahí se aplana: durante los cuarenta y
+tres minutos de consola suspendida y los cuatro de juego posteriores sube 28 MB.
+Eso no tiene forma de fuga por fotograma; tiene forma de conjunto de trabajo que
+se llena. Pero dentro de ese «resto» están, sin poder separarse, las **texturas
+vivas** —el fondo sólo sabe de las que le devuelven, las que el juego tiene en
+uso no las cuenta nadie—, el motor, SDL, Mesa y el intérprete.
+
+**Y una sospecha con mecanismo, no con corazonada.** No hay ningún `RUBY_GC_*`
+puesto en ninguna parte: el recolector corre de fábrica. El problema no sería el
+ajuste, sería la ceguera. El descriptor de tipo de todas las clases del motor se
+genera en `binding-util.h` con **`dsize = 0`**, así que para el recolector un
+`Bitmap` de 512×384 es un objeto de cuarenta bytes; y su memoria no pasa por
+`ruby_xmalloc` sino por `new` y por el driver, así que tampoco incrementa
+`malloc_increase_bytes`, que es el único contador que hace correr al recolector
+por presión de memoria. Si eso es lo que pasa, el juego puede acumular cientos
+de megas de basura recogible sin que Ruby vea motivo para recogerla.
+
+**El instrumento que separa las cuatro cosas.** En `nx/nx_tirones.c`, tres
+líneas cada treinta segundos:
+
+```
+[monton] malloc 1042 MB en uso | 27 libres dentro | 1069 pedidos al sistema | el sistema dice 3185 de 3189 MB
+[monton] reparto: fondo 306 | img 87 | cad 12 | resto 637 MB (texturas vivas + motor + ruby)
+[monton] ruby: 412 recogidas | 45123 slots vivos (1 MB) | 12034 viejos | inc malloc 2 KB
+```
+
+Si `arena` sube y `en uso` no, es fragmentación y sólo fragmentación. Si el
+`resto` se aplana y lo único que sigue subiendo son los tres alijos, no hay
+fuga: hay presupuestos generosos, y el techo del montón pasa a ser una constante
+conocida. Si el `resto` sube linealmente con el tiempo de juego, hay fuga de
+texturas vivas y hace falta un contador de bytes de textura viva, que hoy no
+existe. Y si `inc malloc` se queda en unos pocos KB mientras el montón sube
+cientos de MB, queda demostrada la ceguera del recolector, y el arreglo es
+acotado y no toca el `GC`: declarar el tamaño real de un `Bitmap` en su
+`rb_data_type_t`, o llamar a `rb_gc_adjust_memory_usage()` al crear y destruir
+la textura.
+
+**Va en producción, no en modo diagnóstico**, y la decisión tiene argumento: lo
+que hay que explicar pasa en la consola de un jugador que juega media hora, y
+ningún jugador va a dejar puesto `diagnostico.txt` para eso. El coste es un
+`mallinfo`, una llamada al sistema y cuatro consultas a `GC.stat` cada treinta
+segundos —unas veinte líneas por sesión— contra un fotograma de 16,7 ms.
+`nx_pool_informe()` sí va gobernado por el modo diagnóstico y no es incoherente:
+aquél salta una vez cada 256 peticiones al fondo, que en un fotograma malo son
+varias por segundo. Es otra clase de coste. Por lo mismo el disparo es sólo por
+tiempo y no por escalón: mirar `mallinfo` en cada fotograma es recorrer las 128
+listas de huecos del asignador dentro del cronómetro que ese fichero existe para
+no perturbar.
+
+Ruby se llama desde ahí con **símbolos débiles**, así que la sonda sigue
+enlazando en un binario sin intérprete y se limita a callar esa línea; y sólo se
+pregunta desde `nx_marco()`, al que únicamente se llega por `Graphics::update` y
+`Graphics::wait`, que salen del guion del juego y por tanto del hilo de Ruby.
+
+**No se ha arreglado nada, y es deliberado**: con los datos de hoy no hay una
+causa única que arreglar, hay un reparto que todavía no se puede hacer y una
+mitad que apunta a un diseño funcionando como se pidió. El diagnóstico completo,
+con la tabla entera y las seis hipótesis ordenadas, en
+`docs/consola/20260905-pidgey/monton.md`.
+
+
+### 5.67 Todo lo demás que decían los registros de dos jugadores
+
+Dos personas jugaron de verdad y mandaron sus registros: 280 KB, veinticinco
+sesiones, dos compilaciones distintas (`1.0.0 b14` con los ficheros sueltos y
+`1.1.0 b46` con el contenedor). La caída dura se llevó toda la atención y es
+§5.64. Pero un registro de alguien jugando dice muchas más cosas que aquella
+por la que se pidió, y **nadie había mirado el resto**. Son veinte anomalías
+distintas. El inventario completo, con las cuentas y el porqué de cada
+clasificación, en `docs/consola/barrido-registros.md`; aquí van las cuatro que
+importan.
+
+**Lo primero, y no es la caída: el arranque de 1.1.0 tarda 55 segundos.** Entre
+el hito `10a` y el `10a+` sólo hay un `fileSystem.addPath("anil-datos.zip")`, y
+en las seis sesiones cuesta entre 54,7 y 55,7 s. El mismo tramo sin contenedor
+—`addPath(".")`— son **14 ms**, y el arranque entero de 1.0.0 hasta el
+intérprete, 2,0 s. El contenedor de §5.58 se hizo para que copiar el juego a la
+tarjeta no costase 22.148 entradas de directorio, y para eso funciona; a cambio,
+sin que nadie lo midiera, el arranque se ha vuelto **veinticinco veces más
+lento**.
+
+No es el índice de rutas, que eso es §5.63 y se ve en el propio registro: de
+`10a+` a `10c` van 319 ms. Es el `PHYSFS_mount`. El archivador de zip de PhysFS
+recorre el directorio central entrada por entrada leyéndolo a pellizcos del
+descriptor subyacente, y en esta tarjeta cada pellizco es una IPC de las de
+0,85 ms de §5.48: 55,4 s entre 22.591 entradas son 2,45 ms por entrada, unas
+tres lecturas pequeñas cada una. Cuadra. Y explica por qué no se vio: en el
+emulador esas lecturas van a un fichero ya en la caché del anfitrión. Es el
+patrón de §5.63 un escalón más abajo —en el montaje en vez de en la
+enumeración— y el arreglo es el mismo de siempre, leer de una pasada. **Hecho
+en §5.68**, que además afina la cuenta: no son tres lecturas por entrada sino
+diecinueve llamadas al sistema, 429.229 en total, y con una ventana de 64 KiB se
+quedan en 66.
+
+**Una congelación de dos segundos que es siempre la misma.** Trece fotogramas
+en las veinticinco sesiones, con las dos compilaciones, y la huella no varía ni
+en una unidad: `nue 2941x`, `lim 2965x`, `blt 2985x`, `pool 1621x`, `fondo 1366
+aciertos`. Los mismos 2.941 `Bitmap.new` siempre. No se va en la tarjeta —`io`
+son 48 ms de 2.250—: se va en crear 1.575 texturas de cero a 0,29 ms cada una.
+El coste vive en `texpool.*`, que lo está tocando quien lleva §5.64, así que
+queda apuntado ahí y no aquí.
+
+**La superficie es de 1920×1080 también en portátil.** `nx_pantalla.c` dejaba la
+pregunta planteada por escrito —se anotaban las dos fuentes «porque sin las dos
+en el registro no hay manera de saberlo»— y ya está contestada, con veinticinco
+muestras y sin una sola excepción: `nwindow 1920x1080 | applet 1280x720 | modo
+portatil`. La superficie donde Mesa dibuja **no cambia** al salir de la base;
+Horizon entrega siempre 1080p y escala él. O sea que el juego dibuja 2,25 veces
+los píxeles que el panel enseña, con la GPU a 307 MHz, y el búfer ocupa 2,25
+veces más memoria en un proceso que en estos registros llega a 1,3 GB de montón
+y se muere por no encontrar sitio para una textura. No es un número pequeño en
+el sitio donde menos margen hay. El arreglo —`nwindowSetDimensions` colgado del
+evento de cambio de resolución al que ya estamos suscritos— toca de lleno la
+memoria de vídeo que se está investigando en §5.64, así que se documenta y se
+cede.
+
+**Y el registro se estaba estropeando a sí mismo.** `nx_boot_mark()` escribía el
+sello, el mensaje y el salto de línea en tres `write()` seguidas sobre un
+descriptor por el que escriben a la vez el hilo de dibujo, el de la música y el
+principal. Entre dos de esas tres llamadas cabe otro hilo entero, y el resultado
+son **41 líneas trenzadas y 41 líneas vacías** entre los dos jugadores, un 2,5 %
+del registro: un `[nucleo]` con un `[tiron]` incrustado detrás sin salto de
+línea. No se pierde un byte, pero `resolver-pila.py` y `triaje.py` van línea a
+línea y una línea trenzada no es ninguna de las dos que la componen. Arreglado
+por los dos lados: un `Mutex` de libnx que ordena a los escritores, y la línea
+entera armada en un buffer y soltada de una sola `write()`, para que aunque el
+candado no estuviera lo peor posible sea que dos líneas salgan en otro orden.
+
+De la misma pasada salieron otros dos arreglos pequeños en el mismo sitio. La
+línea `[nucleo] musica:` se repetía **221 veces** —hasta 20 en una sola
+sesión— porque el hilo que rellena los búferes de OpenAL nace y muere con cada
+pista; ahora lleva un tope de tres por nombre, el mismo que `nx_traza_me()`
+tiene desde §5.57 y por el mismo motivo, y el reparto de núcleos se sigue
+haciendo siempre: lo que se calla es contarlo. Y `mkxp-boot.log`, que se abría
+en `O_APPEND` y no se truncaba nunca, iba por 182 KB y 1.636 líneas después de
+diecinueve partidas; ahora, si pasa de 1 MB, se aparta a `mkxp-boot.1.log` y se
+empieza uno nuevo. Una generación y no cero, porque la caída que se quiere
+entender suele ser la de la partida anterior, la que hizo al jugador cerrar y
+volver a abrir.
+
+**Lo que no era nada.** De las veinte, once son ruido normal del motor y
+conviene dejarlo escrito para no volver a investigarlas: el
+`Failed to load libfluidsynth.so` de cada arranque (el `mkxp.json` declara a
+propósito que no hay MIDI), el `WARNING` de versión de Essentials (script del
+juego, cosmético), el aviso de `Dir.exists?` (documentado en `nx-compat.rb`: en
+Ruby 3.1.7 esos métodos existen), el `argc = 0` de tres arranques de hbmenu —que
+es la ruta de reserva funcionando— y dos etiquetas que engañan pero cuyos
+números son buenos: `Data/Scripts.rxdata accesible: false` es la respuesta
+correcta cuando los datos están en el contenedor, y `[cache] readdir: 22.730
+entradas` con contenedor no es un `readdir` sino la suma del índice del zip y
+los ficheros sueltos.
+
+**Y un hueco que no es una línea, sino la falta de ella.** `triaje.py` busca
+líneas `[pila]` y las llama «lo más parecido a *dónde estaba el jugador* que hay
+en los registros». En los 280 KB no hay ninguna: las escribe
+`runtime/diagnostico/nx-gc.rb`, que no va en el `preloadScript` del paquete. La
+herramienta de triaje busca siempre en vano una señal que la compilación
+publicada nunca escribe, y las quince caídas de §5.64 no dicen ni qué mapa, ni
+qué menú, ni qué combate. Hace falta una migaja de pan —una línea al cambiar de
+mapa y al empezar y acabar un combate, cuatro o cinco por sesión— y no una
+sonda; queda propuesta y sin escribir, porque engancharse a las tripas de
+Essentials desde un `preload` es justo la clase de cambio que puede tumbar una
+partida ajena y hay que probarlo antes en el emulador.
+
+### 5.68 Cincuenta y cinco segundos leyendo el índice a pellizcos
+
+El contenedor de §5.58 resolvió lo que se le pidió —copiar el juego a la tarjeta
+dejó de ser 22.148 entradas de directorio— y §5.63 le quitó los treinta y tres
+segundos del índice de rutas. Quedaba la piedra que aquella sección ya dejó
+señalada: **el montaje**. Los registros de un jugador de verdad dicen cuánto
+pesa, y pesa más de lo que nadie había supuesto:
+
+```
+[   919] [boot] 10a miembros construidos (shaders compilados)
+[ 56455] [boot] 10a+ contenedor anil-datos.zip montado
+```
+
+Entre esas dos líneas de `sharedstate.cpp` no hay más que un `fopen`, un
+`fclose` y `fileSystem.addPath("anil-datos.zip")`. **Cincuenta y cinco segundos
+y medio**, y no es una casualidad de una sesión: las seis del jugador «user2»
+dan 54,7 – 55,7 s, y el arranque entero hasta el intérprete 56,0 – 57,1. El
+mismo tramo en la 1.0.0, con las carpetas sueltas, es `addPath(".")` y cuesta
+**14 ms**; aquel arranque entero eran 2,0 – 2,4 s.
+
+O sea que quien instaló la 1.1.0 encima de la 1.0.0 vio el arranque **veinticinco
+veces más lento**, y lo paga otra vez después de cada caída de §5.64.
+
+**Dónde se va, contado y no estimado.** El archivador de zip de PhysFS lee el
+directorio central campo por campo: dieciséis `io->read` de dos y cuatro bytes
+para la cabecera de cada entrada, uno más para el nombre, y un `tell` y un `seek`
+para saltarse los extras y el comentario. Diecinueve llamadas al sistema por
+entrada. Con 22.591 entradas, **429.229**. En Horizon una lectura de fichero no
+es una copia de memoria sino una IPC, y 55,4 s repartidos entre 429.229 salen a
+**0,13 ms cada una**, que es justo lo que cuesta ahí una IPC pequeña. Cuadra sin
+ajustar nada.
+
+Y explica por qué se publicó: en el emulador esas mismas lecturas caen en la
+caché del sistema operativo anfitrión y no cuestan nada. Es la lección de §5.63
+otra vez —el emulador no miente, pero tampoco avisa— un escalón más abajo, en el
+montaje en vez de en la enumeración.
+
+**El arreglo.** PhysFS admite montar desde un `PHYSFS_Io` propio, así que basta
+con que ese `Io` no baje al sistema de ficheros cada vez que le piden cuatro
+bytes. El de `filesystem.cpp` mantiene delante un trozo del fichero: la primera
+lectura pequeña trae 64 KiB y las siguientes miles se sirven de ahí con un
+`memcpy`. El directorio central de `anil-datos.zip` son 2,1 MB contiguos pegados
+al final del archivo y se recorren hacia delante, de modo que las 429.229
+llamadas se quedan en 66. El `tell` y el `seek` dejan además de ser llamadas al
+sistema, porque la posición la lleva el `Io` y sólo se hace `lseek` cuando toca
+leer de verdad.
+
+**Medido en el PC**, con un banco de pruebas que recorre el índice central de un
+zip almacenado de 22.591 entradas exactamente como lo hace `zip_load_entry()` de
+PhysFS 3.2.0, primero contra un `Io` crudo y luego contra el del parche:
+
+```
+entradas             22591
+recorrido valido     si / si   nombres iguales: SI
+sin ventana          read() 384047   lseek() 45183   bytes 2098466   0.425 s
+con ventana 64 KiB   read() 33       lseek() 33      bytes 2098488   0.003 s
+llamadas al sistema  429230 -> 66   (x6503 menos)
+4000 lecturas al azar (hasta 293 KiB, con saltos atras): identicas
+```
+
+Los 0,425 s contra 0,003 son el suelo de un NVMe con la caché caliente y no
+dicen nada de la consola; el número que importa es **429.230 → 66**, y que los
+22.591 nombres salen idénticos por los dos caminos. A los 0,13 ms medidos en la
+tarjeta, esas 66 llamadas son **ocho milisegundos y medio** donde había
+cincuenta y cinco segundos. De los 55,4 s no debería quedar más que traer 2,1 MB
+y el trabajo que PhysFS hace en memoria armando sus 22.591 entradas —que es el
+mismo con ventana y sin ella, y que en §5.63 se midió en 107 ms para una pasada
+comparable—. **La previsión es medio segundo largo de montaje y el arranque
+entero de vuelta a los dos segundos de la 1.0.0.** Falta confirmarlo en la
+consola: es lo primero que hay que mirar en el próximo registro.
+
+**Por qué 64 KiB y no 256.** Para el montaje daría igual —serían ocho lecturas
+en vez de treinta y tres, tres milisegundos de diferencia—. Quien decide es el
+otro uso del `Io`, que dura toda la partida: PhysFS resuelve la cabecera local
+de cada entrada la primera vez que se abre, y eso son unas pocas lecturas
+diminutas en un desplazamiento cualquiera del fichero, donde una ventana grande
+es un impuesto —traer 256 KiB de la tarjeta para leer treinta bytes—. Se elige
+la más pequeña que ya deja el montaje en nada, y de paso es el mismo número que
+§5.55 puso en `PHYSFS_setBuffer` un piso más arriba: un solo tamaño en el fichero
+vale más que afinar el segundo decimal.
+
+Ese piso de arriba manda además en la memoria. PhysFS duplica el `Io` por cada
+fichero abierto, y sobre el duplicado ya hay un búfer de 64 KiB que pide justo
+64 KiB de golpe; una petición tan grande como la ventana no gana nada pasando
+por ella, así que se lee directa al búfer de quien llama y ese duplicado **no
+reserva nunca nada**. La ventana se aparta la primera vez que hace falta y no
+antes, de modo que en la práctica esto cuesta los 64 KiB del `Io` del montaje y
+ni un byte más — que en un proceso que llega a 1,3 GB de montón (§5.64) no es un
+detalle menor.
+
+**Lo que se descartó, y por qué:**
+
+* **`PHYSFS_setBuffer` sobre el mismo `Io`**, que era la vía barata sugerida en
+  el barrido. No sirve: trabaja sobre un `PHYSFS_File` y no sobre un
+  `PHYSFS_Io`, así que exigiría `PHYSFS_mountHandle` —montar `"."` con PhysFS
+  antes que el contenedor y abrirlo a través de él—, que es justo el orden que
+  §5.58 descartó con una medida, y encima el búfer no lo heredarían los
+  descriptores duplicados.
+* **Un archivador propio de PhysFS para zips almacenados.** Sería más rápido
+  todavía, y el índice ya lo sabemos leer de una pasada desde §5.63
+  (`nxIndiceZip`), pero habría que escribir también abrir, leer, buscar, `stat`
+  y enumerar, y un descuido ahí son ficheros que el juego no encuentra. La
+  ventana no cambia ni una línea del archivador de PhysFS: sólo le cambia por
+  dónde lee. Cien líneas se llevan casi todo el premio.
+* **Precalcular el índice al empaquetar.** No quita este coste. El `pathCache`
+  ya se construye así, pero PhysFS necesita además **su** tabla para poder leer
+  del zip, y esa la llena montando. Ahorrarse el montaje entero es el archivador
+  propio del punto anterior, no un fichero de índice.
+
+Todo esto va en `patches/mkxpz-montaje-ventana.patch`, que se aplica después de
+`mkxpz-pathcache-readdir.patch` porque los dos tocan `filesystem.cpp`. Y queda
+una trampa apuntada para quien lo herede: la lectura tiene que devolver lo pedido
+entero o el final del fichero, porque PhysFS envuelve casi todas sus lecturas en
+`__PHYSFS_readAll`, que compara con la longitud pedida y da el archivo por
+corrupto si no cuadra. Devolver de menos porque se acabó la ventana rompería el
+montaje entero, y con un mensaje que no apuntaría aquí.
+
+
+---
+
+### 5.69 Lo que nadie contaba, y dónde estaba el jugador
+
+Los diecisiete volcados de los tres jugadores del 5 y 6 de septiembre dejaban dos
+huecos, y los dos estaban justo donde hacía falta mirar.
+
+**El primero: el término que manda no lo contaba nadie.** El informe del montón
+repartía la memoria así:
+
+```
+[monton] reparto: fondo 306 | img 74 | cad 12 | resto 676 MB (texturas vivas + motor + ruby)
+```
+
+Ese `resto` —entre 557 y 752 MB según el jugador— es lo que crece durante toda la
+partida y de lo que no se sabía nada. La etiqueta era lo único honesto que se
+podía escribir: los tres alijos que sí se miden son los que el motor recicla, y
+las texturas que el juego tiene **abiertas ahora mismo** —cada sprite en
+pantalla, cada tileset, cada retrato, cada cuadro de texto vivo— no pasan por el
+fondo de texturas y por lo tanto no pasaban por ninguna cuenta.
+
+Y ese es el número que explica el caso. El jugador del Pidgey se cayó con el
+fondo en **259 MB**, muy lejos de su techo. Bajar el presupuesto del fondo de 512
+a 192 MB (§5.64) sigue estando bien —el guardián necesita margen para su
+reintento— pero no es lo que llena la GPU. Apagar el fuego del vecino no es un
+error, es que no es el fuego.
+
+Se cuenta en `gl-util.h`, que es el único sitio sin escapatoria: las tres puertas
+por las que pasa toda textura de este motor son `TEX::allocEmpty` —las vacías,
+incluido el guardián de §5.64—, `TEX::uploadImage` —las que se cargan de un PNG,
+que son la mayoría y las gordas— y `TEX::del`, que es el único borrado. La tabla
+va indexada por el nombre de OpenGL, que `glGenTextures` reparte pequeño, denso y
+reciclado: un array plano que crece al doble es exacto y cuesta un
+desplazamiento. La cuenta es en RGBA de cuatro bytes, que es lo que **pide** el
+juego y no lo que nouveau acaba reservando; sirve para compararse consigo misma a
+lo largo de una partida, que es para lo que se puso.
+
+Hay un detalle que no es cosmético: `glTexImage2D` no dice sobre qué textura
+trabaja, trabaja sobre la que esté atada. Para apuntar el gasto en la cuenta
+correcta hay que recordarlo en `TEX::bind`, que es el único sitio donde ese dato
+existe. Y reespecificar una textura que ya existía sustituye lo que hubiera, así
+que hay que descontar lo viejo antes de sumar lo nuevo: pasa de verdad y no poco
+—el guardián reintenta sobre el mismo nombre, y `gpTexFBO` se reespecifica cada
+vez que hace falta más grande— y sin esa resta el contador subiría sin que nadie
+hubiera pedido memoria.
+
+La línea nueva sale cada treinta segundos, al lado de las otras:
+
+```
+[monton] texturas vivas: 612 MB en 1843 | pico 671 MB en 1902
+```
+
+El pico va al lado del valor de ahora porque cuando llega una caída lo que
+importa no es lo que hay, es **lo que llegó a haber**.
+
+**El segundo hueco: de dieciséis de los diecisiete volcados no se sabe dónde
+estaba el jugador.** El del Pidgey se pudo entender porque el jugador lo contó
+por escrito —Ciudad Verde, ruta 1, un Pidgey—; los otros son una dirección de
+memoria y nada más. Y el sitio es la mitad del diagnóstico: lo que agota la
+memoria de vídeo es lo que hay cargado, o sea el mapa y lo que hay encima.
+
+`NX.log()` ya existía, pero escribe en `mkxp-ruby.log`, que es otro fichero y sin
+sello de tiempo. Las líneas que hay que poder leer juntas son el `[exc]` de la
+caída, los `[monton]` y los `[fondo]` de lo que había reservado, y ésta: las tres
+primeras están en `mkxp-boot.log` con milisegundos delante. Así que se añade un
+canal —`NXReg.traza`, un solo método, en `nx/nx_donde.cpp`— y el reportero de
+mapa de `runtime/lib/nx-compat.rb` escribe por ahí:
+
+```
+[ 84412] [donde] mapa 24 Ruta 1 en (18,41)
+```
+
+El volcado se lee entonces de arriba abajo —«estaba aquí, tenía esto reservado, y
+murió»— en vez de tener que casar dos ficheros sin reloj común.
+
+El enganche está en `Graphics.update`, que corre sesenta veces por segundo, así
+que dentro no hay más que leer un entero y compararlo; sólo cuando el mapa cambia
+se arma la cadena. Y si `NXReg` no existe —escritorio, o un motor viejo— el
+módulo se desengancha en la primera pasada y no queda ni la comparación.
+
+**Y tres ficheros que llevaban semanas fuera del control de versiones.**
+Buscando dónde enganchar los contadores apareció el mismo descuido de §5.64 dos
+veces más: `src/` está en `.gitignore`, así que un fichero con un `.orig` al lado
+y sin parche es trabajo que existe únicamente en la copia de una máquina.
+`gl-util.h` llevaba así desde el 31 de agosto —el cronómetro de subida de
+texturas— y `bitmap.cpp` tenía veintitrés trozos sin parchear: los dos alijos de
+superficies ya cocinadas, el pegado diferido de `set_pixel` y todos los
+cronómetros de §5.55. Ahora están en `patches/mkxpz-gl-util.patch` y
+`patches/mkxpz-alijos-bitmap.patch`, y una comprobación de que ningún `.orig` del
+árbol difiere de su fichero sin tener un parche que lo cubra sale limpia.
+
+**Lo que queda por medir.** Con el contador puesto, la siguiente pregunta tiene
+por fin dónde apoyarse: si las texturas vivas suben sin techo durante una partida
+larga, el problema es que algo no se suelta; si se estabilizan alto, el problema
+es el tamaño de lo que se carga —y ahí lo primero a mirar son las tiras de
+animación, que se redondean a potencia de dos en las dos dimensiones—. Hasta el
+próximo registro de un jugador no hay forma de saber cuál de las dos.
 
 ---
 
@@ -3130,21 +3775,34 @@ arranca con los 3.264 MB de montón que Horizon reserva a un juego (§5.47). Los
 | `nx/nx_pantalla.c` | La resolución de verdad de la pantalla (§5.46) |
 | `nx/nx_memoria.c` | Bajo qué envoltorio corre y cuánto montón pide de verdad (§5.53) |
 | `recoger.ps1` | Saca de la SD los registros, las partidas y los informes de Atmosphère (§7) |
-| `nx/nx_tirones.c` | Cronometra cada fotograma y separa el tiempo de tarjeta del de CPU (§5.55) |
+| `nx/nx_tirones.c` | Cronometra cada fotograma y separa el tiempo de tarjeta del de CPU (§5.55); reparte el montón entre alijos, texturas vivas y Ruby cada 30 s (§5.66, §5.69) |
 | `nx/nx_nucleos.c` | Anota en qué núcleo corre cada hilo y ensancha la máscara (§5.56) |
+| `nx/nx_texturas.c` | Cuenta la memoria de vídeo que el juego tiene viva, y su pico (§5.69) |
+| `nx/nx_donde.cpp` | `NXReg.traza`: un script escribe en `mkxp-boot.log`, con sello de tiempo (§5.69) |
 | `nx/nx_audio.c` | Testigo del relevo entre la fanfarria y la música de fondo (§5.57) |
 | `nx/nx_fsprobe.c` | Cronometra el recorrido de la SD con y sin `stat`. Solo corre si existe el testigo `nx-medir-fs` (§5.48) |
 | `nsp/npdm.json` | Manifiesto de la aplicación: ID, permisos, servicios y llamadas (§5.47) |
 | `nsp/nacp-utf8.py` | Arregla el nombre del juego en el NACP, que `nacptool` escribe en Latin-1 (§5.47) |
-| `lib/nx-compat.rb` | `MKXP`, constantes de `Encoding`, `$LOAD_PATH` y redirección de `$stdout`, con `fsync` por línea (§5.52) |
+| `lib/nx-compat.rb` | `MKXP`, constantes de `Encoding`, `$LOAD_PATH` y redirección de `$stdout`, con `fsync` por línea (§5.52); y el reportero de mapa que escribe `[donde]` (§5.69) |
 | `lib/nx-teclado.rb` | Encamina la entrada de texto a la rejilla con cursor: en una consola no hay teclado (§5.50) |
 | `lib/nx-trazas.rb` | Sondas de Ruby: hilos, fotogramas y fps. No se carga en producción |
 | `lib/nx-guardado.rb` | Prueba el camino de guardado de Essentials sobre la SD. Tampoco se carga en producción |
 | `lib/nx-guardar-ya.rb` | Guarda la partida en cuanto existe una, sin pasar por el menú (§5.51) |
 | `lib/nx-combate-ya.rb` | Mete al jugador en un combate salvaje para poder medirlo |
+| `resolver-pila.py` | Convierte las líneas `[exc]` de un registro en nombres de función, con el `.elf` archivado de esa compilación (§5.65) |
+| `triaje.py` | Lee un volcado entero de un jugador y saca el informe: compilación, caídas, fondo, montón y tirones (`TRIAJE.md`) |
 
-Para leer una traza de pila del manejador de excepciones:
+Para leer una traza de pila del manejador de excepciones, si se tiene delante el
+`.elf` de esa misma compilación:
 
 ```sh
 aarch64-none-elf-addr2line -f -C -e pokemon-anil.elf +0x669068
+```
+
+Y si el registro es de un jugador —o sea, de una compilación publicada que ya no
+está en el árbol—, la pila entera de una vez, buscando el `.elf` en
+`release/simbolos/` y degradando al desensamblado en crudo si no lo hay (§5.65):
+
+```sh
+python resolver-pila.py docs/consola/20260905-pidgey/mkxp-boot.log
 ```

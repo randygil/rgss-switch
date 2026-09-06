@@ -1,0 +1,372 @@
+El contenedor, montado por una ventana de lectura.
+
+EL DEFECTO. La 1.1.0 tarda cincuenta y cinco segundos en arrancar, y los tarda
+enteros en una sola linea. Seis arranques seguidos de un jugador de verdad, en
+su consola:
+
+  [   919] [boot] 10a miembros construidos (shaders compilados)
+  [ 56455] [boot] 10a+ contenedor anil-datos.zip montado
+
+Entre esas dos lineas de sharedstate.cpp no hay mas que un fopen, un fclose y el
+fileSystem.addPath("anil-datos.zip") que se parchea aqui. Las seis sesiones dan
+54,7 - 55,7 s, y hasta el interprete 56,0 - 57,1. El mismo tramo en la 1.0.0,
+que llevaba los recursos en carpetas sueltas, es addPath(".") y cuesta 14 ms;
+su arranque entero eran 2,0 - 2,4 s. Es una regresion de veinticinco veces que
+el jugador paga en cada arranque, y otra vez despues de cada caida.
+
+LA CAUSA. El archivador de zip de PhysFS lee el indice central campo por campo:
+dieciseis io->read de dos y cuatro bytes para la cabecera de cada entrada, uno
+mas para el nombre, y un tell y un seek para saltarse extras y comentario.
+Diecinueve llamadas al sistema por entrada, y con 22.591 entradas, 429.229.
+En Horizon una lectura de fichero no es una copia de memoria sino una IPC:
+55,4 s entre 429.229 salen a 0,13 ms cada una, que es lo que cuesta ahi una IPC
+pequena. Cuadra sin ajustar nada. Y en el emulador no se ve, porque alli esas
+lecturas caen en la cache del anfitrion: es la leccion de README 5.63 otra vez,
+un escalon mas abajo.
+
+EL ARREGLO. Montar por un PHYSFS_Io propio que mantenga delante un trozo del
+fichero: la primera lectura pequena trae 64 KiB y las siguientes miles se sirven
+con un memcpy. El indice central son 2,1 MB contiguos pegados al final del
+archivo y se recorren hacia delante, asi que las 429.229 llamadas se quedan en
+66. El tell y el seek dejan ademas de ser llamadas al sistema, porque la
+posicion la lleva el Io.
+
+MEDIDO, no estimado. Un banco de pruebas en el PC recorre el indice central de
+un zip almacenado de 22.591 entradas exactamente como lo hace zip_load_entry()
+de PhysFS 3.2.0, primero contra un Io crudo y luego contra el de este parche:
+
+  entradas             22591
+  recorrido valido     si / si   nombres iguales: SI
+  sin ventana          read() 384047   lseek() 45183   bytes 2098466   0.425 s
+  con ventana 64 KiB   read() 33      lseek() 33      bytes 2098488   0.003 s
+  llamadas al sistema  429230 -> 66   (x6503 menos)
+  4000 lecturas al azar (hasta 293 KiB, con saltos atras): identicas
+
+Los 0,425 s contra 0,003 son el suelo de un NVMe con la cache caliente, no la
+consola; el numero que importa es 429.230 -> 66. A los 0,13 ms medidos en la
+tarjeta, eso son ocho milisegundos y medio de llamadas al sistema donde habia
+cincuenta y cinco segundos. Lo que quede del montaje sera traer 2,1 MB y el
+trabajo que PhysFS hace en memoria armando sus entradas, que es el mismo con
+ventana y sin ella: se espera medio segundo largo, y el arranque entero de
+vuelta a los dos segundos de la 1.0.0. Falta confirmarlo en la consola.
+
+POR QUE 64 KiB. Para el montaje daria igual -con 256 KiB serian ocho lecturas
+en vez de treinta y tres, tres milisegundos de diferencia-. Quien decide es el
+otro uso del Io, que dura toda la partida: PhysFS resuelve la cabecera local de
+cada entrada la primera vez que se abre, y eso son unas pocas lecturas diminutas
+en un desplazamiento cualquiera, donde una ventana grande es un impuesto. Se
+elige la mas pequena que ya deja el montaje en nada, y ademas es el mismo numero
+que README 5.55 puso en PHYSFS_setBuffer un piso mas arriba.
+
+LO QUE NO SE HACE:
+
+  - PHYSFS_setBuffer no vale: trabaja sobre un PHYSFS_File y no sobre un
+    PHYSFS_Io, asi que exigiria PHYSFS_mountHandle, o sea montar "." antes que
+    el contenedor -justo el orden que README 5.58 descarto con una medida- y
+    ademas el buffer no lo heredarian los descriptores duplicados.
+
+  - Un archivador propio para zips almacenados seria mas rapido todavia, y el
+    indice ya lo sabemos leer de una pasada (nxIndiceZip, README 5.63), pero
+    habria que escribir tambien abrir, leer, buscar, stat y enumerar, y un
+    descuido ahi son ficheros que el juego no encuentra. La ventana no cambia
+    ni una linea del archivador de PhysFS: solo le cambia por donde lee.
+
+  - Precalcular el indice al empaquetar no quita este coste. El pathCache ya se
+    construye asi, pero PhysFS necesita ademas SU tabla para poder leer del zip,
+    y esa la llena montando.
+
+CUIDADO CON DOS COSAS, por si alguien lo toca:
+
+  - La lectura tiene que devolver lo pedido entero, o el final del fichero.
+    PhysFS envuelve casi todas sus lecturas en __PHYSFS_readAll, que compara con
+    la longitud pedida y da el archivo por corrupto si no cuadra: devolver de
+    menos porque se acabo la ventana romperia el montaje.
+
+  - Si PHYSFS_mountIo falla, el Io sigue siendo nuestro y hay que destruirlo.
+    PhysFS solo se hace cargo de el cuando devuelve exito.
+
+Un directorio no pasa por aqui: PHYSFS_Io no sabe recorrer carpetas, y para el
+"." de al lado sigue mandando PHYSFS_mount.
+
+Se aplica DESPUES de mkxpz-pathcache-readdir.patch, que toca el mismo fichero.
+Ver README 5.68.
+
+--- a/src/filesystem/filesystem.cpp
++++ b/src/filesystem/filesystem.cpp
+@@ -137,6 +137,241 @@
+ extern "C" void nx_io_abre(void);
+ #endif
+ 
++#ifdef __SWITCH__
++#include <fcntl.h>
++#include <unistd.h>
++#include <sys/stat.h>
++#include <stdlib.h>
++
++/* ---------------------------------------------------------------------------
++ * El contenedor, montado por una ventana de lectura.
++ *
++ * Medido en la consola de un jugador, seis arranques seguidos de la 1.1.0:
++ *
++ *   [   919] [boot] 10a miembros construidos (shaders compilados)
++ *   [ 56455] [boot] 10a+ contenedor anil-datos.zip montado
++ *
++ * Cincuenta y cinco segundos y medio, y entre esas dos lineas no hay mas que un
++ * fopen, un fclose y el addPath de aqui abajo. El mismo tramo con las carpetas
++ * sueltas de la 1.0.0 son 14 ms, asi que no es una lentitud: es una regresion de
++ * veinticinco veces que el jugador paga en cada arranque.
++ *
++ * Donde se va. El archivador de zip de PhysFS lee el indice central campo por
++ * campo: por cada entrada, dieciseis llamadas io->read de dos y cuatro bytes
++ * para la cabecera, una mas para el nombre, y un tell y un seek para saltarse
++ * los extras. Diecinueve llamadas al sistema por entrada, y con 22.591 entradas
++ * 429.229 -contadas, no estimadas: un banco de pruebas en el PC recorre el
++ * indice como lo hace zip_load_entry() y sale ese numero clavado-. En Horizon
++ * una lectura de fichero no es una copia de memoria sino una IPC, y 55,4 s
++ * repartidos entre 429.229 salen a 0,13 ms cada una, que es exactamente lo que
++ * cuesta ahi una IPC pequena. Cuadra sin ajustar nada.
++ *
++ * Y explica por que no se vio antes: en el emulador esas mismas lecturas caen en
++ * la cache del sistema operativo anfitrion y no cuestan nada. Es §5.63 otra vez
++ * -el emulador no miente, pero tampoco avisa- un escalon mas abajo.
++ *
++ * Lo que se hace. PhysFS admite montar desde un PHYSFS_Io propio, y basta con
++ * que ese Io no baje al sistema de ficheros cada vez que le piden cuatro bytes.
++ * Este mantiene delante un trozo del fichero: la primera lectura pequena trae
++ * 64 KiB y las siguientes miles se sirven de ahi con un memcpy. El indice
++ * central de anil-datos.zip son 2,1 MB contiguos pegados al final del archivo y
++ * se recorren hacia delante, asi que las 429.229 llamadas se quedan en 66: 33
++ * lecturas de 64 KiB y sus 33 lseek. El tell y el seek dejan ademas de ser
++ * llamadas al sistema, porque la posicion la llevamos nosotros y solo se hace
++ * lseek cuando toca leer de verdad. A los 0,13 ms medidos, esas 66 llamadas son
++ * ocho milisegundos y medio: de los 55,4 s no queda mas que traer 2,1 MB de la
++ * tarjeta y el trabajo que PhysFS hace en memoria armando sus 22.591 entradas,
++ * que es el mismo con ventana y sin ella. Medio segundo largo, no un minuto.
++ *
++ * Por que 64 KiB y no mas. Para el montaje daria igual: con 256 KiB serian ocho
++ * lecturas en vez de treinta y tres, y esa diferencia son tres milisegundos de
++ * los cincuenta y cinco mil que se quieren quitar. Quien decide es el otro uso
++ * del Io, que dura toda la partida: PhysFS resuelve la cabecera local de cada
++ * entrada la primera vez que se abre, y eso son unas pocas lecturas diminutas en
++ * un desplazamiento cualquiera del fichero. Ahi una ventana grande es un
++ * impuesto -traer 256 KiB de la tarjeta para leer treinta bytes-, asi que se
++ * elige la mas pequena que ya deja el montaje en nada. Ademas es el mismo numero
++ * que §5.55 puso en PHYSFS_setBuffer un piso mas arriba, y tener un solo tamano
++ * en el fichero vale mas que afinar el segundo decimal.
++ *
++ * Lo que no se hace, y por que:
++ *
++ *   - PHYSFS_setBuffer no sirve aqui. Trabaja sobre un PHYSFS_File, no sobre un
++ *     PHYSFS_Io, asi que solo se podria usar por PHYSFS_mountHandle: montar
++ *     antes "." con PhysFS, abrir el contenedor a traves de PhysFS y montarlo
++ *     desde ese descriptor. Eso obliga a poner el directorio delante del
++ *     contenedor, que es justo el orden que §5.58 descarto con una medida, y el
++ *     buffer no lo heredarian los descriptores duplicados. Mas piezas y peor
++ *     resultado.
++ *
++ *   - Un archivador propio para zips almacenados seria mas rapido todavia -el
++ *     indice ya lo sabemos leer de una pasada, nxIndiceZip esta cien lineas mas
++ *     abajo- pero hay que escribir tambien abrir, leer, buscar, stat y enumerar,
++ *     y cualquier descuido ahi se paga en ficheros que el juego no encuentra.
++ *     La ventana no cambia ni una linea del archivador de PhysFS: solo le cambia
++ *     por donde lee. Con cien lineas se lleva casi todo el premio.
++ *
++ *   - Precalcular el indice al empaquetar tampoco quita este coste. El pathCache
++ *     ya se construye asi desde §5.63, pero PhysFS necesita ademas SU tabla para
++ *     poder leer del zip, y esa la llena montando. Ahorrar el montaje entero es
++ *     el archivador propio del punto anterior, no un fichero de indice.
++ *
++ * El tamano de la ventana se reserva la primera vez que hace falta y no antes:
++ * PhysFS duplica el Io por cada fichero abierto, y sobre ese duplicado ya hay un
++ * PHYSFS_setBuffer de 64 KiB (§5.55) que pide justo 64 KiB de golpe. Una
++ * peticion tan grande como la ventana no gana nada pasando por ella, asi que se
++ * lee directa al buffer de quien llama y ese duplicado no reserva nunca nada.
++ * En memoria esto cuesta, en la practica, los 64 KiB del Io del montaje.
++ */
++
++enum { NX_VENTANA = 64 * 1024 };
++
++struct NxIoVentana {
++  std::string ruta;
++  int fd;
++  PHYSFS_sint64 pos;    /* donde cree PhysFS que esta el fichero */
++  PHYSFS_sint64 tam;
++  PHYSFS_sint64 base;   /* desplazamiento del primer byte de la ventana */
++  PHYSFS_sint64 llenos; /* bytes validos que hay en ella */
++  unsigned char *buf;
++
++  NxIoVentana(const char *r)
++      : ruta(r), fd(-1), pos(0), tam(0), base(0), llenos(0), buf(0) {}
++
++  ~NxIoVentana() {
++    if (fd >= 0)
++      close(fd);
++    free(buf);
++  }
++};
++
++static PHYSFS_Io *nxCrearIoVentana(const char *ruta);
++
++static inline NxIoVentana *nxVentana(PHYSFS_Io *io) {
++  return static_cast<NxIoVentana *>(io->opaque);
++}
++
++/* Lee entero o hasta el final del fichero. Devolver menos de lo pedido teniendo
++ * mas por delante no es una opcion: PhysFS envuelve casi todas sus lecturas en
++ * __PHYSFS_readAll, que compara con la longitud pedida y da el archivo por
++ * corrupto si no cuadra. */
++static PHYSFS_sint64 nxIoVentanaRead(struct PHYSFS_Io *io, void *destino,
++                                     PHYSFS_uint64 len) {
++  NxIoVentana *v = nxVentana(io);
++  unsigned char *salida = static_cast<unsigned char *>(destino);
++  PHYSFS_uint64 hechos = 0;
++
++  while (hechos < len) {
++    PHYSFS_uint64 falta = len - hechos;
++
++    /* Lo que ya esta delante se copia y no cuesta nada. */
++    if (v->buf && v->pos >= v->base && v->pos < v->base + v->llenos) {
++      PHYSFS_uint64 hay = (PHYSFS_uint64)(v->base + v->llenos - v->pos);
++      PHYSFS_uint64 cuanto = (falta < hay) ? falta : hay;
++
++      memcpy(salida + hechos, v->buf + (v->pos - v->base), (size_t)cuanto);
++      v->pos += (PHYSFS_sint64)cuanto;
++      hechos += cuanto;
++      continue;
++    }
++
++    if (lseek(v->fd, (off_t)v->pos, SEEK_SET) != (off_t)v->pos)
++      break;
++
++    /* Una peticion tan grande como la ventana, o mas, va directa: pasarla por el
++     * trozo solo anadiria una copia y una lectura de relleno. */
++    if (falta >= (PHYSFS_uint64)NX_VENTANA || (!v->buf && !(v->buf = (unsigned char *)malloc(NX_VENTANA)))) {
++      ssize_t n = read(v->fd, salida + hechos, (size_t)falta);
++      if (n <= 0)
++        break;
++      v->pos += (PHYSFS_sint64)n;
++      hechos += (PHYSFS_uint64)n;
++      continue;
++    }
++
++    {
++      ssize_t n = read(v->fd, v->buf, NX_VENTANA);
++      if (n <= 0)
++        break;
++      v->base = v->pos;
++      v->llenos = (PHYSFS_sint64)n;
++    }
++  }
++
++  return (PHYSFS_sint64)hechos;
++}
++
++/* Buscar y decir donde estamos son cuentas, no llamadas al sistema. El lseek de
++ * verdad lo hace la lectura, y solo si no le vale lo que ya tiene delante. */
++static int nxIoVentanaSeek(struct PHYSFS_Io *io, PHYSFS_uint64 offset) {
++  nxVentana(io)->pos = (PHYSFS_sint64)offset;
++  return 1;
++}
++
++static PHYSFS_sint64 nxIoVentanaTell(struct PHYSFS_Io *io) {
++  return nxVentana(io)->pos;
++}
++
++static PHYSFS_sint64 nxIoVentanaLength(struct PHYSFS_Io *io) {
++  return nxVentana(io)->tam;
++}
++
++/* PhysFS duplica el Io por cada fichero que se abre del contenedor, y cada copia
++ * necesita su propio descriptor para poder moverse por su cuenta. La ventana no
++ * se copia: la nueva empieza vacia y, si solo la usan para lecturas grandes, no
++ * llega a reservarse. */
++static struct PHYSFS_Io *nxIoVentanaDuplicate(struct PHYSFS_Io *io) {
++  NxIoVentana *v = nxVentana(io);
++  PHYSFS_Io *copia = nxCrearIoVentana(v->ruta.c_str());
++
++  if (copia)
++    nxVentana(copia)->pos = v->pos;
++
++  return copia;
++}
++
++static void nxIoVentanaDestroy(struct PHYSFS_Io *io) {
++  delete nxVentana(io);
++  delete io;
++}
++
++static PHYSFS_Io nxIoVentanaPlantilla = {0,
++                                         0, /* version, opaque */
++                                         nxIoVentanaRead,
++                                         0, /* write */
++                                         nxIoVentanaSeek,
++                                         nxIoVentanaTell,
++                                         nxIoVentanaLength,
++                                         nxIoVentanaDuplicate,
++                                         0, /* flush */
++                                         nxIoVentanaDestroy};
++
++/* Devuelve 0 para lo que no sea un fichero normal, y eso incluye el ".". Un
++ * directorio lo monta PhysFS con su propio codigo, que no lee por ningun Io. */
++static PHYSFS_Io *nxCrearIoVentana(const char *ruta) {
++  struct stat st;
++  int fd = open(ruta, O_RDONLY);
++
++  if (fd < 0)
++    return 0;
++
++  if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
++    close(fd);
++    return 0;
++  }
++
++  NxIoVentana *v = new NxIoVentana(ruta);
++  v->fd = fd;
++  v->tam = (PHYSFS_sint64)st.st_size;
++
++  PHYSFS_Io *io = new PHYSFS_Io;
++  *io = nxIoVentanaPlantilla;
++  io->opaque = v;
++
++  return io;
++}
++#endif
++
+ static inline PHYSFS_File *sdlPHYS(SDL_RWops *ops) {
+   return static_cast<PHYSFS_File *>(ops->hidden.unknown.data1);
+ }
+@@ -362,8 +597,32 @@
+ }
+ 
+ void FileSystem::addPath(const char *path, const char *mountpoint, bool reload) {
+-  /* Try the normal mount first */
+-    int state = PHYSFS_mount(path, mountpoint, 1);
++    int state = 0;
++
++#ifdef __SWITCH__
++  /* Un archivo se monta por la ventana de lectura de arriba: es la diferencia
++   * entre los 55,5 s que costaba montar anil-datos.zip en la consola y unos
++   * pocos cientos de milisegundos. Un directorio no pasa por aqui -PHYSFS_Io no
++   * sabe recorrer carpetas- y para el sigue mandando PHYSFS_mount.
++   *
++   * Si el montaje falla, el Io sigue siendo nuestro y hay que destruirlo: PhysFS
++   * solo se hace cargo de el cuando devuelve exito. Y despues se prueba el
++   * camino de siempre, porque un fallo aqui puede ser simplemente que ningun
++   * archivador reconozca el fichero. */
++  PHYSFS_Io *nxIo = nxCrearIoVentana(path);
++
++  if (nxIo) {
++    state = PHYSFS_mountIo(nxIo, path, mountpoint, 1);
++
++    if (!state)
++      nxIo->destroy(nxIo);
++  }
++#endif
++
++  /* El camino de siempre: los directorios, y cualquier fichero que la ventana no
++   * haya podido abrir. Antes esta era la primera linea del metodo. */
++  if (!state)
++    state = PHYSFS_mount(path, mountpoint, 1);
+   if (!state) {
+     /* If it didn't work, try mounting via a wrapped
+      * SDL_RWops */

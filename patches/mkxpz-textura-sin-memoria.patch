@@ -39,9 +39,205 @@ Dos cambios, y el segundo explica por que se llego ahi.
 De paso, el registro de tirones cuenta ahora cuantas texturas hay guardadas y no
 solo cuantos megas: ese es el numero que habria visto venir el desbordamiento.
 
+Y como se comprueba, que fue la parte dificil.
+
+El desbordamiento pide 65.536 texturas guardadas a la vez, y eso en Ryujinx no
+se puede tener: cada FBO pasa por la Mesa del invitado y por la GPU emulada, y
+el ritmo se derrumba de 10.000 texturas por segundo a menos de 4.000 antes de
+llegar a diez mil. Asi que se reproduce a escala, con dos interruptores al
+principio de este fichero: NX_FONDO_MAQUETA baja el presupuesto a 2 MB y
+NX_FONDO_8BITS estrecha el contador a 8 bits. 256 texturas de 8 KB son 2 MB, la
+misma relacion exacta que 65.536 y 512 MB, por el mismo camino y en la misma
+linea. Con runtime/diagnostico/nx-fondo-desborde.rb como sonda:
+
+  8 bits    ... | 1537 KB |  58 texturas contadas | 314 en cola
+            ... | 18376 KB |  1 texturas contadas | 257 en cola
+            ... | 76237 KB |  1 texturas contadas | 257 en cola
+
+  32 bits   maximo del fondo 2042 KB; contador y cola coinciden SIEMPRE
+
+314 en la cola y 58 contadas: 314 menos 256. A partir de ahi el desalojo se
+rinde en cuanto su contador llega a cero, quedandose 257 texturas sin mirar, y
+el fondo pasa de 2 MB de presupuesto a 76 MB. Treinta y siete veces el techo.
+
+De paso, nx_pool_reales() y el informe periodico [fondo] de nx_tirones.c, que
+solo se escribe con diagnostico.txt puesto. La linea [tiron] llevaba ya el
+numero de texturas, pero solo se escribe cuando hay un tiron, y esto no da
+ninguno: el juego va fluido hasta que el driver dice que no. Dos numeros al
+lado, el contado y el real, y el desajuste se lee de un vistazo.
+
+3. El presupuesto inicial del fondo baja de 512 MB y deja de ser una constante.
+
+   El 5 de septiembre llegaron los registros de un segundo jugador con la misma
+   firma -far=0xe, x20=0, el cuadro de texto de un Pidgey- y con un dato que
+   corrige la cuenta: el fondo se mantuvo entre 250 y 330 MB las dos sesiones,
+   sin crecer sin techo. Ahi el contador de 16 bits no estaba implicado. La
+   memoria de video se agoto con un fondo de tamano legitimo, o sea que el techo
+   real esta por debajo de los 512 MB que el presupuesto suponia.
+
+   Y no es el monton lo que se acabo: en el momento de la caida iba por 1.042 MB
+   de 3.166 y quedaban dos gigas sin repartir. Lo que se acabo es lo que el
+   driver puede tener mapeado a la vez para la GPU, que no se puede preguntar
+   desde el proceso. Asi que el numero se mide, no se deduce, y lo unico medido
+   es la banda en la que rompio.
+
+   Techo 192 MB: una cuarta parte por debajo del borde bajo de esa banda.
+   Partir 512 por la mitad no basta -es lo que hace el guardian al primer
+   choque, y 256 cae dentro de la banda-. Y bajar mas de 192 cuesta: con 256 el
+   fondo se quedaba clavado en su presupuesto y cada tira de animacion nueva
+   entraba creando y salia borrando contra el driver, "pool 237x 429 ms" en un
+   fotograma.
+
+   Y dinamico, porque el mismo binario recibe presupuestos muy distintos: 3,2 GB
+   como aplicacion o como NRO suplantando un titulo, unos 448 MB como applet de
+   biblioteca (README 5.53). Se pide un octavo del monton -leido en
+   fake_heap_start/fake_heap_end, los simbolos que __libnx_initheap deja en
+   newlib- acotado entre 64 y 192 MB. En la consola manda el techo; en un applet
+   manda el suelo. El registro de arranque lo dice ahora en una linea, para que
+   el proximo informe de un jugador no obligue a adivinar:
+
+     [fondo] presupuesto inicial 192 MB (monton 3166 MB, un octavo acotado
+             entre 64 y 192 MB)
+
+   192 MB es provisional. Quien de verdad estrecha el sitio es el monton de
+   Ruby, que en esa partida subio a 1.042 MB en diez minutos de juego sin que se
+   sepa aun por que; cuando eso se arregle, este numero podra volver a subir.
+
+4. Las medidas se comprueban antes de tocar el fondo, y el cero se rechaza.
+
+   Una auditoria del guardian encontro un camino que el guardian no puede ver.
+   Una textura de ancho o alto cero es legal en OpenGL: glTexImage2D la acepta y
+   no deja ningun error. Pero Mesa no le reserva recurso, porque no hay nada que
+   reservar, y colgar de un FBO una textura sin recurso es exactamente el nulo
+   de §5.64: el mismo far=0xe, el mismo x20=0, la misma linea de
+   st_render_texture. El guardian pregunta a glGetError() y glGetError() dice
+   que todo va bien.
+
+   Asi que el cero se rechaza en la puerta de request(), que es el unico sitio
+   donde se puede rechazar. Y de paso sube ahi arriba la comprobacion del techo
+   del hardware, que estaba despues de buscar en el fondo: `Size` es un par de
+   uint16_t y la conversion es silenciosa, asi que un ancho de 65.600 se
+   convertia en 64 y la peticion se atendia con una textura del tamano
+   equivocado antes de que nadie se quejara.
+
+5. El suelo de 64 MB se mira sobre la mitad, no sobre el valor actual.
+
+   Cuando el guardian salva una peticion a la segunda, parte el presupuesto del
+   fondo por la mitad. La condicion era "si el presupuesto es mayor que 64 MB,
+   partelo", y con eso un fondo de 96 MB pasaba la prueba y se quedaba en 48:
+   por debajo del suelo que nxPresupuestoFondo() se habia molestado en poner.
+   Con el presupuesto inicial de 192 MB la secuencia era 192, 96, 48. Ahora es
+   192, 96, y ahi se para.
+
+Y texpool.h entra por fin en este parche. El presupuesto por omision de la
+consola y toda la prosa que explica de donde salio vivian solo en el arbol de
+trabajo, que esta en .gitignore: sin .orig al lado y sin parche que los
+recogiera, se perdian en la siguiente copia limpia.
+
+6. El guardian sale de TexPool y lo usan todos los que reservan una textura.
+
+   Una auditoria adversarial del 6 de septiembre -docs/consola/auditoria-guardian.md-
+   busco todas las puertas por las que este motor cuelga una textura de un FBO.
+   TexPool::request es UNA. Habia cinco mas, y por una de ellas se cayeron los
+   dos jugadores.
+
+   La peor es la reespecificacion sobre un FBO vivo. WindowPrivate::redrawBaseTex
+   hace TEX::allocEmpty sobre la textura que YA es el color attachment de
+   baseTex.fbo y cinco lineas mas abajo hace FBO::bind sobre ese mismo FBO. Si
+   la reserva no cabe, la textura se queda como nombre sin recurso,
+   GL_OUT_OF_MEMORY se queda en la cola sin que nadie la lea, y el nulo no salta
+   al reservar: salta al validar el framebuffer, en la misma st_render_texture,
+   con el mismo far=0xe y el mismo x20=0. Y redrawBaseTex es el repintado de la
+   ventana de mensaje: es exactamente lo que estaban haciendo el jugador del
+   Pidgey y el del Nuzlocke. Lo mismo pasa en SharedState::gpTexFBO,
+   PingPong::resize y Graphics::resizeScreen.
+
+   La segunda es el atlas de tiles, SharedState::requestAtlasTex: la textura mas
+   grande que el juego pide jamas -TileAtlas::minSize devuelve varios
+   megabytes-, creada a pelo sin pasar por el fondo ni por el guardian.
+
+   Asi que el guardian sale a nxReservaTextura() / nxReservaTexturaFBO(), en
+   texpool.h y texpool.cpp, y lo usan las once reservas del motor. El contrato
+   es una frase: AL VOLVER, LA TEXTURA TIENE RECURSO DETRAS. Si no cabia la que
+   se pedia, se reserva una de 1x1 -cuatro bytes, que caben aunque no quepa nada
+   mas- para que el FBO del que cuelgue siga completo y la validacion no
+   encuentre el nulo. Se devuelve el error de GL para que quien llamo decida.
+
+   Y no lanza, salvo en TexPool::request. Todas las demas llamadas estan en el
+   camino de dibujo -en la senal prepareDraw o dentro del compuesto- y
+   desenrollar la pila desde ahi deja las pilas de glState a medio empujar, que
+   es cambiar una muerte por un dibujado corrupto. request() si lanza, porque se
+   le llama desde constructores que el enlace de Ruby ya envuelve.
+
+7. release() seguido de request() sin limpiar la copia local.
+
+   Este es el que muerde de vuelta. Window::ensureBaseTexReady hacia:
+
+     shState->texPool().release(baseTex);
+     baseTex = shState->texPool().request(newW, newH);
+
+   release() mete baseTex en el fondo y la copia local sigue nombrando esos
+   identificadores. Mientras request() no podia fallar daba igual, porque la
+   linea siguiente la pisaba. Desde el guardian request() SI lanza, y cuando
+   lanza ya ha soltado el fondo entero, o sea que ha destruido esa textura.
+   baseTex queda nombrando una textura borrada y ~WindowPrivate la vuelve a
+   meter en el fondo; la siguiente peticion de ese tamano la entrega como
+   acierto, glBindTexture sobre un nombre borrado crea un objeto sin
+   almacenamiento, y colgarlo de un FBO es otra vez §5.64. El guardian
+   fabricando el fallo que existe para evitar.
+
+   WindowVXPrivate::updateBaseTexSize ya lo hacia bien -release, clear, pedir-,
+   asi que el patron correcto se conocia. Se cierra en Window y en Tilemap, que
+   tenia la misma forma con el atlas (releaseAtlasTex seguido de
+   requestAtlasTex), y de propina releaseAtlasTex se defiende sola: si le
+   entregan el atlas que ya tiene aparcado, no hace nada, en vez de destruirlo y
+   guardarlo destruido para el proximo mapa del mismo tamano.
+
+Sobre las lineas base de este parche. texpool.cpp, texpool.h, window.cpp y
+tilemap.cpp se diferencian contra su .orig de upstream. graphics.cpp y
+sharedstate.cpp ya los tocan otros dos parches -mkxpz-latido-por-segundo y
+mkxpz-sharedstate-trazas-, asi que aqui van solo los trozos de §5.64, medidos
+contra .antes-rutas: el fichero tal y como quedaba despues de aplicar los otros
+dos. Se aplican en ese orden.
+
 --- display/gl/texpool.cpp.orig	2026-09-04 00:35:04.816203200 -0400
-+++ display/gl/texpool.cpp	2026-09-04 00:36:42.644894900 -0400
-@@ -59,14 +59,27 @@
++++ display/gl/texpool.cpp	2026-09-06 01:04:49.841557400 -0400
+@@ -51,6 +51,34 @@
+ 
+ typedef std::list<CacheNode> CNodeList;
+ 
++/* ---------------------------------------------------------------- maqueta
++ *
++ * El desbordamiento del contador de objetos ocurre en 65.536 texturas, que con
++ * el presupuesto de 512 MB son exactamente 512 MB en cajas de texto de 64x32.
++ * Reproducirlo tal cual exige tener 65.536 texturas vivas a la vez, y eso en el
++ * emulador no se puede: cada FBO pasa por la Mesa del invitado y por la GPU
++ * emulada, y el ritmo se derrumba de 10.000 por segundo a menos de 4.000 antes
++ * de las diez mil.
++ *
++ * Asi que se reproduce a escala. Con el contador de 8 bits y el presupuesto
++ * dividido por el mismo factor -256 texturas de 8 KB son 2 MB-, la relacion es
++ * identica: el contador se desborda justo cuando el fondo llega a su
++ * presupuesto, por el mismo camino y en la misma linea de codigo. Lo que se ve
++ * en la maqueta es lo que pasa en la consola, 256 veces antes.
++ *
++ * Dos interruptores, para poder separar la causa del efecto:
++ *
++ *   NX_FONDO_MAQUETA   baja el presupuesto a 2 MB. Es la escala.
++ *   NX_FONDO_8BITS     estrecha el contador a 8 bits. Es el fallo.
++ *
++ * Con el primero solo, el fondo se queda clavado en su presupuesto y los dos
++ * numeros del registro coinciden siempre: ese es el control. Con los dos, el
++ * contador se da la vuelta, el desalojo se rinde y el fondo crece sin techo.
++ *
++ * Los dos a 0 para compilar el motor de verdad. */
++#define NX_FONDO_MAQUETA 0
++#define NX_FONDO_8BITS   0
++
+ struct TexPoolPrivate
+ {
+ 	/* Contains all cached TexFBOs, grouped by size */
+@@ -59,14 +87,31 @@
  	/* Contains all cached TexFBOs, sorted by release time */
  	std::list<TEXFBO> priorityQueue;
  
@@ -68,11 +264,131 @@ solo cuantos megas: ese es el numero que habria visto venir el desbordamiento.
 +	 * clavados, justo el limite. Al dar la vuelta a cero, el bucle de desalojo de
 +	 * release() sale por el `if (objCount == 0) break;` sin haber borrado nada y
 +	 * el fondo crece ya sin techo. */
++#if defined(__SWITCH__) && NX_FONDO_8BITS
++	uint8_t objCount;          /* la maqueta: se da la vuelta en 256 */
++#else
 +	uint32_t objCount;
++#endif
  
  	/* Has this pool been disabled? */
  	bool disabled;
-@@ -108,7 +121,35 @@
+@@ -79,9 +124,115 @@
+ 	{}
+ };
+ 
++#ifdef __SWITCH__
++/* El fondo es uno solo y vive lo que vive el proceso. Se guarda aqui para que
++ * el registro pueda preguntar cuantas texturas hay GUARDADAS DE VERDAD, y no
++ * solo cuantas dice el contador. Si los dos numeros dejan de coincidir, el
++ * contador se ha dado la vuelta y el desalojo ya no desaloja. */
++static TexPoolPrivate *nxFondo = 0;
++
++extern "C" unsigned nx_pool_reales(void);
++extern "C" unsigned nx_pool_reales(void)
++{
++	return nxFondo ? (unsigned)nxFondo->priorityQueue.size() : 0u;
++}
++#endif
++
++#ifdef __SWITCH__
++#include <stdio.h>
++
++/* ------------------------------------------------- el presupuesto inicial
++ *
++ * 512 MB era el numero de §5.53, y venia de una cuenta razonable: el monton de
++ * la consola son 3.166 MB, el juego gastaba unos 750 en su pico, y medio giga
++ * de texturas guardadas parecia un decimo de lo que sobraba. El 5 de septiembre
++ * de 2026 un jugador se cayo con el fondo entre 250 y 330 MB -las dos sesiones,
++ * el mismo volcado, la misma linea- y esa cuenta se vino abajo: el techo de la
++ * memoria de video no esta donde dice el monton.
++ *
++ * Y no puede estar ahi, porque en el momento de la caida el monton iba por
++ * 1.042 MB de 3.166 y quedaban dos gigas sin repartir. Lo que se acabo no fue
++ * el sitio de malloc: fue lo que el driver puede tener mapeado a la vez para la
++ * GPU, y eso no hay forma de preguntarlo desde aqui. Asi que el numero no se
++ * deduce, se mide, y lo unico medido es la banda en la que rompio.
++ *
++ * De ahi sale el techo: 192 MB, una cuarta parte por debajo del borde bajo de
++ * esa banda. No basta con partir 512 por la mitad -que es lo que hace el
++ * guardian de request() al primer choque-, porque 256 cae dentro de la banda.
++ * Y bajar mas de 192 cuesta caro: con 256 MB el fondo se quedaba clavado en su
++ * presupuesto y cada tira de animacion nueva entraba creando contra el driver y
++ * salia borrando, "pool 237x 429 ms" en un solo fotograma. A 192 tampoco es
++ * gratis; es el precio de no volver a pisar el sitio donde el proceso se moria,
++ * y el guardian sigue detras por si tampoco basta.
++ *
++ * Y no es una constante, porque el mismo binario recibe presupuestos muy
++ * distintos segun como se lance: 3,2 GB como aplicacion instalada o como NRO
++ * suplantando un titulo, unos 448 MB como applet de biblioteca (§5.53). Guardar
++ * 192 MB de texturas de un presupuesto de 448 seria absurdo. Asi que se pide un
++ * octavo del monton -el unico techo que si se puede leer, por los simbolos que
++ * __libnx_initheap deja en newlib, los mismos que usa sbrk- y se acota entre 64
++ * y 192 MB. En la consola de verdad manda el techo; en un applet manda el
++ * suelo; y si algun dia el reparto cambia, el fondo se entera solo.
++ *
++ * 192 MB es provisional, y conviene decirlo en voz alta: quien de verdad
++ * estrecha el sitio es el monton de Ruby, que en esa partida subio a 1.042 MB
++ * en diez minutos de juego sin que se sepa todavia por que. Cuando eso se
++ * arregle, este numero podra volver a subir. */
++extern "C" {
++extern char *fake_heap_start;
++extern char *fake_heap_end;
++void nx_boot_trace(const char *msg);
++}
++
++static uint32_t nxPresupuestoFondo(void)
++{
++	const uint32_t suelo = 64u  * 1024 * 1024;
++	const uint32_t techo = 192u * 1024 * 1024;
++
++	uint64_t monton = (uint64_t)(fake_heap_end - fake_heap_start);
++	uint64_t parte  = monton / 8;
++	uint32_t elegido;
++
++	if (parte < suelo)
++		elegido = suelo;
++	else if (parte > techo)
++		elegido = techo;
++	else
++		elegido = (uint32_t)parte;
++
++	/* Que lo diga el registro de arranque, para que el proximo informe de un
++	 * jugador no obligue a adivinar con que presupuesto arranco su consola. */
++	{
++		char linea[176];
++		snprintf(linea, sizeof(linea),
++		         "[fondo] presupuesto inicial %u MB "
++		         "(monton %u MB, un octavo acotado entre %u y %u MB)",
++		         (unsigned)(elegido / (1024 * 1024)),
++		         (unsigned)(monton  / (1024 * 1024)),
++		         (unsigned)(suelo   / (1024 * 1024)),
++		         (unsigned)(techo   / (1024 * 1024)));
++		nx_boot_trace(linea);
++	}
++
++	return elegido;
++}
++#endif
++
+ TexPool::TexPool(uint32_t maxMemSize)
+ {
++#ifdef __SWITCH__
++	/* El valor por omision de la cabecera no manda en Horizon: el presupuesto
++	 * se decide aqui, con el tamano del monton delante. */
++	maxMemSize = nxPresupuestoFondo();
++#endif
+ 	p = new TexPoolPrivate(maxMemSize);
++#ifdef __SWITCH__
++	nxFondo = p;
++#if NX_FONDO_MAQUETA
++	/* 256 texturas de 8 KB, la misma cuenta que 65.536 y 512 MB. */
++	p->maxMemSize = 2u * 1024 * 1024;
++#endif
++#endif
+ }
+ 
+ TexPool::~TexPool()
+@@ -108,12 +259,179 @@
  extern "C" u64  nx_entra(void);
  extern "C" void nx_sale(int cual, u64 t0);
  extern "C" void nx_pool_acierto(void);
@@ -106,10 +422,154 @@ solo cuantos megas: ese es el numero que habria visto venir el desbordamiento.
 +	for (int i = 0; i < 8 && gl.GetError() != GL_NO_ERROR; i++)
 +		;
 +}
++
++/* El guardian de §5.64, en un solo sitio. El contrato esta contado entero en
++ * texpool.h; aqui solo esta el como.
++ *
++ * Nota sobre el reintento: no se borra ni se vuelve a crear el nombre de la
++ * textura entre los dos intentos. glTexImage2D que falla ya ha soltado el
++ * almacenamiento anterior y no ha reservado el nuevo, asi que el nombre esta
++ * limpio y sirve tal cual. Eso es lo que permite que la misma funcion valga
++ * para crear una textura nueva y para volver a reservar una que ya cuelga de un
++ * FBO vivo, que era el agujero grande. */
++GLenum nxReservaTextura(TEX::ID tex, int width, int height)
++{
++	TEX::bind(tex);
++
++	nxTiraErrores();
++	TEX::allocEmpty(width, height);
++
++	GLenum err = gl.GetError();
++
++	if (err == GL_NO_ERROR)
++		return GL_NO_ERROR;
++
++	uint32_t rescatado = nxFondo ? nxFondo->memSize : 0;
++
++	Debug() << "[fondo] la GPU no da una textura de" << width << "x" << height
++	        << "(error" << (int)err << ") -> se sueltan"
++	        << (unsigned)(rescatado / (1024 * 1024)) << "MB del fondo"
++	        << "y se reintenta";
++
++	if (nxFondo)
++		nxVaciarFondo(nxFondo);
++
++	nxTiraErrores();
++	TEX::bind(tex);
++	TEX::allocEmpty(width, height);
++	err = gl.GetError();
++
++	if (err == GL_NO_ERROR)
++	{
++		/* Salio a la segunda, pero el techo estaba mas bajo de lo que
++		 * creiamos. Se baja el presupuesto para no volver a chocar contra el
++		 * cada pocos fotogramas; no se vuelve a subir nunca.
++		 *
++		 * El suelo se mira sobre la MITAD, no sobre el valor actual. Con la
++		 * condicion de antes -"si el presupuesto es mayor que 64 MB, partelo"-
++		 * un fondo de 96 MB pasaba la prueba y se quedaba en 48, por debajo del
++		 * suelo que nxPresupuestoFondo() se habia molestado en poner. Con el
++		 * presupuesto inicial de 192 MB la secuencia era 192, 96, 48; ahora es
++		 * 192, 96, y ahi se para. */
++		if (nxFondo && nxFondo->maxMemSize / 2 >= 64u * 1024 * 1024)
++		{
++			nxFondo->maxMemSize /= 2;
++			Debug() << "[fondo] presupuesto del fondo bajado a"
++			        << (unsigned)(nxFondo->maxMemSize / (1024 * 1024)) << "MB";
++		}
++
++		return GL_NO_ERROR;
++	}
++
++	/* Ni con el fondo entero vacio. Aqui es donde se cumple el contrato: una
++	 * textura de 1x1 son cuatro bytes y caben aunque no quepa nada mas, y con
++	 * ella el FBO del que esta textura cuelgue sigue teniendo un recurso
++	 * detras. El fotograma saldra mal -se dibujara contra un pixel- pero la
++	 * validacion del FBO no encontrara el nulo y el proceso sigue vivo.
++	 *
++	 * Si esto tampoco sale, no queda nada que hacer desde aqui; el error se
++	 * devuelve igual y quien llamo vera que la reserva fallo. */
++	nxTiraErrores();
++	TEX::bind(tex);
++	TEX::allocEmpty(1, 1);
++	nxTiraErrores();
++
++	Debug() << "[fondo] tampoco con el fondo vacio: la textura de" << width
++	        << "x" << height << "se queda en 1x1 para no matar el proceso";
++
++	return err;
++}
++
++GLenum nxReservaTexturaFBO(TEXFBO &obj, int width, int height)
++{
++	GLenum err = nxReservaTextura(obj.tex, width, height);
++
++	/* Las medidas declaradas son las que se pidieron, tambien cuando lo que hay
++	 * detras acabo siendo 1x1: quien tenga este TEXFBO en la mano sigue
++	 * creyendo lo mismo que creia, y sobre todo el fondo lo sigue contabilizando
++	 * por lo que ocupa en su presupuesto. Un TEXFBO que mintiera sobre su tamano
++	 * descuadraria memSize la proxima vez que lo devolvieran. */
++	obj.width = width;
++	obj.height = height;
++
++	return err;
++}
++#else
++
++/* Fuera de la consola no hay fondo que soltar ni driver que se quede sin sitio
++ * de esta manera, asi que las dos son un paso directo. Existen para que los
++ * sitios que reservan texturas no tengan que llenarse de #ifdef. */
++GLenum nxReservaTextura(TEX::ID tex, int width, int height)
++{
++	TEX::bind(tex);
++	TEX::allocEmpty(width, height);
++	return GL_NO_ERROR;
++}
++
++GLenum nxReservaTexturaFBO(TEXFBO &obj, int width, int height)
++{
++	TEXFBO::allocEmpty(obj, width, height);
++	return GL_NO_ERROR;
++}
++
  #endif
  
  TEXFBO TexPool::request(int width, int height)
-@@ -131,7 +172,7 @@
+ {
+ 	CacheNode cnode;
++
++	/* Las medidas se comprueban ANTES de tocar el fondo, y no despues como
++	 * estaba.
++	 *
++	 * Por el techo, porque `Size` es un par de uint16_t y la conversion es
++	 * silenciosa: un ancho de 65.600 se guarda como 64 y la peticion se atiende
++	 * con una textura del tamano equivocado; el aviso de "excede las
++	 * capacidades del hardware" llegaba despues de haber buscado ya en el cubo
++	 * de 64. Con la comprobacion delante, ese caso no llega a mirar el fondo.
++	 *
++	 * Y por el suelo, que es lo que de verdad importa aqui: una textura de
++	 * ancho o alto cero es LEGAL en OpenGL -glTexImage2D la acepta y no deja
++	 * ningun error- y sin embargo Mesa no le reserva recurso ninguno, porque no
++	 * hay nada que reservar. Colgarla del FBO es exactamente el nulo de §5.64,
++	 * con el mismo far=0xe y el mismo x20=0, pero por un camino que el guardian
++	 * de mas abajo NO puede ver: el guardian pregunta a glGetError(), y aqui
++	 * glGetError() dice que todo va bien. Se cierra aqui, que es el unico sitio
++	 * donde se puede. */
++	int maxSize = glState.caps.maxTexSize;
++	if (width > maxSize || height > maxSize)
++		throw Exception(Exception::MKXPError,
++		                "Texture dimensions [%d, %d] exceed hardware capabilities",
++		                width, height);
++
++	if (width <= 0 || height <= 0)
++		throw Exception(Exception::MKXPError,
++		                "Se pidio una textura de %dx%d: sin recurso detras, "
++		                "colgarla del FBO mata el proceso", width, height);
++
+ 	Size size(width, height);
+ 
+ 	/* See if we can statisfy request from cache */
+@@ -131,7 +449,7 @@
  		--p->objCount;
  #ifdef __SWITCH__
  		nx_pool_acierto();
@@ -118,71 +578,48 @@ solo cuantos megas: ese es el numero que habria visto venir el desbordamiento.
  #endif
  
  //		Debug() << "TexPool: <?+> (" << width << height << ")";
-@@ -148,13 +189,71 @@
+@@ -139,22 +457,41 @@
+ 		return cnode.obj;
+ 	}
+ 
+-	int maxSize = glState.caps.maxTexSize;
+-	if (width > maxSize || height > maxSize)
+-		throw Exception(Exception::MKXPError,
+-		                "Texture dimensions [%d, %d] exceed hardware capabilities",
+-		                width, height);
+-
  	/* Nope, create it instead */
  #ifdef __SWITCH__
  	u64 nxT0 = nx_entra();
-+
-+	/* Aqui hay que preguntar si la textura existe de verdad antes de colgarla
-+	 * del FBO, y esta es la razon: el 4 de septiembre de 2026 el juego murio
-+	 * configurando el Nuzlocke con un acceso a datos en la direccion 0xe, y la
-+	 * pila decia glFramebufferTexture2D -> st_render_texture ->
-+	 * st_update_renderbuffer_surface. Mesa hace ahi
-+	 * `pipe_resource_reference(&strb->texture, st_get_texobj_resource(tex))` y
-+	 * sigue adelante sin mirar: si la textura no tiene recurso detras -porque
-+	 * glTexImage2D no pudo reservar y dejo GL_OUT_OF_MEMORY-, lo que se
-+	 * desreferencia dos lineas mas abajo es un puntero nulo. El proceso muere
-+	 * sin excepcion de Ruby, sin pantalla de error y sin nada que contar.
-+	 *
-+	 * Con la comprobacion, un "no hay sitio" se convierte en lo que deberia
-+	 * haber sido siempre: se sueltan las texturas que estabamos guardando por si
-+	 * acaso -que son cientos de megas- y se vuelve a pedir. */
-+	nxTiraErrores();
  #endif
  	TEXFBO::init(cnode.obj);
- 	TEXFBO::allocEmpty(cnode.obj, width, height);
-+#ifdef __SWITCH__
+-	TEXFBO::allocEmpty(cnode.obj, width, height);
++
++	/* El guardian, que ya no vive aqui: esta en nxReservaTexturaFBO() y lo usan
++	 * tambien Window, Graphics, SharedState y el atlas de tiles. Al volver, la
++	 * textura tiene recurso detras pase lo que pase, asi que el linkFBO de mas
++	 * abajo no puede encontrarse el nulo de §5.64.
++	 *
++	 * Este es el unico sitio que lanza. Aqui se puede: a request() se llega
++	 * desde constructores de Bitmap y desde Window, y el enlace de Ruby
++	 * convierte la excepcion en un error del interprete que el jugador ve. Los
++	 * demas sitios estan en el camino de dibujo y no pueden desenrollar la pila
++	 * sin dejar a medias las pilas de glState. */
 +	{
-+		GLenum err = gl.GetError();
++		GLenum err = nxReservaTexturaFBO(cnode.obj, width, height);
 +
 +		if (err != GL_NO_ERROR)
 +		{
-+			uint32_t rescatado = p->memSize;
-+
-+			Debug() << "[fondo] la GPU no da una textura de" << width << "x"
-+			        << height << "(error" << (int)err << ") -> se sueltan"
-+			        << (unsigned)(rescatado / (1024 * 1024)) << "MB del fondo"
-+			        << "y se reintenta";
-+
 +			TEXFBO::fini(cnode.obj);
-+			nxVaciarFondo(p);
-+			nxTiraErrores();
-+
-+			TEXFBO::init(cnode.obj);
-+			TEXFBO::allocEmpty(cnode.obj, width, height);
-+			err = gl.GetError();
-+
-+			if (err != GL_NO_ERROR)
-+			{
-+				TEXFBO::fini(cnode.obj);
-+				nx_sale(NX_G_POOL, nxT0);
-+				throw Exception(Exception::MKXPError,
-+				                "No hay memoria de video para una textura de "
-+				                "%dx%d (GL error %d)", width, height, (int)err);
-+			}
-+
-+			/* Salio a la segunda, pero el techo estaba mas bajo de lo que
-+			 * creiamos. Se baja el presupuesto para no volver a chocar contra
-+			 * el cada pocos fotogramas; no se vuelve a subir nunca. */
-+			if (p->maxMemSize > 64u * 1024 * 1024)
-+			{
-+				p->maxMemSize /= 2;
-+				Debug() << "[fondo] presupuesto del fondo bajado a"
-+				        << (unsigned)(p->maxMemSize / (1024 * 1024)) << "MB";
-+			}
++#ifdef __SWITCH__
++			nx_sale(NX_G_POOL, nxT0);
++#endif
++			throw Exception(Exception::MKXPError,
++			                "No hay memoria de video para una textura de "
++			                "%dx%d (GL error %d)", width, height, (int)err);
 +		}
 +	}
-+#endif
++
  	TEXFBO::linkFBO(cnode.obj);
  #ifdef __SWITCH__
  	nx_sale(NX_G_POOL, nxT0);
@@ -191,7 +628,7 @@ solo cuantos megas: ese es el numero que habria visto venir el desbordamiento.
  #endif
  
  //	Debug() << "TexPool: <?-> (" << width << height << ")";
-@@ -225,6 +324,12 @@
+@@ -225,6 +562,12 @@
  
  	++p->objCount;
  
@@ -204,3 +641,339 @@ solo cuantos megas: ese es el numero que habria visto venir el desbordamiento.
  //	Debug() << "TexPool: <!+> (" << obj.width << obj.height << ") Current size:" << p->memSize;
  }
  
+--- display/gl/texpool.h.orig	2026-09-06 00:55:50.545088200 -0400
++++ display/gl/texpool.h	2026-09-06 01:03:32.298413600 -0400
+@@ -24,12 +24,75 @@
+ 
+ #include "gl-util.h"
+ 
++/* ------------------------------------------------ el guardian, para todos
++ *
++ * §5.64 no es un fallo de TexPool: es un fallo de cualquiera que cuelgue de un
++ * FBO una textura sin recurso detras. Mesa, en st_render_texture, guarda lo que
++ * devuelva st_get_texobj_resource y sigue sin mirar si es nulo. Si glTexImage2D
++ * no pudo reservar y dejo GL_OUT_OF_MEMORY, la textura existe como nombre y no
++ * tiene nada detras, y dos lineas mas abajo se desreferencia el nulo.
++ *
++ * El guardian vivia dentro de TexPool::request, que es UNA de las puertas. Una
++ * auditoria del 6 de septiembre de 2026 encontro otras cinco, y una de ellas
++ * -el repintado del cuadro de texto de Window- es el camino exacto por el que
++ * se cayeron los dos jugadores. Asi que el guardian sale aqui, y todo el que
++ * reserve almacenamiento de textura pasa por el.
++ *
++ * El contrato es una sola frase, y es lo unico que hay que recordar: AL VOLVER,
++ * LA TEXTURA TIENE RECURSO DETRAS. Siempre. Si no cabia la que se pedia, se
++ * reserva una de 1x1 -cuatro bytes, que caben aunque no quepa nada mas- para
++ * que el FBO del que cuelgue siga completo y nadie se muera al validarlo. Lo
++ * que se devuelve es el error de GL, para que quien llamo decida: el fotograma
++ * saldra mal, pero saldra.
++ *
++ * Por dentro hace lo que ya hacia el guardian del fondo: vaciar la cola de
++ * errores, reservar, mirar, y si el driver dijo que no, soltar TODAS las
++ * texturas que el fondo estaba guardando por si acaso -cientos de megas- y
++ * volver a pedir. Si a la segunda sale, baja el presupuesto del fondo, porque
++ * el techo estaba mas bajo de lo que creiamos.
++ *
++ * Y no lanza. Fuera de TexPool::request todas las llamadas estan en el camino
++ * de dibujo -en la senal prepareDraw o dentro del compuesto-, y desenrollar la
++ * pila desde ahi deja las pilas de glState a medio empujar, que es cambiar una
++ * muerte por un dibujado corrupto. TexPool::request si lanza, porque se le
++ * llama desde constructores que el enlace de Ruby ya envuelve.
++ *
++ * En un anfitrion que no sea la consola las dos son un paso directo a
++ * glTexImage2D: existen en todas las plataformas para que los sitios que las
++ * usan no tengan que llenarse de #ifdef. */
++GLenum nxReservaTextura(TEX::ID tex, int width, int height);
++GLenum nxReservaTexturaFBO(TEXFBO &obj, int width, int height);
++
+ struct TexPoolPrivate;
+ 
+ class TexPool
+ {
+ public:
++#ifdef __SWITCH__
++	/* 20 MB era el presupuesto de mkxp-z para maquinas donde la memoria de
++	 * video es un recurso escaso y separado. En la Switch la memoria es unica
++	 * y hay 3285 MB para la aplicacion, de los que este juego usa unos 750 en
++	 * su pico (§5.53). Un sprite animado de Pokemon son decenas de fotogramas
++	 * de 256x256 —un cuarto de MB cada uno—, asi que con 20 MB el fondo no
++	 * llega ni para el equipo entero y cada pantalla lo reserva todo de cero.
++	 *
++	 * 256 MB caben de sobra y son un decimo de lo que sobra. */
++	/* 512 y no 256: con 256 el fondo llegaba a "255 MB" y se quedaba ahi, y a
++	 * partir de ese punto cada tira de animacion nueva —120 texturas por
++	 * Pokemon— entraba creando contra el driver y salia borrando contra el
++	 * driver: "pool 237x 429 ms | tira 120x 184 ms" en un solo fotograma. El
++	 * monton de la consola son 3.262 MB y el pico medido jugando fue 921.
++	 *
++	 * Este numero ya no manda. Un jugador se cayo con el fondo entre 250 y 330
++	 * MB, muy por debajo de los 512, asi que el techo real de memoria de video
++	 * esta mas abajo de lo que esta cuenta suponia. El presupuesto de verdad se
++	 * decide al construir el fondo, con el tamano del monton delante, en
++	 * nxPresupuestoFondo() de texpool.cpp; este valor por omision se pisa. Se
++	 * deja porque es el unico sitio donde consta de donde venia. */
++	TexPool(uint32_t maxMemSize = 512u * 1024 * 1024);
++#else
+ 	TexPool(uint32_t maxMemSize = 20000000 /* 20 MB */);
++#endif
+ 	~TexPool();
+ 
+ 	TEXFBO request(int width, int height);
+--- display/window.cpp.orig	2026-09-06 01:03:02.056272500 -0400
++++ display/window.cpp	2026-09-06 01:05:42.635567500 -0400
+@@ -33,6 +33,7 @@
+ #include "quadarray.h"
+ #include "texpool.h"
+ #include "glstate.h"
++#include "debugwriter.h"
+ 
+ #include "sigslot/signal.hpp"
+ 
+@@ -407,7 +408,25 @@
+ 		if (!resizeNeeded)
+ 			return;
+ 
++		/* La copia local se limpia ANTES de volver a pedir, y no es una
++		 * precaucion teorica.
++		 *
++		 * release() acaba de meter baseTex en el fondo, y esta copia sigue
++		 * nombrando esos mismos identificadores. Mientras request() no podia
++		 * fallar daba igual, porque la linea siguiente la pisaba. Desde el
++		 * guardian de §5.64 request() SI lanza, y cuando lanza ya ha soltado el
++		 * fondo entero, o sea que ha destruido la textura que acabamos de
++		 * devolver. Sin este clear, baseTex se queda nombrando una textura
++		 * borrada y el destructor de WindowPrivate la vuelve a meter en el
++		 * fondo; la siguiente peticion de ese tamano la devuelve como acierto,
++		 * glBindTexture sobre un nombre borrado crea un objeto sin
++		 * almacenamiento, y colgarlo de un FBO es otra vez el nulo de §5.64.
++		 * El guardian fabricando el fallo que existe para evitar.
++		 *
++		 * WindowVXPrivate::updateBaseTexSize ya lo hacia asi. */
+ 		shState->texPool().release(baseTex);
++		TEXFBO::clear(baseTex);
++
+ 		baseTex = shState->texPool().request(newW, newH);
+ 
+ 		baseTexDirty = true;
+@@ -415,9 +434,36 @@
+ 
+ 	void redrawBaseTex()
+ 	{
+-		/* Discard old buffer */
+-		TEX::bind(baseTex.tex);
+-		TEX::allocEmpty(baseTex.width, baseTex.height);
++		/* Discard old buffer.
++		 *
++		 * Esta es la puerta a §5.64 por la que se cayeron los dos jugadores, y
++		 * la que el guardian de TexPool::request no podia ver.
++		 *
++		 * baseTex.tex YA es el color attachment de baseTex.fbo. Volver a
++		 * reservar su almacenamiento suelta el recurso anterior y pide uno
++		 * nuevo; si el nuevo no cabe, la textura se queda como nombre y sin
++		 * recurso, GL_OUT_OF_MEMORY se queda en la cola sin que nadie la lea, y
++		 * el nulo no salta al reservar: salta cinco lineas mas abajo, en el
++		 * FBO::bind, cuando Mesa valida el framebuffer y llama a
++		 * st_render_texture sobre una textura vacia. Volcado identico, far=0xe
++		 * y x20=0, sin haber pasado por el fondo de texturas.
++		 *
++		 * Y esto es el repintado de la ventana de mensaje: se ejecuta cada vez
++		 * que un cuadro de texto cambia de tamano o de tono. Es exactamente lo
++		 * que estaban haciendo el jugador del Pidgey y el del Nuzlocke.
++		 *
++		 * nxReservaTexturaFBO garantiza que al volver hay recurso detras -1x1
++		 * si no cabe otra cosa-, asi que el FBO sigue completo. No se lanza:
++		 * estamos dentro de la senal prepareDraw y desenrollar desde aqui
++		 * dejaria las pilas de glState a medias. El cuadro sale mal un
++		 * fotograma; el guardian acaba de soltar el fondo entero, asi que el
++		 * siguiente suele salir bien. */
++		if (nxReservaTexturaFBO(baseTex, baseTex.width, baseTex.height)
++		    != GL_NO_ERROR)
++			Debug() << "[window] sin memoria para el fondo de la ventana de"
++			        << baseTex.width << "x" << baseTex.height
++			        << "- este fotograma sale mal";
++
+ 		TEX::unbind();
+ 
+ 		FBO::bind(baseTex.fbo);
+--- display/tilemap.cpp.orig	2026-09-06 01:03:02.079207700 -0400
++++ display/tilemap.cpp	2026-09-06 01:07:41.506136200 -0400
+@@ -511,8 +511,17 @@
+ 	{
+ 		updateAtlasInfo();
+ 
+-		/* Aquire atlas tex */
++		/* Aquire atlas tex.
++		 *
++		 * El clear() de en medio es el mismo caso que el de Window: release
++		 * aparca atlas.gl en SharedState y esta copia sigue nombrandolo, asi
++		 * que si el request no sale entero, el destructor de TilemapPrivate lo
++		 * suelta por segunda vez y SharedState acaba guardando como bueno un
++		 * atlas ya destruido. releaseAtlasTex tambien se defiende por su lado;
++		 * aqui se corta en el origen. */
+ 		shState->releaseAtlasTex(atlas.gl);
++		TEXFBO::clear(atlas.gl);
++
+ 		shState->requestAtlasTex(atlas.size.x, atlas.size.y, atlas.gl);
+ 
+ 		atlasDirty = true;
+--- display/graphics.cpp.antes-rutas	2026-09-06 01:09:24.292030500 -0400
++++ display/graphics.cpp	2026-09-06 01:07:21.204888900 -0400
+@@ -441,7 +441,7 @@
+     : srcInd(0), dstInd(1), screenW(screenW), screenH(screenH) {
+         for (int i = 0; i < 2; ++i) {
+             TEXFBO::init(rt[i]);
+-            TEXFBO::allocEmpty(rt[i], screenW, screenH);
++            nxReservaTexturaFBO(rt[i], screenW, screenH);
+             TEXFBO::linkFBO(rt[i]);
+             gl.ClearColor(0, 0, 0, 1);
+             FBO::clear();
+@@ -462,8 +462,15 @@
+         screenW = width;
+         screenH = height;
+         
++        /* Reespecificacion sobre un FBO vivo, y ademas por partida doble: los
++         * dos ping-pong siguen colgados de sus FBO y nadie vuelve a llamar a
++         * linkFBO. Si una de las dos reservas no cabe, la textura se queda como
++         * nombre sin recurso y el nulo de §5.64 salta en el primer bind del
++         * compuesto siguiente. Guardian. */
+         for (int i = 0; i < 2; ++i)
+-            TEXFBO::allocEmpty(rt[i], width, height);
++            if (nxReservaTexturaFBO(rt[i], width, height) != GL_NO_ERROR)
++                Debug() << "[graphics] sin memoria de video para el ping-pong"
++                        << i << "de" << width << "x" << height;
+     }
+     
+     void startRender() { bind(); }
+@@ -864,7 +871,7 @@
+         updateScreenResoRatio(rtData);
+         
+         TEXFBO::init(frozenScene);
+-        TEXFBO::allocEmpty(frozenScene, scRes.x, scRes.y);
++        nxReservaTexturaFBO(frozenScene, scRes.x, scRes.y);
+         TEXFBO::linkFBO(frozenScene);
+         
+         FloatRect screenRect(0, 0, scRes.x, scRes.y);
+@@ -949,8 +956,8 @@
+     {
+         TEXFBO::fini(integerScaleBuffer);
+         TEXFBO::init(integerScaleBuffer);
+-        TEXFBO::allocEmpty(integerScaleBuffer, scRes.x * integerScaleFactor.x,
+-                           scRes.y * integerScaleFactor.y);
++        nxReservaTexturaFBO(integerScaleBuffer, scRes.x * integerScaleFactor.x,
++                            scRes.y * integerScaleFactor.y);
+         TEXFBO::linkFBO(integerScaleBuffer);
+     }
+     
+@@ -1481,7 +1488,12 @@
+     if (p->integerScaleActive)
+         p->rebuildIntegerScaleBuffer();
+     
+-    TEXFBO::allocEmpty(p->frozenScene, width, height);
++    /* Reespecificacion sobre un FBO vivo: frozenScene.tex ya es el color
++     * attachment de frozenScene.fbo, asi que un "no hay sitio" aqui no se ve
++     * aqui —se ve en el siguiente FBO::bind, con el nulo de §5.64—. Guardian. */
++    if (nxReservaTexturaFBO(p->frozenScene, width, height) != GL_NO_ERROR)
++        Debug() << "[graphics] sin memoria de video para la escena congelada de"
++                << width << "x" << height;
+     
+     FloatRect screenRect(0, 0, width, height);
+     p->screenQuad.setTexPosRect(screenRect, screenRect);
+--- sharedstate.cpp.antes-rutas	2026-09-06 01:09:24.313032700 -0400
++++ sharedstate.cpp	2026-09-06 01:06:43.171065800 -0400
+@@ -29,6 +29,7 @@
+ #include "glstate.h"
+ #include "shader.h"
+ #include "texpool.h"
++#include "debugwriter.h"
+ #include "font.h"
+ #include "eventthread.h"
+ #include "gl-util.h"
+@@ -254,12 +255,12 @@
+ 		TEX::bind(globalTex);
+ 		TEX::setRepeat(false);
+ 		TEX::setSmooth(false);
+-		TEX::allocEmpty(globalTexW, globalTexH);
++		nxReservaTextura(globalTex, globalTexW, globalTexH);
+ 		globalTexDirty = false;
+ 
+ 		TEXFBO::init(gpTexFBO);
+ 		/* Reuse starting values */
+-		TEXFBO::allocEmpty(gpTexFBO, globalTexW, globalTexH);
++		nxReservaTexturaFBO(gpTexFBO, globalTexW, globalTexH);
+ 		TEXFBO::linkFBO(gpTexFBO);
+ 		nx_boot_trace("[boot] 10e texturas globales creadas");
+ 
+@@ -370,7 +371,7 @@
+ 
+ 	if (p->globalTexDirty)
+ 	{
+-		TEX::allocEmpty(p->globalTexW, p->globalTexH);
++		nxReservaTextura(p->globalTex, p->globalTexW, p->globalTexH);
+ 		p->globalTexDirty = false;
+ 	}
+ }
+@@ -410,8 +411,15 @@
+ 
+ 	if (needResize)
+ 	{
+-		TEX::bind(p->gpTexFBO.tex);
+-		TEX::allocEmpty(p->gpTexFBO.width, p->gpTexFBO.height);
++		/* Reespecificacion sobre un FBO vivo: gpTexFBO.tex ya es el color
++		 * attachment de gpTexFBO.fbo, asi que si la reserva falla el nulo de
++		 * §5.64 salta en la siguiente validacion del framebuffer, no aqui. Por
++		 * el guardian, entonces. */
++		if (nxReservaTexturaFBO(p->gpTexFBO, p->gpTexFBO.width,
++		                        p->gpTexFBO.height) != GL_NO_ERROR)
++			Debug() << "[gp] sin memoria de video para la textura de proposito"
++			        << "general de" << p->gpTexFBO.width << "x"
++			        << p->gpTexFBO.height;
+ 	}
+ 
+ 	return p->gpTexFBO;
+@@ -428,8 +436,24 @@
+ 	}
+ 	else
+ 	{
++		/* El atlas de tiles es la textura MAS GRANDE que este juego pide jamas
++		 * -TileAtlas::minSize devuelve varios megabytes- y hasta el 6 de
++		 * septiembre de 2026 se creaba a pelo, sin pasar por el fondo de
++		 * texturas y sin pasar por el guardian de §5.64. Si hay un sitio donde
++		 * una reserva va a fallar por tamano, es este.
++		 *
++		 * No se lanza: allocateAtlas() se llama desde el prepare() de Tilemap,
++		 * o sea desde la senal prepareDraw, y desenrollar la pila desde ahi
++		 * dejaria las pilas de glState a medias. Con el guardian delante, lo
++		 * peor que pasa es que el atlas se quede en 1x1 y el mapa salga en
++		 * blanco un fotograma; el fondo se acaba de soltar entero, asi que el
++		 * siguiente suele salir bien. */
+ 		TEXFBO::init(tex);
+-		TEXFBO::allocEmpty(tex, w, h);
++
++		if (nxReservaTexturaFBO(tex, w, h) != GL_NO_ERROR)
++			Debug() << "[atlas] sin memoria de video para el atlas de tiles de"
++			        << w << "x" << h << "- el mapa sale en blanco";
++
+ 		TEXFBO::linkFBO(tex);
+ 	}
+ 
+@@ -442,6 +466,20 @@
+ 	if (tex.tex == TEX::ID(0))
+ 		return;
+ 
++	/* Y no hay que guardar dos veces el mismo, que es la otra forma de matar
++	 * el proceso por aqui.
++	 *
++	 * Tilemap hace `releaseAtlasTex(atlas.gl); requestAtlasTex(...)` sin
++	 * limpiar su copia, igual que hacia Window. Si el request de en medio
++	 * fracasa a medias, atlas.gl sigue nombrando el atlas que ya esta aparcado
++	 * aqui, y el destructor de TilemapPrivate lo vuelve a soltar: la linea de
++	 * abajo haria fini(p->atlasTex) sobre esa misma textura y acto seguido la
++	 * guardaria destruida, para entregarla como buena en el proximo mapa del
++	 * mismo tamano. El clear() del lado de Tilemap ya lo evita; esta linea lo
++	 * cierra tambien desde aqui, que es donde se puede comprobar. */
++	if (tex == p->atlasTex)
++		return;
++
+ 	TEXFBO::fini(p->atlasTex);
+ 
+ 	p->atlasTex = tex;

@@ -31,6 +31,7 @@
  */
 #include <switch.h>
 #include <stdio.h>
+#include <string.h>
 
 void nx_boot_trace(const char *msg);
 
@@ -38,6 +39,50 @@ void nx_nucleo(const char *quien, int preferido);
 
 /* Nucleos 0, 1 y 2. El 3 es del sistema y pedirlo da error. */
 #define NX_TODOS 0x7
+
+/* Cuantas veces se anota lo mismo antes de callarse.
+ *
+ * "principal" y "rgss" llaman aqui una vez cada uno, desde su arranque. La
+ * musica no: el hilo que rellena los bufers de OpenAL NACE Y MUERE con cada
+ * pista, asi que nx_nucleo("musica", 2) corre otra vez en cada cambio de
+ * cancion. En los registros de dos jugadores reales son hasta 20 lineas
+ * identicas en una sola sesion y 133 en el fichero entero —mas que todas las
+ * del arranque juntas—, y cada una es una write() a la tarjeta SD hecha justo
+ * cuando empieza a sonar algo.
+ *
+ * La informacion que aportan es una: que el reparto se hizo y salio bien. Eso
+ * se ve en la primera. Las demas son el precio de no haber puesto un tope,
+ * que es el mismo que ya lleva nx_traza_me() para las fanfarrias (§5.57) y por
+ * el mismo motivo: esta consola escribe el registro sobre la misma tarjeta que
+ * estamos midiendo.
+ *
+ * Tres y no una, porque si alguna vez FALLA interesa verlo aunque las primeras
+ * salieran bien; y el tope es por nombre, no global, para que la musica no
+ * consuma el cupo de nadie mas. */
+#define NX_NUCLEO_MAX   3
+#define NX_NUCLEO_NOMS  4
+
+static int nx_nucleo_calla(const char *quien)
+{
+    static const char *nombre[NX_NUCLEO_NOMS];
+    static unsigned veces[NX_NUCLEO_NOMS];
+    unsigned i;
+
+    for (i = 0; i < NX_NUCLEO_NOMS; i++) {
+        if (!nombre[i]) {
+            nombre[i] = quien;
+            veces[i] = 1;
+            return 0;
+        }
+        if (strcmp(nombre[i], quien) == 0) {
+            if (veces[i] >= NX_NUCLEO_MAX)
+                return 1;
+            veces[i]++;
+            return 0;
+        }
+    }
+    return 0;                   /* mas nombres de los previstos: no callar */
+}
 
 void nx_nucleo(const char *quien, int preferido)
 {
@@ -57,6 +102,12 @@ void nx_nucleo(const char *quien, int preferido)
     {
         s32 nuevo = (preferido >= 0) ? (s32)preferido : pref;
         Result r2 = svcSetThreadCoreMask(CUR_THREAD_HANDLE, nuevo, NX_TODOS);
+
+        /* El reparto se hace SIEMPRE; lo que se calla es contarlo. Un hilo de
+         * musica que naciera sin su nucleo preferido por ahorrarse una linea
+         * de registro seria cambiar un cromo por una vaca. */
+        if (R_SUCCEEDED(r2) && nx_nucleo_calla(quien))
+            return;
 
         snprintf(linea, sizeof(linea),
                  "[nucleo] %s: corria en %u | preferido %d mascara 0x%llx"

@@ -41,6 +41,9 @@
 #--- Utillaje de desarrollo y verificacion ------------------------------------
 !/dump-scripts.py
 !/anilftp.py
+!/resolver-pila.py
+!/triaje.py
+!/TRIAJE.md
 !/desplegar.sh
 !/iterate.sh
 !/captura.ps1
@@ -99,6 +102,15 @@
 !/docs/capturas/cargar-b06.png
 !/docs/capturas/nom2-b-letras.png
 # Las otras 168 capturas son 236 MB de fotogramas de depuracion.
+
+#--- Los simbolos de cada compilacion -----------------------------------------
+# release/ entero queda fuera por la lista blanca de arriba, y release/simbolos/
+# se queda fuera A PROPOSITO: cada .elf sin desnudar son noventa megas y no
+# tienen sitio en un repositorio. Viven en el disco de quien compila, que es el
+# unico que publica, y resolver-pila.py los busca ahi. Si alguna vez se publica
+# desde otra maquina, la carpeta de la compilacion publicada —.elf, .nro y
+# SELLO.txt— tiene que viajar con ella: sin eso, un volcado de un jugador de esa
+# version no se puede leer mas que adivinando (README 5.65).
 
 #--- Nunca, bajo ningun patron ------------------------------------------------
 # Claves de consola. Se leen de ~/.switch/ y no se copian aqui jamas.
