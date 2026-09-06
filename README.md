@@ -3310,6 +3310,51 @@ número corto que se sabe corto es útil, uno que miente no.
 
 ---
 
+### 5.71 `patches/` todavía no basta para rehacer `src/`
+
+`src/` está en `.gitignore`, así que **lo único que queda de todo el trabajo
+hecho sobre mkxp-z son los parches de `patches/`**. Es una decisión razonable
+—un árbol de fuentes de terceros no va en el repositorio— pero convierte esos
+veintinueve ficheros en el único ejemplar de meses de trabajo, y hasta hoy nadie
+había comprobado que basten.
+
+Comprobarlo dio esto:
+
+* **Tres ficheros no tenían parche ninguno**: `texpool.h`, `gl-util.h` y
+  `bitmap.cpp` —éste con veintitrés trozos: los dos alijos, el pegado diferido
+  de `set_pixel` y todos los cronómetros de §5.55—. Tenían su `.orig` al lado y
+  nada más. Se habrían perdido en silencio el día que alguien clonara el
+  repositorio en otra máquina. Ya están en `patches/`.
+* **El orden de aplicación no está escrito en ninguna parte.** Cuatro parches
+  tocan `filesystem.cpp` y tres tocan `main.cpp`; aplicarlos en otro orden no
+  funciona, y ese orden vivía sólo en la cabeza de quien los hizo.
+* **`reconstruir-src.py`** parte de `src/mkxpz.tar.gz` —el mkxp-z 2.4.2 original,
+  que ya viajaba en el árbol— y **deduce el orden probando**: vuelta tras vuelta
+  mira cuál de los que quedan aplica limpio sobre lo que hay. Luego compara
+  fichero a fichero con `src/mkxp-z`.
+
+**Y el resultado, hoy, es que no sale.** Coloca 17 de los 29 y deja 12 fuera, y
+12 ficheros se desvían del árbol. Los motivos que ya están identificados:
+
+* Dos parches nombran ficheros que en el 2.4.2 limpio no existen con ese nombre
+  (`keybindings.cpp`, `audio.cpp`), señal de que se generaron contra un árbol que
+  no es exactamente esta versión.
+* Varios se generaron con `diff -u fichero.orig fichero` **dentro de la carpeta
+  del fichero**, así que su cabecera es relativa a un sitio y no a la raíz. La
+  herramienta ya resuelve eso llamando a `patch` desde la carpeta correcta, pero
+  quedan casos donde la cola del nombre encaja en más de un sitio.
+* Y de `sharedstate.cpp` no hay `.orig`: los dos parches que lo tocan se midieron
+  contra un `.antes-rutas` que sólo existe en esta máquina.
+
+**Esto no es una alarma: es el inventario que faltaba.** Nada de lo que funciona
+hoy depende de que la reconstrucción salga —el árbol de trabajo está en el disco
+y compila—, pero mientras no salga, `patches/` es una copia de seguridad que
+nadie ha probado a restaurar. El trabajo pendiente es regenerar esos doce contra
+el 2.4.2 limpio, uno a uno, y guardar `patches/ORDEN.txt`, que la herramienta
+escribe sola en cuanto la reconstrucción cuadre.
+
+---
+
 ## 5-bis. Criterio de diseño para los stubs
 
 Auditando `libc.a`, `libsysbase.a` y `libnx.a` con `nm`, el reparto es:
