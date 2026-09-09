@@ -1257,7 +1257,14 @@ function Empaqueta($info, [string]$salida, [string]$modo, [scriptblock]$avisa) {
     $avisa.Invoke("3/5 Motor (.nro con el icono y el nombre de este juego, mkxp.json, lib/)")
     $version = "1.0.0"
     $vf = Join-Path $Entrega "VERSION.txt"
-    if (Test-Path -LiteralPath $vf) { $version = (Lee-Texto $vf).Trim() }
+    # SOLO la primera palabra. construir.sh escribe "0.1.0 2026-09-09" en
+    # VERSION.txt -version y fecha- y ese campo del NACP son 0x10 bytes contando
+    # el cero final: dieciseis caracteres justos no caben, y el empaquetado se
+    # caia al llegar al .nro con un mensaje sobre bytes que no explicaba nada.
+    if (Test-Path -LiteralPath $vf) {
+        $version = ((Lee-Texto $vf).Trim() -split '\s+')[0]
+        if ($version.Length -gt 15) { $version = $version.Substring(0, 15) }
+    }
 
     $icono = Join-Path $Entrega "motor\icono.jpg"
     if ($info.CarpetaPerfil) {
