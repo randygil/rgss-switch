@@ -61,10 +61,28 @@ module NXFuente
   # con saltos de linea (AudioUtilities da cinco de golpe), y cada uno viene con
   # su "nombre:LINEA: ". Se sacan todos: asi una vuelta arregla cuatro `when` en
   # vez de uno, y el bucle converge en cinco pasadas y no en veintitres.
+  # El nombre llega del motor tal cual sale de Scripts.rxdata
+  # (rb_ary_entry(script, 1)), y esos .rxdata los escribio RPG Maker XP con
+  # Ruby 1.8: no llevan etiqueta de codificacion, asi que Marshal.load los
+  # devuelve en ASCII-8BIT. Hay secciones con acentos -Opalo tiene "Titulo" y
+  # "Meson Batalla" con tilde-, y construir una Regexp con un String binario
+  # con bytes altos y casarla contra un mensaje UTF-8 lanza
+  # Encoding::CompatibilityError. Se normaliza UNA vez y se usa el mismo
+  # nombre para compilar y para leer el mensaje, que es lo que hace que el
+  # prefijo "nombre:LINEA:" case.
+  def self.limpio(nombre)
+    n = nombre.to_s.dup.force_encoding("UTF-8")
+    n.valid_encoding? ? n : n.scrub("?")
+  rescue StandardError
+    "seccion"
+  end
+
   def self.errores(nombre, mensaje)
     lista = []
     escapado = Regexp.escape(nombre.to_s)
-    mensaje.to_s.each_line do |bruta|
+    texto = mensaje.to_s.dup.force_encoding("UTF-8")
+    texto = texto.scrub("?") unless texto.valid_encoding?
+    texto.each_line do |bruta|
       # chomp obligatorio: e.message de un SyntaxError con varios errores los
       # trae separados por saltos de linea y \z no casa con el \n final. Sin
       # esto, de los cinco errores de AudioUtilities solo se veia el ultimo
@@ -173,7 +191,7 @@ module NXFuente
     hechos = 0
     begin
       src = codigo.dup.force_encoding("UTF-8")
-      src, hechos = bucle(nombre.to_s, src)
+      src, hechos = bucle(limpio(nombre), src)
     rescue Exception => e
       # Cualquier cosa que no sea un SyntaxError esperado: se devuelve lo que
       # haya y se deja constancia. El motor evaluaria el original de todos
