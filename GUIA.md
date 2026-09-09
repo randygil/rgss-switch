@@ -135,10 +135,10 @@ al reportar:
   el `diagnostico.txt` que las enciende; el registro traerá una línea `[tiron]`
   por cada fotograma lento con su reparto. Sin ese fichero el juego arranca más
   rápido, así que bórralo cuando termines de medir.
-- **Actualizar el motor**: sustituye `<slug>.nro`, `mkxp.json` y `lib/` por los
-  de la entrega nueva — o vuelve a empaquetar, que hace lo mismo. Los recursos
-  del juego no cambian, así que `datos.zip` (o las carpetas `Data/`,
-  `Graphics/`…) se quedan como están y no hay que volver a copiar los megas.
+- **Actualizar el motor**: marca **«Solo actualizar el motor»** (o pasa
+  `-SoloMotor`). Rehace `<slug>.nro`, `mkxp.json` y `lib/` y **no toca ni un
+  mega** de los recursos, ni las partidas guardadas, ni el `Game.ini`. La
+  carpeta del juego ya tiene que existir en la salida; si no, te lo dice.
 - **No tengas las dos cosas a la vez**: si en la carpeta hay un `datos.zip` *y*
   las carpetas sueltas, el juego lee del `.zip` y las carpetas sólo ocupan
   sitio. El empaquetador te avisa cuando pasa.
@@ -159,6 +159,9 @@ powershell -File Empaquetar.ps1 -Juego "C:\...\Pokemon Opalo" -SoloDetectar
 
 # empaquetar
 powershell -File Empaquetar.ps1 -Juego "C:\...\Pokemon Opalo" -Salida D:\ -Contenedor zip
+
+# actualizar solo el motor de una instalacion que ya esta en la tarjeta
+powershell -File Empaquetar.ps1 -Juego "C:\...\Pokemon Opalo" -Salida D:\ -SoloMotor
 ```
 
 Y desde una shell POSIX (la de devkitPro, WSL, Git Bash):
@@ -166,6 +169,7 @@ Y desde una shell POSIX (la de devkitPro, WSL, Git Bash):
 ```sh
 ./empaquetar.sh "/c/juegos/Pokemon Opalo" /d/            # contenedor
 ./empaquetar.sh "/c/juegos/Pokemon Opalo" /d/ carpetas   # sueltos
+./empaquetar.sh "/c/juegos/Pokemon Opalo" /d/ --solo-motor
 DETECTAR=1 ./empaquetar.sh "/c/juegos/Pokemon Opalo"
 ```
 
