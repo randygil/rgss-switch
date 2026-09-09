@@ -53,7 +53,7 @@ bajo la licencia de su origen. No hay nada que elegir aquí.
 | uchardet | MPL 1.1 / GPL 2.0 / LGPL 2.1 | sí |
 | SDL_sound | zlib | sí |
 | [hacbrewpack](https://github.com/The-4N/hacbrewpack) | ISC | sí, en `tools/` de la entrega |
-| `nacptool` y `npdmtool` ([switch-tools](https://github.com/switchbrew/switch-tools)) | ISC | sí, en `tools/` de la entrega |
+| `nacptool`, `npdmtool` y `build_romfs` ([switch-tools](https://github.com/switchbrew/switch-tools)) | ISC | sí, en `tools/` de la entrega |
 | Liberation Sans (dentro de mkxp-z) | SIL OFL 1.1 | empotrada |
 | SDL_GameControllerDB | zlib | empotrada |
 

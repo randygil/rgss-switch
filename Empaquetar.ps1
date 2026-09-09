@@ -46,6 +46,7 @@
 # No necesita nada instalado: PowerShell viene con Windows. Sin interfaz:
 #   powershell -File Empaquetar.ps1 -Juego "C:\...\Pokemon Opalo" -Salida D:\sd
 #   powershell -File Empaquetar.ps1 -Juego "C:\...\Pokemon Opalo" -SoloDetectar
+#   powershell -File Empaquetar.ps1 -Juego "C:\...\Pokemon Opalo" -Salida D:\ -SoloMotor
 param(
     [string]$Juego = "",
     [string]$Salida = "",
@@ -58,7 +59,12 @@ param(
     [string]$Entrega = "",
     [string]$Claves = "",
     [switch]$Diagnostico,
-    [switch]$SoloDetectar
+    [switch]$SoloDetectar,
+    # Rehace solo lo que viene de la entrega y del perfil -el .nro, mkxp.json y
+    # lib/- sin volver a copiar un solo mega del juego. Es lo que hace falta para
+    # actualizar el motor o para probar un shim: los recursos ya estan en la
+    # tarjeta y no han cambiado.
+    [switch]$SoloMotor
 )
 
 $ErrorActionPreference = "Stop"
@@ -885,7 +891,8 @@ function Reescribe-Nacp([byte[]]$nacp, [string]$nombre, [string]$autor, [string]
 #   "ASET" (4) + version (u32) + tres pares offset/size (u64) para icono, NACP y
 #   romfs, con los offsets relativos al inicio del ASET. La cabecera mide 0x38.
 function Rehace-Nro([string]$origen, [string]$destino, [string]$icono,
-                    [string]$nombre, [string]$autor, [string]$titleid, [string]$version) {
+                    [string]$nombre, [string]$autor, [string]$titleid, [string]$version,
+                    [string]$imagenRomfs) {
     $b = [System.IO.File]::ReadAllBytes($origen)
     if ([System.Text.Encoding]::ASCII.GetString($b, 0x10, 4) -ne "NRO0") {
         throw "motor\rgss-switch.nro no es un NRO (falta la marca NRO0)."
@@ -899,27 +906,38 @@ function Rehace-Nro([string]$origen, [string]$destino, [string]$icono,
     # nombre, el autor, la version y el title id.
     $nacp = New-Object byte[] 0x4000
 
-    # Y el ROMFS del motor se copia TAL CUAL, sin mirarlo.
+    # Y el ROMFS. Aqui es donde el .nro de cada juego aprende CUAL es su juego.
     #
-    # Es un romfs vacio de 1.728 bytes que pone elf2nro, y esta ahi a proposito:
-    # Ryujinx pide el romfs del .nro al arrancar y, si el ASET declara tamano
-    # cero, se muere (commit 6128ea3). Un ASET rehecho sin esa seccion produce un
-    # .nro del tamano correcto, con el icono correcto y el nombre correcto, que
-    # no arranca -y el fallo aparece lejos de aqui, en el emulador, sin una linea
-    # que lo explique-. Asi que lo que traiga el motor sale igual por el otro
-    # lado; esto no es sitio para tener una opinion sobre el romfs.
+    # §3 dice que el motor busca su carpeta primero en el directorio de argv[0].
+    # Eso solo contesta lanzado desde hbmenu: Ryujinx lanza los .nro con argc = 0
+    # y ahi no hay argv[0] que valga, asi que sin mas el binario se planta en la
+    # pantalla de aviso diciendo -con razon- que no sabe donde esta el juego. La
+    # segunda via de §3 es romfs:/juego.txt, que es la que usa el NSP porque una
+    # aplicacion tampoco tiene argv. Poniendole el mismo romfs al .nro, las dos
+    # vias contestan y el binario vale para las tres formas de arrancarlo.
+    #
+    # Si no se pudo construir esa imagen se cae al romfs del motor, que son 1.728
+    # bytes vacios que pone elf2nro y que estan ahi a proposito: con el ASET
+    # declarando tamano cero, Ryujinx se muere (commit 6128ea3). Ese .nro
+    # arranca, pero solo desde hbmenu.
     $romfs = New-Object byte[] 0
+    if ($imagenRomfs -and (Test-Path -LiteralPath $imagenRomfs)) {
+        $romfs = [System.IO.File]::ReadAllBytes($imagenRomfs)
+    }
+    $delMotor = ($romfs.Length -eq 0)
     if ($b.Length -gt $tam -and [System.Text.Encoding]::ASCII.GetString($b, $tam, 4) -eq "ASET") {
         $no = [BitConverter]::ToUInt64($b, $tam + 0x18)
         $ns = [BitConverter]::ToUInt64($b, $tam + 0x20)
         if ($ns -eq 0x4000 -and ($tam + $no + $ns) -le $b.Length) {
             [Array]::Copy($b, $tam + $no, $nacp, 0, 0x4000)
         }
-        $ro = [BitConverter]::ToUInt64($b, $tam + 0x28)
-        $rs = [BitConverter]::ToUInt64($b, $tam + 0x30)
-        if ($rs -gt 0 -and ($tam + $ro + $rs) -le $b.Length) {
-            $romfs = New-Object byte[] $rs
-            [Array]::Copy($b, $tam + $ro, $romfs, 0, $rs)
+        if ($delMotor) {
+            $ro = [BitConverter]::ToUInt64($b, $tam + 0x28)
+            $rs = [BitConverter]::ToUInt64($b, $tam + 0x30)
+            if ($rs -gt 0 -and ($tam + $ro + $rs) -le $b.Length) {
+                $romfs = New-Object byte[] $rs
+                [Array]::Copy($b, $tam + $ro, $romfs, 0, $rs)
+            }
         }
     }
     Reescribe-Nacp $nacp $nombre $autor $titleid $version
@@ -1022,6 +1040,41 @@ function Ejecuta-Herramienta([string]$exe, [string[]]$argumentos, [string]$tmp, 
     return $p.ExitCode
 }
 
+# La imagen romfs que lleva dentro el <slug>.nro: un solo fichero, juego.txt,
+# con la ruta de la carpeta del juego en la tarjeta.
+#
+# El formato RomFS NO se reimplementa aqui. Son cuatro tablas con sus hashes y
+# escribirlas a mano en PowerShell seria cien lineas que nadie volveria a mirar
+# y que fallarian en silencio. build_romfs.exe viene de switch-tools -la misma
+# gente y la misma licencia ISC que nacptool y npdmtool- y es EL MISMO CODIGO que
+# usa elf2nro --romfsdir: se comprobo generando la imagen por los dos caminos y
+# comparandolas, y salen identicas byte a byte.
+#
+# Si la entrega no lo trae, se devuelve $null y el .nro se queda con el romfs
+# vacio del motor. Ese .nro funciona, pero solo lanzado desde hbmenu.
+function Crea-Romfs([string]$slug, [scriptblock]$avisa) {
+    $exe = Join-Path $Entrega "tools\build_romfs.exe"
+    if (-not (Test-Path -LiteralPath $exe)) {
+        $avisa.Invoke("     AVISO: la entrega no trae tools\build_romfs.exe, asi que el .nro sale con el romfs vacio del motor.")
+        $avisa.Invoke("            Ese .nro solo encuentra su juego lanzado desde el menu homebrew; en Ryujinx -que lanza sin argv- llegara a la pantalla de aviso.")
+        return $null
+    }
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("rgss-romfs-" + $slug)
+    if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path (Join-Path $tmp "raiz") | Out-Null
+
+    # Una linea, sin BOM y con salto al final. Es lo unico que el binario sabe
+    # del juego, y por eso no hay ninguna ruta escrita en el codigo del motor.
+    Escribe-Utf8 (Join-Path $tmp "raiz\juego.txt") ("sdmc:/switch/" + $slug + "`n")
+    $img = Join-Path $tmp "juego.romfs"
+    $c = Ejecuta-Herramienta $exe @((Join-Path $tmp "raiz"), $img) $tmp "romfs" { param($m) }
+    if ($c -ne 0 -or -not (Test-Path -LiteralPath $img)) {
+        $avisa.Invoke("     AVISO: build_romfs fallo (codigo $c); el .nro sale con el romfs vacio del motor y solo servira desde hbmenu.")
+        return $null
+    }
+    return $img
+}
+
 # El NSP: el juego instalado como aplicacion en vez de lanzado desde el menu
 # homebrew. No es comodidad. Un .nro abierto desde el icono del album corre como
 # APPLET, y un applet tiene un presupuesto de memoria muy inferior al de una
@@ -1115,6 +1168,107 @@ function Copia-Arbol([string]$origen, [string]$destino, [scriptblock]$avisa) {
     foreach ($p in $NoCopiar) { $xf += $p }
     robocopy $origen $destino /E /NJH /NJS /NFL /NDL /NP /R:2 /W:1 /XF $xf | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "robocopy fallo copiando $origen (codigo $LASTEXITCODE)" }
+}
+
+# Todo lo que en SD:/switch/<slug>/ viene de la entrega y del perfil, y nada de
+# lo que viene del juego: el <slug>.nro, el mkxp.json compuesto y lib/.
+#
+# Esta aparte porque es exactamente lo que hace -SoloMotor. Actualizar el motor
+# no puede costar volver a copiar setecientos megas que no han cambiado, y quien
+# depura un shim de Ruby lo toca veinte veces en una tarde.
+function Pon-Motor($info, [string]$juego, [string]$destino, [scriptblock]$avisa) {
+    $version = "1.0.0"
+    $vf = Join-Path $Entrega "VERSION.txt"
+    # SOLO la primera palabra. construir.sh escribe "0.1.0 2026-09-09" en
+    # VERSION.txt -version y fecha- y ese campo del NACP son 0x10 bytes contando
+    # el cero final: dieciseis caracteres justos no caben, y el empaquetado se
+    # caia al llegar al .nro con un mensaje sobre bytes que no explicaba nada.
+    if (Test-Path -LiteralPath $vf) {
+        $version = ((Lee-Texto $vf).Trim() -split '\s+')[0]
+        if ($version.Length -gt 15) { $version = $version.Substring(0, 15) }
+    }
+
+    $icono = Join-Path $Entrega "motor\icono.jpg"
+    if ($info.CarpetaPerfil) {
+        $propio = Join-Path $info.CarpetaPerfil "icono.jpg"
+        if (Test-Path -LiteralPath $propio) { $icono = $propio }
+    }
+
+    $imagen = Crea-Romfs $info.Slug $avisa
+    try {
+        Rehace-Nro (Join-Path $Entrega "motor\rgss-switch.nro") (Join-Path $destino ($info.Slug + ".nro")) `
+                   $icono $info.Nombre $info.Autor $info.TitleId $version $imagen
+    } finally {
+        if ($imagen) { Remove-Item -LiteralPath (Split-Path -Parent $imagen) -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    $conRomfs = "sin romfs propio (solo hbmenu)"
+    if ($imagen) { $conRomfs = "romfs:/juego.txt -> sdmc:/switch/" + $info.Slug }
+    $avisa.Invoke("     $($info.Slug).nro   title id $($info.TitleId)   " + (Split-Path -Leaf $icono) + "   " + $conRomfs)
+
+    Escribe-Utf8 (Join-Path $destino "mkxp.json") (Compone-Mkxp $info $juego $avisa)
+    $avisa.Invoke("     mkxp.json compuesto (base + juego + perfil $($info.NombrePerfil))")
+
+    # Los nx-*.rb de la tarjeta se borran antes de copiar: si el perfil de antes
+    # traia shims que este no, quedarian cargandose desde un preloadScript que ya
+    # no los nombra... o peor, nombrados y viejos.
+    $libDestino = Join-Path $destino "lib"
+    if (Test-Path -LiteralPath $libDestino) {
+        Get-ChildItem -LiteralPath $libDestino -Filter "nx-*.rb" -ErrorAction SilentlyContinue | Remove-Item -Force
+    }
+    Copia-Arbol (Join-Path $Entrega "lib") $libDestino $avisa
+    if ($info.CarpetaPerfil) {
+        $libPerfil = Join-Path $info.CarpetaPerfil "lib"
+        if (Test-Path -LiteralPath $libPerfil) {
+            Copy-Item -Path (Join-Path $libPerfil "*.rb") -Destination $libDestino -Force
+            $avisa.Invoke("     lib/ + los shims del perfil (" + ((Get-ChildItem -LiteralPath $libPerfil -Filter *.rb | ForEach-Object { $_.Name }) -join ", ") + ")")
+        }
+    }
+
+    if ($Diagnostico) {
+        $diagDir = Join-Path $Entrega "diagnostico"
+        if (Test-Path -LiteralPath $diagDir) {
+            Copy-Item -Path (Join-Path $diagDir "*.rb") -Destination $libDestino -Force
+            Escribe-Utf8 (Join-Path $destino "diagnostico.txt") "Puesto por Empaquetar.ps1 -Diagnostico. Borralo para que el juego arranque mas rapido.`r`n"
+            $avisa.Invoke("     sondas de diagnostico en lib/ y diagnostico.txt puesto")
+        } else {
+            $avisa.Invoke("     AVISO: -Diagnostico pedido pero la entrega no trae diagnostico\; se sigue sin sondas.")
+        }
+    }
+    return [pscustomobject]@{ Version = $version; Icono = $icono }
+}
+
+# -SoloMotor: la carpeta del juego en la tarjeta ya existe y sus recursos no han
+# cambiado. Se rehace lo que viene de la entrega y del perfil y se deja intacto
+# TODO lo demas: datos.zip, las carpetas de recursos, las sueltas y los ficheros
+# de la raiz del juego -Game.ini, preload.rb, las partidas guardadas-.
+function Actualiza-Motor($info, [string]$salida, [scriptblock]$avisa) {
+    $destino = Join-Path $salida ("switch\" + $info.Slug)
+    if (-not (Test-Path -LiteralPath $destino)) {
+        throw "no existe $destino. -SoloMotor actualiza una instalacion que ya esta; para crearla, empaqueta sin -SoloMotor."
+    }
+    # Que la carpeta exista no basta: una carpeta vacia o a medias pasaria, se
+    # llenaria de motor y el jugador se encontraria un .nro sin juego detras.
+    $hayDatos = (Test-Path -LiteralPath (Join-Path $destino $NombrePaquete)) -or
+                (Test-Path -LiteralPath (Join-Path $destino "Data")) -or
+                (@(Get-ChildItem -LiteralPath $destino -File -ErrorAction SilentlyContinue |
+                   Where-Object { $_.Name -match '\.rgss(ad|[23]a)$' -and $_.Length -gt 8 }).Count -gt 0)
+    if (-not $hayDatos) {
+        throw "en $destino no hay ni $NombrePaquete ni Data\ ni un archivo del juego: ahi no hay ninguna instalacion que actualizar."
+    }
+
+    $avisa.Invoke("1/2 Motor (los recursos del juego no se tocan)")
+    $delMotor = Pon-Motor $info $info.Carpeta $destino $avisa
+
+    $avisa.Invoke("2/2 NSP")
+    $llaves = Busca-Claves $Claves
+    if ($llaves) {
+        $avisa.Invoke("     claves: $llaves (se leen donde estan; no se copian a ningun sitio)")
+        $nsp = Crea-Nsp $info $salida $delMotor.Icono $delMotor.Version $llaves $avisa
+        if ($nsp) { $avisa.Invoke("     $nsp - reinstalalo encima del que tuvieras; conserva la partida porque el title id es el mismo") }
+    } else {
+        $avisa.Invoke("     Sin prod.keys no se rehace el NSP; el .nro nuevo ya esta puesto.")
+    }
+    return "Listo: motor actualizado en $destino. Los recursos del juego siguen donde estaban."
 }
 
 function Empaqueta($info, [string]$salida, [string]$modo, [scriptblock]$avisa) {
@@ -1255,55 +1409,9 @@ function Empaqueta($info, [string]$salida, [string]$modo, [scriptblock]$avisa) {
 
     #--- 4. el motor ---------------------------------------------------------
     $avisa.Invoke("3/5 Motor (.nro con el icono y el nombre de este juego, mkxp.json, lib/)")
-    $version = "1.0.0"
-    $vf = Join-Path $Entrega "VERSION.txt"
-    # SOLO la primera palabra. construir.sh escribe "0.1.0 2026-09-09" en
-    # VERSION.txt -version y fecha- y ese campo del NACP son 0x10 bytes contando
-    # el cero final: dieciseis caracteres justos no caben, y el empaquetado se
-    # caia al llegar al .nro con un mensaje sobre bytes que no explicaba nada.
-    if (Test-Path -LiteralPath $vf) {
-        $version = ((Lee-Texto $vf).Trim() -split '\s+')[0]
-        if ($version.Length -gt 15) { $version = $version.Substring(0, 15) }
-    }
-
-    $icono = Join-Path $Entrega "motor\icono.jpg"
-    if ($info.CarpetaPerfil) {
-        $propio = Join-Path $info.CarpetaPerfil "icono.jpg"
-        if (Test-Path -LiteralPath $propio) { $icono = $propio }
-    }
-    Rehace-Nro (Join-Path $Entrega "motor\rgss-switch.nro") (Join-Path $destino ($info.Slug + ".nro")) `
-               $icono $info.Nombre $info.Autor $info.TitleId $version
-    $avisa.Invoke("     $($info.Slug).nro   title id $($info.TitleId)   " + (Split-Path -Leaf $icono))
-
-    Escribe-Utf8 (Join-Path $destino "mkxp.json") (Compone-Mkxp $info $juego $avisa)
-    $avisa.Invoke("     mkxp.json compuesto (base + juego + perfil $($info.NombrePerfil))")
-
-    # Los nx-*.rb de la tarjeta se borran antes de copiar: si el perfil de antes
-    # traia shims que este no, quedarian cargandose desde un preloadScript que ya
-    # no los nombra... o peor, nombrados y viejos.
-    $libDestino = Join-Path $destino "lib"
-    if (Test-Path -LiteralPath $libDestino) {
-        Get-ChildItem -LiteralPath $libDestino -Filter "nx-*.rb" -ErrorAction SilentlyContinue | Remove-Item -Force
-    }
-    Copia-Arbol (Join-Path $Entrega "lib") $libDestino $avisa
-    if ($info.CarpetaPerfil) {
-        $libPerfil = Join-Path $info.CarpetaPerfil "lib"
-        if (Test-Path -LiteralPath $libPerfil) {
-            Copy-Item -Path (Join-Path $libPerfil "*.rb") -Destination $libDestino -Force
-            $avisa.Invoke("     lib/ + los shims del perfil (" + ((Get-ChildItem -LiteralPath $libPerfil -Filter *.rb | ForEach-Object { $_.Name }) -join ", ") + ")")
-        }
-    }
-
-    if ($Diagnostico) {
-        $diagDir = Join-Path $Entrega "diagnostico"
-        if (Test-Path -LiteralPath $diagDir) {
-            Copy-Item -Path (Join-Path $diagDir "*.rb") -Destination $libDestino -Force
-            Escribe-Utf8 (Join-Path $destino "diagnostico.txt") "Puesto por Empaquetar.ps1 -Diagnostico. Borralo para que el juego arranque mas rapido.`r`n"
-            $avisa.Invoke("     sondas de diagnostico en lib/ y diagnostico.txt puesto")
-        } else {
-            $avisa.Invoke("     AVISO: -Diagnostico pedido pero la entrega no trae diagnostico\; se sigue sin sondas.")
-        }
-    }
+    $delMotor = Pon-Motor $info $juego $destino $avisa
+    $version = $delMotor.Version
+    $icono = $delMotor.Icono
 
     #--- 5. comprobacion -----------------------------------------------------
     $avisa.Invoke("4/5 Comprobacion")
@@ -1451,7 +1559,11 @@ if ($SinInterfaz -or ($Juego -and $Salida)) {
     $info = Detecta-Juego $Juego
     Write-Host (Informe-Deteccion $info $false)
     Write-Host ""
-    $r = Empaqueta $info $Salida $Contenedor { param($m) Write-Host $m }
+    if ($SoloMotor) {
+        $r = Actualiza-Motor $info $Salida { param($m) Write-Host $m }
+    } else {
+        $r = Empaqueta $info $Salida $Contenedor { param($m) Write-Host $m }
+    }
     Write-Host ""
     Write-Host $r
     exit 0
@@ -1521,8 +1633,18 @@ $explica.Text = ("MARCADA: un solo fichero. Copiar a la tarjeta pasa de decenas 
                  "SIN MARCAR: los recursos sueltos. Arranca lo mas rapido posible, permite cambiar graficos a mano, y es lo unico posible por encima de 4 GB.")
 $f.Controls.Add($explica)
 
+# Actualizar el motor no puede costar volver a copiar setecientos megas que no
+# han cambiado. Con esto marcado se rehacen el .nro, el mkxp.json y lib/, y los
+# recursos del juego -y las partidas guardadas- se quedan como estan.
+$casillaMotor = New-Object System.Windows.Forms.CheckBox
+$casillaMotor.Location = New-Object System.Drawing.Point(16, 204)
+$casillaMotor.Size = New-Object System.Drawing.Size(614, 22)
+$casillaMotor.Checked = [bool]$SoloMotor
+$casillaMotor.Text = "4. Solo actualizar el motor (no copiar los recursos: la carpeta del juego ya tiene que estar en la tarjeta)"
+$f.Controls.Add($casillaMotor)
+
 $estado = New-Object System.Windows.Forms.TextBox
-$estado.Location = New-Object System.Drawing.Point(16, 208); $estado.Size = New-Object System.Drawing.Size(614, 208)
+$estado.Location = New-Object System.Drawing.Point(16, 232); $estado.Size = New-Object System.Drawing.Size(614, 184)
 $estado.Multiline = $true; $estado.ReadOnly = $true; $estado.ScrollBars = "Vertical"
 $estado.Font = New-Object System.Drawing.Font("Consolas", 9)
 $f.Controls.Add($estado)
@@ -1552,6 +1674,8 @@ $bJuego.Add_Click({
 })
 $cajaJuego.Add_Leave({ if ($cajaJuego.Text) { Detecta-Y-Ensena $cajaJuego.Text } })
 
+$casillaMotor.Add_CheckedChanged({ $casillaZip.Enabled = -not $casillaMotor.Checked })
+
 $bIr = Boton "Empaquetar" 16 428 150
 $bIr.Font = New-Object System.Drawing.Font($bIr.Font, [System.Drawing.FontStyle]::Bold)
 $bIr.Add_Click({
@@ -1566,7 +1690,11 @@ $bIr.Add_Click({
         $info = Detecta-Juego $cajaJuego.Text
         $avisa.Invoke((Informe-Deteccion $info $false))
         $avisa.Invoke("")
-        $r = Empaqueta $info $cajaSalida.Text $modo $avisa
+        if ($casillaMotor.Checked) {
+            $r = Actualiza-Motor $info $cajaSalida.Text $avisa
+        } else {
+            $r = Empaqueta $info $cajaSalida.Text $modo $avisa
+        }
         $avisa.Invoke(""); $avisa.Invoke($r)
         [System.Windows.Forms.MessageBox]::Show($r, "Hecho", "OK", "Information") | Out-Null
     } catch {

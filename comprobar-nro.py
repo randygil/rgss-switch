@@ -43,6 +43,43 @@ def texto(b):
     return b.split(b"\0", 1)[0].decode("utf-8", "replace")
 
 
+
+def romfs(img):
+    """Lista el RomFS y ensena juego.txt, que es a lo que se viene.
+
+    Cabecera de 0x50 bytes: headerSize y luego cuatro pares offset/size (tablas
+    de hash y de metadatos de directorios y de ficheros) y el offset de los
+    datos. La tabla de metadatos de ficheros es una lista encadenada: cada
+    entrada trae el padre, el hermano siguiente, el offset y el tamano del
+    fichero dentro de la zona de datos, y el nombre en UTF-16LE.
+    """
+    if len(img) < 0x50:
+        print("  romfs: la imagen no llega ni a la cabecera")
+        return
+    tam_cab = struct.unpack_from("<Q", img, 0)[0]
+    if tam_cab != 0x50:
+        print("  romfs: cabecera de %d bytes, se esperaban 80" % tam_cab)
+    fm_off, fm_len = struct.unpack_from("<QQ", img, 0x38)
+    datos = struct.unpack_from("<Q", img, 0x48)[0]
+    print("  romfs %d bytes: meta de ficheros en +%d (%d bytes), datos en +%d"
+          % (len(img), fm_off, fm_len, datos))
+
+    # Se recorre la tabla entera de principio a fin en vez de seguir la cadena
+    # de hermanos: asi salen los ficheros de todos los directorios, no solo los
+    # de la raiz. Cada entrada mide 0x20 mas el nombre, redondeado a 4.
+    o = 0
+    while o + 0x20 <= fm_len:
+        base = fm_off + o
+        d_off, d_tam = struct.unpack_from("<QQ", img, base + 8)
+        largo = struct.unpack_from("<I", img, base + 0x1C)[0]
+        nombre = img[base + 0x20:base + 0x20 + largo].decode("utf-8", "replace")
+        print("    /%s  %d bytes" % (nombre, d_tam))
+        if nombre.lower() == "juego.txt":
+            cont = img[datos + d_off:datos + d_off + d_tam]
+            print("      -> %r" % cont.decode("utf-8", "replace"))
+        o += 0x20 + ((largo + 3) & ~3)
+
+
 def main(ruta, todos=False):
     d = open(ruta, "rb").read()
     if d[0x10:0x14] != b"NRO0":
@@ -66,12 +103,13 @@ def main(ruta, todos=False):
     icono = d[a + io_:a + io_ + is_]
     if icono[:2] != b"\xff\xd8":
         print("  AVISO: el icono no empieza por la marca JPEG ffd8")
-    # Ryujinx pide el romfs del .nro al arrancar y se muere si el ASET declara
-    # tamano cero (commit 6128ea3). elf2nro pone uno vacio de 1.728 bytes y el
-    # empaquetador lo copia tal cual del motor. Si aqui sale 0, el .nro no
-    # arranca en el emulador y el fallo no menciona el romfs por ninguna parte.
+    # El romfs es la segunda via de CONVENCIONES 3 y la unica que contesta en
+    # Ryujinx, que lanza los .nro con argc = 0. Un ASET que lo declare a cero
+    # ademas mata al emulador (commit 6128ea3).
     if rs == 0:
         print("  AVISO: ASET sin romfs (size 0). Ryujinx no arranca un .nro asi.")
+    else:
+        romfs(d[a + ro:a + ro + rs])
     if a + no + ns > len(d):
         sys.exit("  el NACP se sale del fichero")
     nacp = d[a + no:a + no + ns]

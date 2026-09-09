@@ -118,11 +118,18 @@ else
 fi
 
 # --- tools/ -------------------------------------------------------------
-# Las tres que Empaquetar.ps1 necesita en la maquina del jugador, que no tiene
-# devkitPro. Comprobado que las tres arrancan con solo system32 en el PATH: no
-# arrastran DLL de msys2 y se copian tal cual.
+# Las cuatro que Empaquetar.ps1 necesita en la maquina del jugador, que no
+# tiene devkitPro. Comprobado que las cuatro arrancan con solo system32 en el
+# PATH -solo enlazan KERNEL32 y msvcrt-: no arrastran DLL de msys2 y se copian
+# tal cual.
 cp "$DKP_POSIX/tools/bin/nacptool.exe" "$ENT/tools/"
 cp "$DKP_POSIX/tools/bin/npdmtool.exe" "$ENT/tools/"
+# build_romfs es el que hace que el .nro de cada juego SEPA cual es su juego:
+# Ryujinx lanza los .nro con argc = 0, asi que la via de argv[0] no contesta
+# nunca ahi, y sin un romfs con juego.txt dentro el binario llega a la pantalla
+# de aviso. Es el mismo codigo que usa elf2nro --romfsdir (comprobado: las dos
+# imagenes salen identicas byte a byte).
+cp "$DKP_POSIX/tools/bin/build_romfs.exe" "$ENT/tools/"
 if [ -f tools/hacbrewpack/hacbrewpack.exe ]; then
   cp tools/hacbrewpack/hacbrewpack.exe "$ENT/tools/"
 else
