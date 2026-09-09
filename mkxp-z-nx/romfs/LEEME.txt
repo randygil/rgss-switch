@@ -1,0 +1,22 @@
+Este romfs va dentro del .nro del motor y esta vacio a proposito.
+
+El motor busca su juego, cuando argv[0] no le dice nada, en la ruta escrita en
+romfs:/juego.txt (CONVENCIONES 3). Aqui NO hay juego.txt, y eso esta bien: el
+.nro del motor no pertenece a ningun juego, asi que el intento falla y quien lo
+lance ve la pantalla de aviso diciendo que se probo.
+
+Entonces, por que existe la carpeta. Porque pedirle a Horizon un romfs que el
+binario no tiene mata al emulador: la peticion acaba en
+fsOpenDataStorageByCurrentProcess y Ryujinx tira una excepcion sin recoger
+-"The given key '127' was not present in the dictionary"- en vez de devolver un
+error. Medido el 9 de septiembre de 2026 con un .nro sin romfs. Con un romfs
+presente aunque no lleve nada dentro, la llamada es segura.
+
+Quien SI trae juego.txt es el .nro o el NSP de cada juego, que los hace el
+empaquetador. Para probar el camino a mano:
+
+    elf2nro rgss-switch.elf prueba.nro --icon=... --nacp=... \
+            --romfsdir=<carpeta con un juego.txt de una linea>
+
+y esa linea es la carpeta del juego en la tarjeta, por ejemplo
+sdmc:/switch/pokemon-anil

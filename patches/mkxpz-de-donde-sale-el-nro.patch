@@ -47,6 +47,15 @@ el trozo de sharedstate.cpp en mkxpz-textura-sin-memoria.patch.
    aplicacion instalada no tiene argv y el punto 1 no puede contestar nada-, y
    detras, nada: la pantalla de aviso dice QUE se probo y con que valor.
 
+3. Y DESDE QUE EL MOTOR ES GENERICO, LAS RUTAS CONVENIDAS SOBRAN. El punto 2
+   dejaba dos rutas de un juego concreto escritas en el motor como reserva.
+   Con un solo juego eso era comodo; con un binario que tiene que correr
+   cualquier juego de RPG Maker XP es peor que no tener nada, porque un juego
+   mal instalado arrancaria el de al lado sin decirlo. En su sitio va
+   romfs:/juego.txt, que es como un NSP dice donde esta su juego -una
+   aplicacion instalada no tiene argv y el punto 1 no puede contestar nada-, y
+   detras, nada: la pantalla de aviso dice QUE se probo y con que valor.
+
 --- src/main.cpp.antes-nro
 +++ src/main.cpp
 @@ -122,7 +122,13 @@
@@ -119,7 +128,7 @@ el trozo de sharedstate.cpp en mkxpz-textura-sin-memoria.patch.
      if (argc > 0 && argv[0] && argv[0][0]) {
          char buf[512];
          strncpy(buf, argv[0], sizeof(buf) - 1);
-@@ -287,19 +328,64 @@
+@@ -287,19 +328,81 @@
          char *slash = strrchr(buf, '/');
          if (slash) {
              *slash = 0;
@@ -148,17 +157,34 @@ el trozo de sharedstate.cpp en mkxpz-textura-sin-memoria.patch.
 +
 +    /* (b) romfs:/juego.txt
 +     *
-+     * Un .nro solo lleva romfs si elf2nro recibio --romfsdir, y un NSP solo si
-+     * hacbrewpack lo recibio: en un homebrew normal no hay ninguno, y entonces
-+     * romfsInit falla en silencio y esto es un intento fallido mas, no un
-+     * error. Se abre el fichero pase lo que pase con romfsInit, porque en un
-+     * NSP libnx puede haberlo montado ya por su cuenta y la segunda llamada
-+     * contesta que no. */
++     * Un binario solo lleva romfs si alguien se lo puso: elf2nro --romfsdir
++     * para un .nro, hacbrewpack --romfsdir para un NSP. Si no lo lleva,
++     * romfsInit devuelve error y esto es un intento fallido mas, no un fallo.
++     *
++     * PERO PEDIR UN ROMFS QUE NO EXISTE NO ES GRATIS EN EL EMULADOR. Cuando
++     * libnx cree que somos una aplicacion instalada, romfsInit acaba en
++     * fsOpenDataStorageByCurrentProcess; en la consola eso devuelve un error y
++     * aqui no pasaria nada, pero Ryujinx tira una excepcion sin recoger y se
++     * lleva el emulador entero por delante ("The given key '127' was not
++     * present in the dictionary", en VirtualFileSystem.GetRomFs). Y lo cree
++     * siempre: medido el 9 de septiembre de 2026, un .nro suelto lanzado en
++     * Ryujinx contesta envIsNso()=1 -o sea "soy una aplicacion instalada",
++     * que es mentira- con ProgramId 0 y argc 0.
++     *
++     * Por eso el .nro del motor se compila SIEMPRE con --romfsdir aunque su
++     * romfs no lleve ningun juego.txt (ver mkxp-z-nx/Makefile y romfs/): con
++     * un romfs vacio la llamada es segura, el fopen falla como toca y quien
++     * lanzo el binario ve la pantalla de aviso en vez de un emulador cerrado.
++     * El resultado de romfsInit se guarda y se ensena, que es como se llego
++     * hasta aqui. */
 +    {
-+        romfsInit();
-+        FILE *f = fopen("romfs:/juego.txt", "rb");
++        Result r = romfsInit();
++        FILE *f = R_SUCCEEDED(r) ? fopen("romfs:/juego.txt", "rb") : NULL;
 +        if (!f) {
-+            nx_intento("romfs:/juego.txt no esta (este binario no lleva romfs)");
++            char m[96];
++            snprintf(m, sizeof(m), "romfs:/juego.txt no esta (romfsInit -> 0x%08x)",
++                     (unsigned)r);
++            nx_intento(m);
 +        } else {
 +            char linea[512] = {0};
 +            char *p = linea;
@@ -193,7 +219,7 @@ el trozo de sharedstate.cpp en mkxpz-textura-sin-memoria.patch.
  }
  #endif
  
-@@ -312,6 +398,27 @@
+@@ -312,6 +415,27 @@
      Debug() << "[nx] mkxp-z arrancando en Horizon OS; argc =" << argc
              << "argv[0] =" << (argc > 0 && argv[0] ? argv[0] : "(vacio)");
  
@@ -221,7 +247,7 @@ el trozo de sharedstate.cpp en mkxpz-textura-sin-memoria.patch.
      nxSetupWorkdir(argc, argv);
      {
          char cwd[512] = {0};
-@@ -343,7 +450,14 @@
+@@ -343,7 +467,14 @@
       * segundo y medio de espera cuando todo va bien. Solo con diagnostico.txt. */
      if (nx_diagnostico()) {
          nx_probe_fs("lib/socket.rb");
@@ -237,7 +263,7 @@ el trozo de sharedstate.cpp en mkxpz-textura-sin-memoria.patch.
          nx_probe_fs("mkxp.json");
          nx_probe_threads("desde main");
          nx_probe_sync();
-@@ -415,6 +529,14 @@
+@@ -415,6 +546,14 @@
      if (conf.windowTitle.empty())
        conf.windowTitle = conf.game.title;
  

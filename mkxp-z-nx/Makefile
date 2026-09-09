@@ -218,9 +218,19 @@ $(TARGET).nacp:
 	@echo "NACP $@ ($(APP_VERSION))"
 	@$(DEVKITPRO)/tools/bin/nacptool --create "$(APP_TITLE)" "$(APP_AUTHOR)" "$(APP_VERSION)" $@
 
+# --romfsdir SIEMPRE, aunque romfs/ no lleve ningun juego.txt.
+#
+# El motor busca su juego en romfs:/juego.txt cuando argv[0] no le dice nada
+# (CONVENCIONES 3), y pedir un romfs que el binario no tiene es lo que mata a
+# Ryujinx: la peticion acaba en fsOpenDataStorageByCurrentProcess y el
+# emulador tira una excepcion sin recoger en vez de devolver un error. Con un
+# romfs presente aunque este vacio, la llamada es segura y quien lanza el .nro
+# ve la pantalla de aviso en lugar de un emulador cerrado. Son unos cientos de
+# bytes en un binario de 17 MB.
 $(TARGET).nro: $(TARGET).elf $(TARGET).nacp
 	@echo "NRO  $@"
-	@$(DEVKITPRO)/tools/bin/elf2nro $< $@ --icon=$(APP_ICON) --nacp=$(TARGET).nacp
+	@$(DEVKITPRO)/tools/bin/elf2nro $< $@ --icon=$(APP_ICON) --nacp=$(TARGET).nacp \
+	                                 --romfsdir=$(CURDIR)/romfs
 
 clean:
 	@rm -rf $(BUILD) $(TARGET).elf $(TARGET).nro

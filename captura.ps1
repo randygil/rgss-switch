@@ -1,6 +1,13 @@
 # Arranca el juego en Ryujinx y toma capturas de la pantalla mientras corre.
 # Es la unica verificacion que no admite discusion: o hay imagen o no la hay.
+#
+#   .\captura.ps1 -Juego pokemon-anil
+#
+# El slug es obligatorio: de el salen la ruta del .nro y el nombre de las
+# capturas. Antes estaba escrito aqui dentro un juego concreto, que con un
+# motor generico solo sirve para fotografiar siempre el mismo.
 param(
+    [Parameter(Mandatory=$true)][string]$Juego,
     [int[]]$Segundos = @(30, 60, 90),
     [string]$Etiqueta = "cap"
 )
@@ -16,8 +23,9 @@ Add-Type -Name Ppp -Namespace Win32 -MemberDefinition @"
 "@
 [Win32.Ppp]::SetProcessDPIAware() | Out-Null
 
-$sd  = "$env:APPDATA\Ryujinx\sdcard\switch\pokemon-anil\pokemon-anil.nro"
-$dir = "C:\anilswitch\docs\capturas"
+$sd  = "$env:APPDATA\Ryujinx\sdcard\switch\$Juego\$Juego.nro"
+if (-not (Test-Path $sd)) { throw "no esta $sd" }
+$dir = Join-Path $PSScriptRoot "docs\capturas"
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 
 $p = Start-Process -FilePath "C:\Games\publish\Ryujinx.exe" `
@@ -33,7 +41,7 @@ foreach ($s in $Segundos) {
     $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
-    $ruta = Join-Path $dir "$Etiqueta-$($s)s.png"
+    $ruta = Join-Path $dir "$Juego-$Etiqueta-$($s)s.png"
     $bmp.Save($ruta, [System.Drawing.Imaging.ImageFormat]::Png)
     $g.Dispose(); $bmp.Dispose()
     Write-Output "captura a los $s s -> $ruta"

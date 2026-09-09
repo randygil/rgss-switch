@@ -87,8 +87,13 @@ static int nx_boot_destino(void)
         return 1;
     }
     if (rendido) {
-        snprintf(rutas[0], sizeof(rutas[0]), "%s", NX_BOOTLOG_NOMBRE);
-        snprintf(rutas[1], sizeof(rutas[1]), "%s", NX_LOG_HUERFANO);
+        /* Sin carpeta, el nombre a secas se abriria contra un directorio de
+         * trabajo que no sabemos cual es -medido: la raiz de la tarjeta-, y un
+         * registro que aparece donde nadie lo busca es un registro perdido. Va
+         * primero la ruta absoluta, que siempre es la misma y esta escrita en
+         * la pantalla de aviso. */
+        snprintf(rutas[0], sizeof(rutas[0]), "%s", NX_LOG_HUERFANO);
+        snprintf(rutas[1], sizeof(rutas[1]), "%s", NX_BOOTLOG_NOMBRE);
         n_rutas = 2;
         return 1;
     }

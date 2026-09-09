@@ -27,6 +27,7 @@
 !/finalize-ruby.sh
 !/gen-xxd.sh
 !/fixup-arm64.py
+!/reconstruir-src.py
 !/pack-anil.sh
 !/empaquetar-nsp.sh
 !/construir.sh
@@ -69,6 +70,9 @@
 /mkxp-z-nx/*
 !/mkxp-z-nx/Makefile
 !/mkxp-z-nx/nx/
+# romfs/ va dentro del .nro del motor y esta vacio a proposito: sin un romfs
+# presente, pedir romfs:/juego.txt mata al emulador. Lo explica su LEEME.txt.
+!/mkxp-z-nx/romfs/
 # generated/ lo rehace gen-xxd.sh (5 MB de hexadecimal); build/ y los
 # .elf/.nro/.nacp los rehace make.
 
@@ -106,6 +110,7 @@
 !/docs/capturas/cargar-01-menu.png
 !/docs/capturas/cargar-b06.png
 !/docs/capturas/nom2-b-letras.png
+!/docs/capturas/pokemon-anil-regresion-motor-generico.png
 # Las otras 168 capturas son 236 MB de fotogramas de depuracion.
 
 #--- Los simbolos de cada compilacion -----------------------------------------

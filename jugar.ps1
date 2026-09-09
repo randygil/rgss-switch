@@ -14,8 +14,15 @@
 # se pierde la mitad. Aqui se mantiene pulsada un tiempo medible.
 #
 # Guion: lista de acciones, cada una "tecla:Z", "esperar:1500" o "foto:nombre".
+#
+#   .\jugar.ps1 -Juego pokemon-anil
+#
+# El slug es obligatorio y de el sale la ruta del .nro; -Ruta sigue estando
+# para apuntar a un .nsp o a un binario de prueba, que Ryujinx arranca igual
+# desde la linea de ordenes.
 param(
-    [string]$Ruta = "$env:APPDATA\Ryujinx\sdcard\switch\pokemon-anil\pokemon-anil.nro",
+    [Parameter(Mandatory=$true)][string]$Juego,
+    [string]$Ruta = "",
     [int]$Espera = 150,
     [string[]]$Guion = @("foto:titulo", "tecla:Z", "esperar:3000", "foto:tras-enter"),
     [string]$Etiqueta = "juego"
@@ -36,7 +43,9 @@ $VK = @{
     "ARRIBA" = 0x26; "ABAJO" = 0x28; "IZQUIERDA" = 0x25; "DERECHA" = 0x27
     "MAS" = 0xBB; "MENOS" = 0xBD; "ENTER" = 0x0D; "ESC" = 0x1B
 }
-$dir = "C:\anilswitch\docs\capturas"
+if (-not $Ruta) { $Ruta = "$env:APPDATA\Ryujinx\sdcard\switch\$Juego\$Juego.nro" }
+if (-not (Test-Path $Ruta)) { throw "no esta $Ruta" }
+$dir = Join-Path $PSScriptRoot "docs\capturas"
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 
 # -Ruta acepta tanto el .nro (menu homebrew) como el .nsp (aplicacion instalada):
@@ -59,7 +68,7 @@ function Foto([string]$nombre) {
     $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
-    $ruta = Join-Path $dir "$Etiqueta-$nombre.png"
+    $ruta = Join-Path $dir "$Juego-$Etiqueta-$nombre.png"
     $bmp.Save($ruta, [System.Drawing.Imaging.ImageFormat]::Png)
     $g.Dispose(); $bmp.Dispose()
     Write-Output "  foto -> $ruta"
