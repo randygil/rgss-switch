@@ -41,7 +41,7 @@ AS      := $(PREFIX)as
 AR      := $(PREFIX)ar
 OBJCOPY := $(PREFIX)objcopy
 
-TARGET  := pokemon-anil
+TARGET  := rgss-switch
 BUILD   := build
 
 #-------------------------------------------------------------------------------
@@ -200,12 +200,16 @@ $(TARGET).elf: $(OBJS)
 # estructural que habia con el hello-ruby-nx de H2, que si carga: alli el
 # campo `size` de la cabecera era MENOR que el fichero porque llevaba el ASET
 # detras; el nuestro salia sin el.
-APP_TITLE   := Pokemon Anil 4.0
-APP_AUTHOR  := Port a Nintendo Switch
-# La version del port (fichero VERSION en la raiz), no la del juego: el juego
-# es siempre Anil 4.0; lo que cambia de una entrega a otra es esto.
+# El NACP y el icono de AQUI son los del motor a secas, y casi nunca se ven:
+# el empaquetador rehace la seccion ASET de cada copia con el nombre, el autor
+# y el icono del juego (CONVENCIONES 4). Lo que se ve de esto es el .nro tal
+# cual sale de compilar, que es lo que se prueba en el emulador.
+APP_TITLE   := rgss-switch
+APP_AUTHOR  := rgss-switch
+# La version del MOTOR (fichero VERSION en la raiz), que es lo unico que este
+# binario puede saber: el juego lo pone quien lo empaquete.
 APP_VERSION := $(SELLO)
-APP_ICON    := $(LIBNX)/default_icon.jpg
+APP_ICON    := $(RAIZ)/nsp/icono.jpg
 
 # El .nacp se rehace siempre: lleva el sello dentro y un sello viejo es peor
 # que ninguno.

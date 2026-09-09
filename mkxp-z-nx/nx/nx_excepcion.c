@@ -28,7 +28,7 @@
  * imprimen restando la base de carga (ver base_de_carga, mas abajo),
  * asi que se pueden pasar tal cual a
  *
- *     aarch64-none-elf-addr2line -f -C -e pokemon-anil.elf <direccion>
+ *     aarch64-none-elf-addr2line -f -C -e rgss-switch.elf <direccion>
  */
 #include <stdint.h>
 #include <switch.h>
@@ -109,7 +109,7 @@ static const char *descripcion(u32 desc)
  * [fp+8]=direccion de retorno. Se exige alineacion a 16 y que la cadena avance
  * siempre hacia arriba, que es lo que evita dar vueltas si la pila esta pisada.
  * Las direcciones salen ya restada la base de carga, listas para
- *     aarch64-none-elf-addr2line -f -C -e pokemon-anil.elf +0x...
+ *     aarch64-none-elf-addr2line -f -C -e rgss-switch.elf +0x...
  */
 static void volcar_pila(uint64_t fp)
 {
