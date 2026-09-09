@@ -95,15 +95,34 @@ la verdad.
 | 1 | Pantalla de título | `pokemon-iberia-hito-1-titulo.png` |
 | 2 | Partida nueva | `pokemon-iberia-hito-2-partida-nueva.png` |
 | 3 | Nombre del jugador en la rejilla | `pokemon-iberia-hito-3-rejilla.png` |
-| 4 | Primer mapa | `1 Intro` en el registro; sin captura del jugador andando |
-| 5 | Menú | no se llegó |
+| 4 | Primer mapa con el jugador andando | `[314254] [donde] mapa 17 Casa en (7,8)` en el registro. **Sin captura**: las que se tomaron salieron con el escritorio de la máquina dentro y hubo que borrarlas (ver el commit del arnés) |
+| 5 | Menú | se pulsó, sin captura utilizable |
 | 6 | Guardar | no se llegó |
 | 7 | Combate | no se llegó |
 
+## Hasta dónde llegó de verdad
+
+Con `-Espera 40` —que es lo que hay que usar en esta familia, no 170— y la
+introducción pasada a botonazos con el patrón Z-C-Z, el jugador **toma el
+control dentro de una casa**:
+
+```
+[ 89976] [donde] mapa  1 Intro en (9,7)
+[314254] [donde] mapa 17 Casa en (7,8)
+```
+
+Se dieron cuatro pasos y se abrió el menú de pausa con la tecla X
+(`Input::B`), sin una sola excepción en `mkxp-debug.log` y sin `errorlog.txt`.
+Las capturas de ese tramo **no se conservan**: salieron con el escritorio de la
+máquina dentro —el emulador se había puesto a pantalla completa y la reserva de
+«copiar la pantalla» hizo lo que no debía— y se borraron. El arnés ya no lo
+puede volver a hacer.
+
 ## Lo que queda
 
-- Pasar la introducción hasta el mapa jugable, el menú y guardar. No hay ningún
-  error que lo impida: es tiempo de sesión.
+- Repetir ese tramo con el arnés arreglado y guardar partida, que es lo único
+  que falta para `jugable`. No hay ningún error que lo impida: es tiempo de
+  sesión.
 - Los cuatro `.mid` de este juego no suenan: no trae soundfont y
   `midiSoundFont` no apunta a ninguno (`Failed to load libfluidsynth.so` en
   `mkxp-debug.log`).
