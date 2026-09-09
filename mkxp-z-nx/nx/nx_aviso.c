@@ -35,6 +35,8 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "nx_juego.h"
+
 void nx_boot_trace(const char *msg);
 const char *nx_build(void);
 
@@ -43,11 +45,12 @@ void nx_aviso_registra(const char *msg);
 int  nx_aviso_pendiente(void);
 void nx_aviso_mostrar(void);
 void nx_medir_tarjeta(void);   /* nx/nx_medir.c */
+void nx_medir_fs(void);        /* nx/nx_fsprobe.c */
 
-/* El contenedor de datos que monta sharedstate.cpp cuando existe. Un solo
- * fichero en vez de 22.148: lo que hace que copiar el juego a la tarjeta sea
- * cuestion de minutos y no de una hora. */
-#define NX_PAQUETE "anil-datos.zip"
+/* El contenedor de datos que monta sharedstate.cpp cuando existe. El nombre
+ * sale de nx_juego.h, que es donde lo comparten el motor, esta pantalla y el
+ * empaquetador. */
+#define NX_PAQUETE NX_CONTENEDOR
 
 /* ---------------------------------------------------------------- inventario */
 
@@ -201,17 +204,30 @@ static const char *como_arranco(void)
 
 /* --------------------------------------------------------------- la pantalla */
 
+/* El titulo del juego, no el del motor.
+ *
+ * Quien ve esta pantalla acaba de pulsar el icono de SU juego, y "rgss-switch"
+ * no le dice nada; el Title= de su Game.ini si. Cuando todavia no se sabe cual
+ * es el juego -que es justo el caso en que esta pantalla sale- nx_titulo_juego
+ * devuelve "rgss-switch", que al menos nombra lo que esta hablando. */
 static void pinta_cabecera(void)
 {
-    printf(CONSOLE_CYAN "  Pokemon Anil 4.0 para Nintendo Switch" CONSOLE_RESET
-           "                  %s\n\n", nx_build());
+    printf(CONSOLE_CYAN "  %.44s" CONSOLE_RESET "  (rgss-switch %s)\n\n",
+           nx_titulo_juego(), nx_build());
 }
 
 static void pinta_pie(const char *teclas)
 {
-    printf("\n  El registro completo queda en:\n"
-           "    SD:/switch/pokemon-anil/mkxp-boot.log\n\n"
-           CONSOLE_YELLOW "  %s" CONSOLE_RESET "\n", teclas);
+    const char *c = nx_carpeta_juego();
+
+    printf("\n  El registro completo queda en:\n");
+    if (c)
+        printf("    %.66s/mkxp-boot.log\n\n", c);
+    else
+        /* Sin carpeta no hay donde poner mkxp-boot.log: se escribe en el
+         * unico sitio de la tarjeta donde se puede escribir sin saber nada. */
+        printf("    %s\n\n", NX_LOG_HUERFANO);
+    printf(CONSOLE_YELLOW "  %s" CONSOLE_RESET "\n", teclas);
 }
 
 static void espera(int admite_seguir, int *seguir)
@@ -300,11 +316,31 @@ int nx_revision_arranque(void)
      * cluster y coste de escritura (nx/nx_medir.c). Es lo que decide si tiene
      * sentido desempaquetar el contenedor en la consola o no. */
     nx_medir_tarjeta();
+    /* Y el recorrido del arbol, si esta su testigo. Antes era un constructor
+     * estatico; no puede serlo desde que la carpeta se decide en main(). */
+    nx_medir_fs();
 
     if (!getcwd(cwd, sizeof(cwd)))
         snprintf(cwd, sizeof(cwd), "(desconocido)");
-    snprintf(linea, sizeof(linea), "Busco el juego en: %.70s", cwd);
+    if (nx_carpeta_juego())
+        snprintf(linea, sizeof(linea), "Juego encontrado en: %.66s", nx_carpeta_juego());
+    else
+        snprintf(linea, sizeof(linea), "SIN carpeta de juego; estoy en: %.55s", cwd);
     anota(linea);
+
+    /* Lo que se probo y no salio.
+     *
+     * "No encuentro los datos del juego" es verdad y no sirve de nada: quien
+     * lo lee necesita saber DONDE se miro para entender que fue lo que puso
+     * mal. main.cpp apunta cada intento -el directorio de argv[0] y la ruta
+     * de romfs:/juego.txt- y aqui se ensenan tal cual. */
+    if (!nx_carpeta_juego()) {
+        int k;
+        for (k = 0; k < nx_intentos_n(); k++) {
+            snprintf(linea, sizeof(linea), "  %.90s", nx_intento_lee(k));
+            anota(linea);
+        }
+    }
     anota("");
 
     /* 1. Los datos: o el contenedor de un fichero, o las carpetas sueltas. */
@@ -346,7 +382,7 @@ int nx_revision_arranque(void)
         anota(hay_scripts ? "[FALTA] Graphics/ y/o Audio/ sueltos"
                           : "[FALTA] Data/Scripts.rxdata suelto");
         /* Si el contenedor esta pero roto, ya se ha dicho arriba: repetir
-         * "[FALTA] anil-datos.zip" mandaria a buscar un fichero que si esta. */
+         * "[FALTA] datos.zip" mandaria a buscar un fichero que si esta. */
         if (paquete == 0) {
             snprintf(linea, sizeof(linea), "[FALTA] %s", NX_PAQUETE);
             anota(linea);
@@ -376,13 +412,13 @@ int nx_revision_arranque(void)
      * escribe; si no esta, el juego arranca y muere a los veinte segundos, y
      * eso es exactamente lo que esta pantalla existe para no repetir. */
     if (paquete == 1) {
-        if (existe("Game.rgssad", 0, &ignora)) {
-            anota("[ OK  ] Game.rgssad (la llave que hace que el juego lea del contenedor)");
+        if (existe(NX_LLAVE, 0, &ignora)) {
+            anota("[ OK  ] " NX_LLAVE " (la llave que hace que el juego lea del contenedor)");
         } else {
-            anota("[FALTA] Game.rgssad      sin el, el juego no mira dentro del contenedor");
+            anota("[FALTA] " NX_LLAVE "      sin el, el juego no mira dentro del contenedor");
             if (!motivo[0])
                 snprintf(motivo, sizeof(motivo),
-                         "FALTA Game.rgssad, LA LLAVE DEL CONTENEDOR.");
+                         "FALTA " NX_LLAVE ", LA LLAVE DEL CONTENEDOR.");
             faltan_fatales = 1;
         }
     }
@@ -395,9 +431,9 @@ int nx_revision_arranque(void)
      * sistema. Funciona, pero es el camino largo y el que menos se ha
      * recorrido, y no hay ninguna razon para tomarlo si los datos estan
      * sueltos. Se dice y se sigue. */
-    if (paquete != 1 && hay_sueltos && existe("Game.rgssad", 0, &tam_llave)
+    if (paquete != 1 && hay_sueltos && existe(NX_LLAVE, 0, &tam_llave)
         && tam_llave == 8) {
-        anota("[  ?  ] Game.rgssad sobra: es la llave del contenedor y aqui los datos estan sueltos");
+        anota("[  ?  ] " NX_LLAVE " sobra: es la llave del contenedor y aqui los datos estan sueltos");
     }
 
     /* 2. Las piezas del port. Estan en la entrega, asi que si falta una es que
@@ -431,11 +467,12 @@ int nx_revision_arranque(void)
 
     if (faltan_fatales) {
         static const char *que_hacer[] = {
-            "1. En el PC, ejecuta Empaquetar.cmd de la entrega del port y",
-            "   elige la carpeta de tu Pokemon Anil 4.0 para PC.",
+            "1. En el PC, ejecuta Empaquetar.cmd de la entrega de rgss-switch",
+            "   y elige la carpeta de tu juego para PC.",
             "2. Copia la carpeta 'switch' que sale de ahi a la raiz de la",
             "   tarjeta SD, y comprueba que la copia termina sin errores.",
-            "   Tiene que quedar SD:/switch/pokemon-anil/pokemon-anil.nro",
+            "   El .nro del juego tiene que quedar dentro de SD:/switch/<juego>/,",
+            "   con mkxp.json y lib/ a su lado, no suelto en /switch.",
             "3. Vuelve a lanzarlo desde el menu homebrew.",
             0
         };
@@ -449,8 +486,8 @@ int nx_revision_arranque(void)
         static const char *que_hacer[] = {
             "- Abre el Album MANTENIENDO PULSADO R sobre cualquier juego: asi",
             "  el menu homebrew corre como aplicacion y hereda su memoria.",
-            "- O instala pokemon-anil.nsp (Awoo Installer, DBI o Goldleaf) y",
-            "  lanzalo desde el menu HOME.",
+            "- O instala el .nsp de este juego (Awoo Installer, DBI o Goldleaf)",
+            "  y lanzalo desde el menu HOME.",
             0
         };
         n_lineas = 0;
@@ -459,7 +496,7 @@ int nx_revision_arranque(void)
         snprintf(linea, sizeof(linea), "El monton que me han dado: %llu MB.",
                  (unsigned long long)monton_mb());
         anota(linea);
-        anota("El juego necesita unos 700 MB de recursos, mas el interprete.");
+        anota("Un juego de Essentials pide cientos de MB, mas el interprete.");
         snprintf(motivo, sizeof(motivo), "ARRANCADO CON MEMORIA DE APPLET: NO VA A CABER.");
         if (!muestra(que_hacer, 1))
             return 1;

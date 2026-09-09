@@ -38,12 +38,58 @@ otros tres parches -mkxpz-main.cpp, mkxpz-aviso-pantalla y mkxpz-nucleo-rgss- y
 un diff contra el original se llevaria por delante lo suyo. Mismo criterio que
 el trozo de sharedstate.cpp en mkxpz-textura-sin-memoria.patch.
 
+3. Y DESDE QUE EL MOTOR ES GENERICO, LAS RUTAS CONVENIDAS SOBRAN. El punto 2
+   dejaba dos rutas de un juego concreto escritas en el motor como reserva.
+   Con un solo juego eso era comodo; con un binario que tiene que correr
+   cualquier juego de RPG Maker XP es peor que no tener nada, porque un juego
+   mal instalado arrancaria el de al lado sin decirlo. En su sitio va
+   romfs:/juego.txt, que es como un NSP dice donde esta su juego -una
+   aplicacion instalada no tiene argv y el punto 1 no puede contestar nada-, y
+   detras, nada: la pantalla de aviso dice QUE se probo y con que valor.
+
 --- src/main.cpp.antes-nro
 +++ src/main.cpp
-@@ -277,9 +277,28 @@
-    directorio de trabajo. hbmenu no garantiza cual es, asi que lo fijamos al
-    directorio que contiene el propio .nro, tomandolo de argv[0]
-    (p.ej. "sdmc:/switch/pokemon-anil/pokemon-anil.nro"). */
+@@ -122,7 +122,13 @@
+ extern "C" void nx_probe_fs(const char *path);   /* nx/nx_boot.c */
+ extern "C" void nx_probe_threads(const char *donde);
+ extern "C" void nx_probe_sync(void);   /* nx/nx_thread_probe.c */
+-extern "C" int  nx_diagnostico(void);  /* nx/nx_boot.c */
++#ifdef __SWITCH__
++/* nx/nx_juego.h: la carpeta del juego y los nombres que comparte todo el
++   port. Es la unica respuesta a "donde esta el juego", y por eso este
++   fichero es el que la contesta. */
++#include <stdio.h>
++#include "nx_juego.h"
++#endif
+ 
+ #ifdef __SWITCH__
+ extern "C" void nx_nucleo(const char *quien, int preferido);
+@@ -272,14 +278,49 @@
+ #include <unistd.h>
+ #include <libgen.h>
+ 
+-/* Arranque de Horizon.
++/* Arranque de Horizon: donde esta el juego.
++
+    WORKDIR_CURRENT hace que mkxp-z busque mkxp.json, Data/ y Graphics/ en el
+-   directorio de trabajo. hbmenu no garantiza cual es, asi que lo fijamos al
+-   directorio que contiene el propio .nro, tomandolo de argv[0]
+-   (p.ej. "sdmc:/switch/pokemon-anil/pokemon-anil.nro"). */
++   directorio de trabajo, y hbmenu no garantiza cual es. El orden de busqueda
++   es el de CONVENCIONES 3 y no admite atajos:
++
++     (a) El directorio de argv[0], que es donde esta el .nro que se pulso
++         (p.ej. "sdmc:/switch/<juego>/<juego>.nro").
++     (b) La ruta escrita en romfs:/juego.txt. Es lo que lleva un NSP, porque
++         una aplicacion instalada no tiene argv: el sistema la lanza sin
++         argumentos y (a) no puede contestar nada.
++     (c) Nada. No se adivina.
++
++   Antes habia un paso (c) con dos rutas convenidas escritas aqui dentro. Con
++   un solo juego eso era comodo; con un motor generico es peor que no tener
++   nada, porque un juego mal instalado arrancaria el de al lado sin decirlo.
++   Lo que queda de aquello es la pantalla de aviso, que ahora dice QUE se
++   probo y con que valor en vez de un "no lo encuentro" a secas. */
 +/* Un directorio de trabajo vale si tiene el juego dentro.
 + *
 + * chdir() puede salir bien y dejarnos igual de perdidos: la carpeta existe,
@@ -67,20 +113,31 @@ el trozo de sharedstate.cpp en mkxpz-textura-sin-memoria.patch.
  static void nxSetupWorkdir(int argc, char *argv[])
  {
 -    const char *msg;
++    char apunte[160];
++
++    /* (a) el directorio del .nro */
      if (argc > 0 && argv[0] && argv[0][0]) {
          char buf[512];
          strncpy(buf, argv[0], sizeof(buf) - 1);
-@@ -287,19 +306,28 @@
+@@ -287,19 +328,64 @@
          char *slash = strrchr(buf, '/');
          if (slash) {
              *slash = 0;
 -            if (chdir(buf) == 0) {
+-                Debug() << "[nx] directorio de trabajo:" << buf;
++            snprintf(apunte, sizeof(apunte), "argv[0] -> %.130s", buf);
++            nx_intento(apunte);
 +            if (nxHayJuegoAqui(buf)) {
-                 Debug() << "[nx] directorio de trabajo:" << buf;
++                Debug() << "[nx] directorio de trabajo:" << buf << "(argv[0])";
++                nx_carpeta_juego_fija(buf);
                  return;
              }
 -            Debug() << "[nx] chdir fallo en" << buf;
++        } else {
++            nx_intento("argv[0] no lleva ninguna barra: no dice ningun directorio");
          }
++    } else {
++        nx_intento("argv[0] vacio (lanzado como aplicacion, no como .nro)");
      }
 -    /* ultimo recurso: la ubicacion convenida en la tarjeta SD */
 -    if (chdir("sdmc:/switch/pokemon-anil") == 0)
@@ -89,25 +146,54 @@ el trozo de sharedstate.cpp en mkxpz-textura-sin-memoria.patch.
 -        Debug() << "[nx] NO se pudo fijar el directorio de trabajo";
 -    (void)msg;
 +
-+    /* Las ubicaciones convenidas, por orden. La segunda es la instalacion con
-+     * las carpetas sueltas, que en esta consola es la que tiene los datos
-+     * cuando la primera no los tiene. */
-+    static const char *convenidas[] = {
-+        "sdmc:/switch/pokemon-anil",
-+        "sdmc:/switch/pokemon-anil-off",
-+    };
-+    for (unsigned i = 0; i < sizeof(convenidas) / sizeof(convenidas[0]); i++) {
-+        if (nxHayJuegoAqui(convenidas[i])) {
-+            Debug() << "[nx] directorio de trabajo:" << convenidas[i] << "(reserva)";
-+            return;
++    /* (b) romfs:/juego.txt
++     *
++     * Un .nro solo lleva romfs si elf2nro recibio --romfsdir, y un NSP solo si
++     * hacbrewpack lo recibio: en un homebrew normal no hay ninguno, y entonces
++     * romfsInit falla en silencio y esto es un intento fallido mas, no un
++     * error. Se abre el fichero pase lo que pase con romfsInit, porque en un
++     * NSP libnx puede haberlo montado ya por su cuenta y la segunda llamada
++     * contesta que no. */
++    {
++        romfsInit();
++        FILE *f = fopen("romfs:/juego.txt", "rb");
++        if (!f) {
++            nx_intento("romfs:/juego.txt no esta (este binario no lleva romfs)");
++        } else {
++            char linea[512] = {0};
++            char *p = linea;
++            if (fgets(linea, sizeof(linea), f)) {
++                /* Una linea, y lo que sobra a los lados no cuenta: el fichero
++                 * lo escribe el empaquetador y puede acabar en CRLF. */
++                while (*p == ' ' || *p == '\t')
++                    p++;
++                size_t n = strlen(p);
++                while (n && (p[n-1] == '\n' || p[n-1] == '\r'
++                             || p[n-1] == ' ' || p[n-1] == '\t'
++                             || p[n-1] == '/'))
++                    p[--n] = 0;
++            }
++            fclose(f);
++            snprintf(apunte, sizeof(apunte), "romfs:/juego.txt -> %.120s",
++                     *p ? p : "(vacio)");
++            nx_intento(apunte);
++            if (*p && nxHayJuegoAqui(p)) {
++                Debug() << "[nx] directorio de trabajo:" << p << "(romfs:/juego.txt)";
++                nx_carpeta_juego_fija(p);
++                return;
++            }
 +        }
 +    }
 +
++    /* (c) nada. El chdir de nxHayJuegoAqui puede habernos dejado en cualquier
++     * sitio, pero no se fija ninguna carpeta convenida: quien lea el aviso
++     * vera los intentos de arriba, que es lo unico que ayuda. */
 +    Debug() << "[nx] NO se pudo fijar el directorio de trabajo";
++    nx_carpeta_juego_rendirse();
  }
  #endif
  
-@@ -312,6 +340,27 @@
+@@ -312,6 +398,27 @@
      Debug() << "[nx] mkxp-z arrancando en Horizon OS; argc =" << argc
              << "argv[0] =" << (argc > 0 && argv[0] ? argv[0] : "(vacio)");
  
@@ -135,3 +221,34 @@ el trozo de sharedstate.cpp en mkxpz-textura-sin-memoria.patch.
      nxSetupWorkdir(argc, argv);
      {
          char cwd[512] = {0};
+@@ -343,7 +450,14 @@
+      * segundo y medio de espera cuando todo va bien. Solo con diagnostico.txt. */
+     if (nx_diagnostico()) {
+         nx_probe_fs("lib/socket.rb");
+-        nx_probe_fs("sdmc:/switch/pokemon-anil/lib/socket.rb");
++        {
++            /* La misma prueba por la ruta absoluta: es la comparacion que
++             * destapo lo de nx_realpath.c. La carpeta ya no esta escrita
++             * aqui, sale de donde se encontro el juego. */
++            char abs[600];
++            if (nx_ruta_juego(abs, sizeof(abs), "lib/socket.rb"))
++                nx_probe_fs(abs);
++        }
+         nx_probe_fs("mkxp.json");
+         nx_probe_threads("desde main");
+         nx_probe_sync();
+@@ -415,6 +529,14 @@
+     if (conf.windowTitle.empty())
+       conf.windowTitle = conf.game.title;
+ 
++#ifdef __SWITCH__
++    /* El titulo que ensenara la pantalla de aviso si el motor se cae mas
++       adelante. Hasta aqui lo unico que hay es el Title= de Game.ini, leido a
++       mano; a partir de aqui manda la configuracion, que es la que el juego ha
++       elegido de verdad. */
++    nx_titulo_juego_fija(conf.windowTitle.c_str());
++#endif
++
+     assert(conf.rgssVersion >= 1 && conf.rgssVersion <= 3);
+     printRgssVersion(conf.rgssVersion);
+ 

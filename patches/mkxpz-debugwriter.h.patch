@@ -1,6 +1,6 @@
---- src/util/debugwriter.h.orig	2026-08-30 19:22:46.789799200 -0400
-+++ src/util/debugwriter.h	2026-08-30 19:28:26.790068900 -0400
-@@ -30,6 +30,15 @@
+--- src/util/debugwriter.h.orig
++++ src/util/debugwriter.h
+@@ -30,6 +30,22 @@
  #include <android/log.h>
  #endif
  
@@ -11,12 +11,19 @@
 +#include <switch.h>
 +#include <string>
 +#include <cstdio>
++/* nx/nx_juego.c. El fichero de registro esta en la carpeta del juego, y esa
++   no se sabe hasta que main() la decide; Debug() se usa desde los
++   constructores estaticos, o sea antes. Lo de antes se guarda en memoria y
++   sale de golpe en cuanto hay donde ponerlo. Aqui no puede resolverse porque
++   esto es una cabecera que incluye medio motor: la logica vive en un solo
++   sitio y esto solo la llama. */
++extern "C" void nx_debug_log(const char *linea);
 +#endif
 +
  
  /* A cheap replacement for qDebug() */
  
-@@ -63,6 +72,18 @@
+@@ -63,6 +79,16 @@
  	{
  #ifdef __ANDROID__
  		__android_log_write(ANDROID_LOG_DEBUG, "mkxp", buf.str().c_str());
@@ -28,9 +35,7 @@
 +			   anfitrion, y en consola real no hay a donde mirar. Se anade a
 +			   un fichero de la SD: se abre y cierra en cada linea para que
 +			   sobreviva a un cierre brusco. */
-+			FILE *f = fopen("sdmc:/switch/pokemon-anil/mkxp-debug.log", "a");
-+			if (!f) f = fopen("mkxp-debug.log", "a");
-+			if (f) { fputs(s.c_str(), f); fputc(0x0A, f); fclose(f); }
++			nx_debug_log(s.c_str());
 +		}
  #else
  		std::cerr << buf.str() << std::endl;

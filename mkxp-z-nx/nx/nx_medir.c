@@ -33,12 +33,14 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "nx_juego.h"
+
 void nx_boot_trace(const char *msg);
 void nx_medir_tarjeta(void);
 
 #define NX_MUESTRA   64          /* ficheros de prueba */
 #define NX_TAM       (30 * 1024) /* 651 MB / 22.035 ficheros = 30 KB de media */
-#define NX_CARPETA   "sdmc:/switch/pokemon-anil/nx-medida"
+#define NX_SUBCARPETA "nx-medida"   /* dentro de la carpeta del juego */
 
 static u64 libre(void)
 {
@@ -57,7 +59,7 @@ static u64 ms_desde(u64 t0)
 
 void nx_medir_tarjeta(void)
 {
-    char linea[224], ruta[128];
+    char linea[224], ruta[700], base[600];
     static char relleno[NX_TAM];
     u64 antes, despues, cluster = 0;
     u64 t0, ms_crear = 0, ms_escribir = 0, ms_cerrar = 0;
@@ -83,10 +85,16 @@ void nx_medir_tarjeta(void)
         nx_boot_trace(linea);
     }
 
-    mkdir(NX_CARPETA, 0777);
+    /* La carpeta de la medida cuelga de la del juego: no hay ninguna ruta
+     * fija que valga, y dejar basura en la tarjeta de otro juego seria
+     * peor que no medir. */
+    if (!nx_ruta_juego(base, sizeof(base), NX_SUBCARPETA))
+        return;
+    mkdir(base, 0777);
 
     /* 2. Cuanto ocupa un fichero de un byte: eso es el cluster. */
-    fd = open(NX_CARPETA "/uno", O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    snprintf(ruta, sizeof(ruta), "%s/uno", base);
+    fd = open(ruta, O_WRONLY | O_CREAT | O_TRUNC, 0666);
     if (fd >= 0) {
         write(fd, "x", 1);
         close(fd);
@@ -102,7 +110,7 @@ void nx_medir_tarjeta(void)
      *    22.035 ficheros por delante lo que manda no es el caudal. */
     memset(relleno, 'a', sizeof(relleno));
     for (i = 0; i < NX_MUESTRA; i++) {
-        snprintf(ruta, sizeof(ruta), NX_CARPETA "/f%03d", i);
+        snprintf(ruta, sizeof(ruta), "%s/f%03d", base, i);
 
         t0 = armGetSystemTick();
         fd = open(ruta, O_WRONLY | O_CREAT | O_TRUNC, 0666);
@@ -148,10 +156,11 @@ void nx_medir_tarjeta(void)
 
     /* 5. Y se recoge: la medida no puede dejar basura en la tarjeta de nadie. */
     for (i = 0; i < NX_MUESTRA; i++) {
-        snprintf(ruta, sizeof(ruta), NX_CARPETA "/f%03d", i);
+        snprintf(ruta, sizeof(ruta), "%s/f%03d", base, i);
         unlink(ruta);
     }
-    unlink(NX_CARPETA "/uno");
-    rmdir(NX_CARPETA);
+    snprintf(ruta, sizeof(ruta), "%s/uno", base);
+    unlink(ruta);
+    rmdir(base);
     nx_boot_trace("[medida] hecho; borra medir.txt para no repetirlo");
 }

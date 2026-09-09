@@ -1,25 +1,26 @@
 /*
  * nx_realpath.c — realpath() sin prefijo de dispositivo.
  *
- * En Horizon el directorio de trabajo es "sdmc:/switch/pokemon-anil". Ruby
+ * En Horizon el directorio de trabajo es la carpeta del juego, que empieza
+ * por el nombre del dispositivo: "sdmc:/switch/<juego>". Ruby
  * decide si una ruta es absoluta con rb_is_absolute_path, que en compilaciones
  * POSIX es literalmente *p == '/'. Con el prefijo del dispositivo delante, la
  * respuesta es "no", y eso rompe require():
  *
  *   1. rb_construct_expanded_load_path pasa cada entrada de $LOAD_PATH por
  *      realpath(). newlib devuelve la forma canonica CON dispositivo, asi que
- *      "lib" acaba siendo "sdmc:/switch/pokemon-anil/lib".
+ *      "lib" acaba siendo "sdmc:/switch/<juego>/lib".
  *   2. rb_find_file_ext expande esa entrada otra vez para buscar el fichero.
  *      Como no empieza por "/", le antepone el directorio actual.
  *   3. Resultado: abre
- *      "sdmc:/switch/pokemon-anil/sdmc:/switch/pokemon-anil/lib/set.rb".
+ *      "sdmc:/switch/<juego>/sdmc:/switch/<juego>/lib/set.rb".
  *
  * Poner la ruta absoluta a mano en mkxp.json no sirve: realpath vuelve a
  * meter el "sdmc:" en el paso 1. Hay que quitarlo aqui.
  *
  * Quitarlo no pierde informacion: newlib resuelve las rutas sin dispositivo
  * contra el dispositivo por omision, que en homebrew es la propia SD. Se
- * comprobo midiendo: open("/switch/pokemon-anil/lib/socket.rb") devuelve un
+ * comprobo midiendo: open("/switch/<juego>/lib/socket.rb") devuelve un
  * descriptor valido igual que la forma con "sdmc:".
  */
 #include <ctype.h>

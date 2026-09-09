@@ -24,9 +24,9 @@
 #include <stdio.h>
 #include <sys/stat.h>
 
-#define NX_BOOTLOG_A "sdmc:/switch/pokemon-anil/mkxp-boot.log"
-#define NX_BOOTLOG_B "mkxp-boot.log"
-#define NX_BOOTLOG_C "sdmc:/mkxp-boot.log"
+#include "nx_juego.h"
+
+#define NX_BOOTLOG_NOMBRE "mkxp-boot.log"
 
 /* Cuando el registro deja de caber en una lectura.
  *
@@ -55,25 +55,56 @@
  * se formatea a mano: aqui todavia no se toca el monton. */
 static u64 base_tick;
 
-/* Modo diagnostico: existe SD:/switch/pokemon-anil/diagnostico.txt. Enciende
- * las autopruebas del arranque (ficheros, hilos, tuberias, sincronizacion) y
- * el registro linea a linea. Se decide una vez y se cachea, porque se consulta
- * desde el primer constructor estatico, antes de que exista nada mas. */
-int nx_diagnostico(void);
-int nx_diagnostico(void)
+/* Donde acaba este registro.
+ *
+ * Ya no es una constante. La carpeta del juego no se sabe hasta que main()
+ * llama a nxSetupWorkdir, y para entonces los 45 constructores estaticos ya
+ * han escrito sus lineas —que son justamente las que interesan cuando un
+ * arranque no llega a main()—. Asi que hasta ese momento las lineas se guardan
+ * en memoria, y cuando la carpeta aparece se vuelcan de golpe al fichero.
+ *
+ * Si la carpeta nunca aparece —no hay juego que valga y lo que se va a ver es
+ * la pantalla de aviso—, main() llama a nx_carpeta_juego_rendirse() y lo
+ * acumulado sale por NX_LOG_HUERFANO, que es el unico sitio de la tarjeta
+ * donde se puede escribir sin saber nada. */
+static char rutas[3][512];
+static int  n_rutas;            /* 0 = destino todavia sin decidir */
+static int  rendido;            /* nadie va a decir ya cual es la carpeta */
+
+static int nx_boot_destino(void)
 {
-    static int decidido = -1;
-    if (decidido < 0) {
-        int fd = open("sdmc:/switch/pokemon-anil/diagnostico.txt", O_RDONLY);
-        decidido = (fd >= 0) ? 1 : 0;
-        if (fd >= 0) close(fd);
+    const char *c;
+
+    if (n_rutas)
+        return 1;
+
+    c = nx_carpeta_juego();
+    if (c && *c) {
+        snprintf(rutas[0], sizeof(rutas[0]), "%s/%s", c, NX_BOOTLOG_NOMBRE);
+        snprintf(rutas[1], sizeof(rutas[1]), "%s", NX_BOOTLOG_NOMBRE);
+        snprintf(rutas[2], sizeof(rutas[2]), "%s", NX_LOG_HUERFANO);
+        n_rutas = 3;
+        return 1;
     }
-    return decidido;
+    if (rendido) {
+        snprintf(rutas[0], sizeof(rutas[0]), "%s", NX_BOOTLOG_NOMBRE);
+        snprintf(rutas[1], sizeof(rutas[1]), "%s", NX_LOG_HUERFANO);
+        n_rutas = 2;
+        return 1;
+    }
+    return 0;
 }
 
-static const char *nx_bootlog_paths[3] = {
-    NX_BOOTLOG_A, NX_BOOTLOG_B, NX_BOOTLOG_C
-};
+/* Lo que se dijo antes de saber donde escribirlo.
+ *
+ * 32 KB dan para las ~200 lineas que salen antes de main() con el diagnostico
+ * puesto, que es el caso peor. Si se llena, se da por perdida la espera: se
+ * vuelca a donde se pueda y se sigue en directo, porque un registro que se
+ * corta por el principio todavia sirve y uno que se corta por el final no. */
+#define NX_PRE_BUF (32 * 1024)
+
+static char   prebuf[NX_PRE_BUF];
+static size_t prebuf_n;
 
 /* Aparta el registro de la instalacion anterior si ya no se puede leer.
  *
@@ -87,25 +118,25 @@ static void nx_boot_rota(void)
 {
     unsigned i;
 
-    for (i = 0; i < 3; i++) {
+    for (i = 0; i < (unsigned)n_rutas; i++) {
         struct stat st;
-        char viejo[128];
+        char viejo[520];
         size_t l;
 
-        if (stat(nx_bootlog_paths[i], &st) != 0)
+        if (stat(rutas[i], &st) != 0)
             continue;
         if ((unsigned)st.st_size < NX_LOG_MAX)
             return;             /* el que vamos a usar cabe: nada que hacer */
 
         /* ".log" -> ".1.log", para que el visor lo siga reconociendo. */
-        l = strlen(nx_bootlog_paths[i]);
+        l = strlen(rutas[i]);
         if (l < 5 || l + 3 >= sizeof(viejo))
             return;
-        memcpy(viejo, nx_bootlog_paths[i], l - 4);
+        memcpy(viejo, rutas[i], l - 4);
         memcpy(viejo + l - 4, ".1.log", 7);
 
         unlink(viejo);
-        rename(nx_bootlog_paths[i], viejo);
+        rename(rutas[i], viejo);
         return;
     }
 }
@@ -180,15 +211,33 @@ static void nx_boot_mark(const char *msg)
         return;
     }
 
+    /* Todavia no se sabe donde: a memoria. */
+    if (!nx_boot_destino()) {
+        if (prebuf_n + n <= sizeof(prebuf)) {
+            memcpy(prebuf + prebuf_n, linea, n);
+            prebuf_n += n;
+            mutexUnlock(&nx_log_mtx);
+            return;
+        }
+        rendido = 1;            /* el buffer se lleno: hay que soltarlo ya */
+        nx_boot_destino();
+    }
+
     if (!rotado) {
         rotado = 1;
         nx_boot_rota();
     }
 
-    for (i = 0; i < 3; i++) {
-        int fd = open(nx_bootlog_paths[i], O_WRONLY | O_CREAT | O_APPEND, 0666);
+    for (i = 0; i < (unsigned)n_rutas; i++) {
+        int fd = open(rutas[i], O_WRONLY | O_CREAT | O_APPEND, 0666);
         if (fd < 0)
             continue;
+        /* Lo acumulado va delante, y en una sola write(): son las lineas de
+         * los constructores estaticos y tienen que salir en su orden. */
+        if (prebuf_n) {
+            write(fd, prebuf, prebuf_n);
+            prebuf_n = 0;
+        }
         write(fd, linea, n);
         if (nx_diagnostico())
             close(fd);
@@ -198,6 +247,25 @@ static void nx_boot_mark(const char *msg)
     }
 
     mutexUnlock(&nx_log_mtx);
+}
+
+/* Las llama nx_juego.c cuando la carpeta se sabe, o cuando ya se sabe que no
+ * va a saberse. Lo unico que hacen es forzar que la proxima linea decida
+ * destino y arrastre consigo todo lo acumulado; escribir una linea es la
+ * manera mas simple de hacerlo y ademas deja constancia. */
+void nx_boot_vuelca(void);
+void nx_boot_vuelca(void)
+{
+    nx_boot_mark("[boot] 0 registro volcado desde memoria a la carpeta del juego");
+}
+
+void nx_boot_rendirse(void);
+void nx_boot_rendirse(void)
+{
+    mutexLock(&nx_log_mtx);
+    rendido = 1;
+    mutexUnlock(&nx_log_mtx);
+    nx_boot_mark("[boot] 0 sin carpeta de juego: el registro se queda huerfano");
 }
 
 void nx_boot_trace(const char *msg);

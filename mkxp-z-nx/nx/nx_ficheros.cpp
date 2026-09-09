@@ -1,7 +1,7 @@
 /*
  * nx_ficheros.cpp — que FileTest.exist? vea tambien dentro del contenedor.
  *
- * EL FALLO. Con los datos en anil-datos.zip, el juego se quedaba sin efectos de
+ * EL FALLO. Con los datos en el contenedor, el juego se quedaba sin efectos de
  * sonido. Los graficos si aparecian, y esa asimetria es la pista: son dos
  * caminos distintos dentro de Pokemon Essentials.
  *

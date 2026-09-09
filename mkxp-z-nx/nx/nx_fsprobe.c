@@ -26,10 +26,12 @@
 #include <stdio.h>
 #include <sys/stat.h>
 
-void nx_boot_trace(const char *msg);
+#include "nx_juego.h"
 
-#define CARPETA "sdmc:/switch/pokemon-anil"
-#define TESTIGO CARPETA "/nx-medir-fs"
+void nx_boot_trace(const char *msg);
+void nx_medir_fs(void);
+
+#define TESTIGO "nx-medir-fs"
 
 static unsigned n_entradas, n_dirs, n_desacuerdos, n_desconocidos;
 static u64 t_stat;
@@ -89,13 +91,17 @@ static void medir(int con_stat, const char *etiqueta)
     static char ruta[512];
     char linea[192];
     u64 t0, ms;
+    const char *raiz = nx_carpeta_juego();
+
+    if (!raiz)
+        return;
 
     n_entradas = n_dirs = n_desacuerdos = n_desconocidos = 0;
     t_stat = 0;
-    strcpy(ruta, CARPETA);
+    snprintf(ruta, sizeof(ruta), "%s", raiz);
 
     t0 = armGetSystemTick();
-    recorrer(ruta, strlen(CARPETA), con_stat);
+    recorrer(ruta, strlen(ruta), con_stat);
     ms = armTicksToNs(armGetSystemTick() - t0) / 1000000;
 
     snprintf(linea, sizeof(linea),
@@ -107,12 +113,20 @@ static void medir(int con_stat, const char *etiqueta)
     nx_boot_trace(linea);
 }
 
-__attribute__((constructor(104)))
-static void nx_medir_fs(void)
+/* Ya no es un constructor estatico.
+ *
+ * Lo era porque la carpeta del juego estaba escrita aqui y se podia recorrer
+ * antes de main(). Ahora la carpeta se decide en main() -nxSetupWorkdir- y un
+ * constructor no tiene nada que recorrer. Lo llama nx_revision_arranque(),
+ * que es el primer sitio donde ya se sabe. */
+void nx_medir_fs(void)
 {
     struct stat st;
+    char testigo[600];
 
-    if (stat(TESTIGO, &st) != 0)
+    if (!nx_ruta_juego(testigo, sizeof(testigo), TESTIGO))
+        return;
+    if (stat(testigo, &st) != 0)
         return;
 
     nx_boot_trace("[fs] testigo nx-medir-fs presente: midiendo el recorrido");
