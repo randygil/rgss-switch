@@ -45,6 +45,8 @@ Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 
 Add-Type -Name Nativo -Namespace Win32 -MemberDefinition @"
 [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+[DllImport("user32.dll")] public static extern System.IntPtr SetProcessDpiAwarenessContext(System.IntPtr ctx);
+[DllImport("user32.dll")] public static extern bool GetWindowRect(System.IntPtr h, out RECT r);
 [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, System.UIntPtr extra);
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h);
 [DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
@@ -54,7 +56,21 @@ Add-Type -Name Nativo -Namespace Win32 -MemberDefinition @"
 public struct RECT { public int Left, Top, Right, Bottom; }
 public struct POINT { public int X, Y; }
 "@
-[Win32.Nativo]::SetProcessDPIAware() | Out-Null
+# PER_MONITOR_AWARE_V2 (-4) y no SetProcessDPIAware, y esto no es cosmetico.
+#
+# SetProcessDPIAware deja el proceso enterado del DPI DEL SISTEMA. Esta maquina
+# tiene dos monitores con escalas distintas (GetDpiForWindow sobre la ventana
+# del emulador devuelve 120, o sea 125 %), asi que en cuanto la ventana esta en
+# el monitor que no manda, Windows VIRTUALIZA las coordenadas: GetClientRect y
+# ClientToScreen contestan en un sistema y CopyFromScreen copia en otro. La
+# vuelta 1 de Iberia guardo nueve capturas del escritorio de Randy -con el
+# recorte al area de cliente puesto y funcionando- por esto, y hubo que
+# borrarlas. Con el contexto por monitor todo son pixeles fisicos y los dos
+# lados hablan del mismo sitio. Si la llamada no existe (Windows anterior a
+# 1703) se cae al modo de antes.
+if ([Win32.Nativo]::SetProcessDpiAwarenessContext([System.IntPtr](-4)) -eq [System.IntPtr]::Zero) {
+    [Win32.Nativo]::SetProcessDPIAware() | Out-Null
+}
 
 $VK = @{
     "Z" = 0x5A; "X" = 0x58; "C" = 0x43; "V" = 0x56
@@ -82,6 +98,11 @@ Start-Sleep -Seconds $Espera
 # una foto no se pide, porque CopyFromScreen no lo necesita.
 function Enfocar {
     $p.Refresh()
+    # Si el emulador ya se ha muerto -Opalo lo hace SIEMPRE, y a los 30 s- no
+    # hay ventana: MainWindowHandle sale vacio y SetForegroundWindow revienta
+    # con "no se puede convertir a NULL el tipo System.IntPtr", que enmascara la
+    # unica noticia que importa, que es que el proceso ya no esta.
+    if ($p.HasExited) { return }
     if ($p.MainWindowHandle -ne [System.IntPtr]::Zero) {
         [Win32.Nativo]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
     }
@@ -135,6 +156,20 @@ function Foto([string]$nombre) {
     # da, no hay foto.
     if ($ancho -le 20 -or $alto -le 200) {
         Write-Output "  foto $nombre OMITIDA: la ventana mide ${ancho}x${alto}"
+        return
+    }
+    # Y el area que se va a copiar tiene que caber DENTRO del marco de la
+    # ventana. Es la comprobacion que habria cazado la tanda de capturas del
+    # escritorio: cuando las coordenadas de cliente y las de pantalla no hablan
+    # del mismo sistema, el rectangulo se sale de la ventana y lo que sobra es
+    # el escritorio de quien esta usando la maquina. Si no cuadra, no hay foto.
+    $m = New-Object Win32.Nativo+RECT
+    [Win32.Nativo]::GetWindowRect($h, [ref]$m) | Out-Null
+    if ($o.X -lt $m.Left -or $o.Y -lt $m.Top -or
+        ($o.X + $ancho) -gt $m.Right -or ($o.Y + $alto) -gt $m.Bottom) {
+        Write-Output ("  foto $nombre OMITIDA: el area de cliente " +
+            "($($o.X),$($o.Y) ${ancho}x${alto}) se sale del marco " +
+            "($($m.Left),$($m.Top))-($($m.Right),$($m.Bottom))")
         return
     }
     $bmp = New-Object System.Drawing.Bitmap $ancho, $alto
