@@ -10,7 +10,9 @@
 # que devuelve false y se traga el error. Para el jugador esta bien; para
 # averiguar por que ha fallado, no sirve de nada.
 #
-# Y hay que darle la ranura. El plugin Multi Save de Anil redefine Game.save con
+# Y hay que darle la ranura. (Escrita para Anil, el primer juego: el plugin
+# Multi Save es suyo. En otro juego habra que mirar si redefine Game.save.)
+# El plugin Multi Save de Anil redefine Game.save con
 # la firma (slot, auto, safe:) y empieza con `slot = $player.save_slot` seguido
 # de `return false if slot.nil?`: en una partida recien empezada, que todavia no
 # se ha guardado nunca, save_slot es nil y Game.save devuelve false sin intentar

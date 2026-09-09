@@ -20,7 +20,7 @@
 # Graphics.update, igual que nx-rutas.rb.
 
 module NXSonido
-  EFECTO = "Battle ball drop"          # existe en Audio/SE/ desde Anil 4.0
+  EFECTO = "Battle ball drop"          # de Anil, el primer juego; cambialo por uno del tuyo
   DENTRO = "Audio/SE/#{EFECTO}.ogg"
 
   @instalado = false

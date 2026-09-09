@@ -1,6 +1,7 @@
 # Subconjunto de la biblioteca estandar de Ruby 3.1.7 que viaja a la SD.
 # Se copia desde src/ruby-3.1.7/lib/ (misma version que el interprete
-# compilado, no la 3.3.0 de MinGW que traia el juego). Lo instala pack-anil.sh.
+# compilado, no la 3.3.0 de MinGW que traian algunos juegos). construir.sh lo
+# copia a lib/ dentro de la entrega, y de ahi lo lleva Empaquetar.ps1 a la SD.
 #
 # Los ficheros escritos a mano de este port NO estan aqui: viven en runtime/lib/.
 English.gemspec

@@ -1,12 +1,13 @@
 # Compatibilidad para la version de Nintendo Switch.
 #
-# Se ejecuta ANTES que preload.rb (ver "preloadScript" en mkxp.json) porque
-# preload.rb, que viene con el juego, llama a MKXP.puts en su tercera linea.
+# Se ejecuta ANTES que el preload.rb del juego (ver "preloadScript" en
+# mkxp.json), y ese orden importa: los preload.rb que traen estos juegos llaman
+# a MKXP en su primera o segunda linea.
 #
-# MKXP es la API de JoiPlay, no la de mkxp-z: el juego se distribuye tambien
-# para Android y sus scripts la usan en dos sitios. En mkxp-z el equivalente es
-# el modulo System, y la constante MKXP sencillamente no existe, asi que sin
-# esto el interprete se para en la primera linea de preload.rb.
+# MKXP es la API de JoiPlay, no la de mkxp-z: estos juegos se distribuyen
+# tambien para Android y sus scripts la usan. En mkxp-z el equivalente es el
+# modulo System, y la constante MKXP sencillamente no existe, asi que sin esto
+# el interprete se para en la primera linea del preload.rb del juego.
 
 module NX
   # Fichero PROPIO, distinto del que usa el lado C++. Compartirlo no sale
@@ -17,7 +18,12 @@ module NX
 
   def self.log(msg)
     $nx_log ||= begin
-      f = (File.open(LOG, "a") rescue File.open("sdmc:/switch/pokemon-anil/" + LOG, "a"))
+      # LOG es relativo: el motor ya hizo chdir a la carpeta del juego antes de
+      # que Ruby arranque, asi que cae donde tiene que caer sea cual sea el
+      # slug. La reserva no adivina ninguna carpeta de juego -no hay ninguna
+      # que adivinar con un motor generico-: deja el registro en la raiz de la
+      # tarjeta, que es el unico sitio que seguro existe.
+      f = (File.open(LOG, "a") rescue File.open("sdmc:/rgss-switch-ruby.log", "a"))
       f.sync = true
       f
     end
@@ -57,22 +63,85 @@ end
 $stdout = NXOut.new
 $stderr = $stdout
 
+# La API de JoiPlay, en lo que se puede cumplir aqui. No es la de mkxp-z: son
+# metodos que JoiPlay -un mkxp para Android- anadio, y los preload.rb que traen
+# estos juegos los llaman antes de que el juego exista siquiera. Lo que falta no
+# da un error legible: da "uninitialized constant MKXP" en la linea 1.
 module MKXP
-  # preload.rb la usa para avisar de metodos retirados en Ruby 3.2. Nuestro
-  # interprete es el 3.1.7, donde Dir.exists?/File.exists? siguen existiendo,
-  # asi que el aviso es informativo y basta con registrarlo.
+  # Los preload.rb la usan para avisar de metodos retirados en Ruby 3.2.
+  # Nuestro interprete es el 3.1.7, donde Dir.exists?/File.exists? siguen
+  # existiendo, asi que el aviso es informativo y basta con registrarlo.
   def self.puts(msg)
     NX.log("[MKXP] #{msg}")
   end
 
   # JoiPlay abre un navegador. En Horizon no hay ninguno al que delegar; los
-  # dos sitios que la llaman ya la envuelven en `rescue`, pero devolver false
+  # sitios que la llaman ya la envuelven en `rescue`, pero devolver false
   # es mas limpio que dejar que estalle.
   def self.launch(url)
     NX.log("[MKXP] launch ignorado en Switch: #{url}")
     false
   end
+
+  # Quien pregunta suele hacerlo para decidir si hay teclado, raton o
+  # almacenamiento externo. "switch" no es ninguno de los valores que JoiPlay
+  # devuelve, y es a proposito: mas vale que un script no reconozca la
+  # plataforma a que la confunda con Android.
+  def self.platform
+    "switch"
+  end
+
+  # zinflate/zdeflate: JoiPlay las expone porque su Zlib de Android daba
+  # Zlib::DataError con los .rxdata de algunos juegos, y el preload.rb de
+  # Pokemon Z -y el de cualquier otro copiado de la misma guia- las llama.
+  # Nuestro Ruby 3.1.7 trae zlib de verdad y funciona, asi que lo unico que hay
+  # que hacer es no romper la cadena.
+  #
+  # OJO CON LA RECURSION, que es la trampa entera de esto. El preload.rb de Z
+  # dice literalmente:
+  #
+  #     module Zlib
+  #       class Inflate
+  #         def self.inflate(string); MKXP.zinflate(string); end
+  #
+  # o sea que redefine Zlib::Inflate.inflate PARA QUE LLAME AQUI. Si aqui se
+  # llamara a Zlib::Inflate.inflate, la pila se agotaria en la primera lectura
+  # de un mapa y el error saldria como "stack level too deep" en un sitio que no
+  # tiene nada que ver. Por eso se usa la INSTANCIA -Zlib::Inflate.new, que el
+  # preload.rb no toca- y no el metodo de clase.
+  begin
+    require "zlib"
+    ZLIB = true
+  rescue LoadError => e
+    ZLIB = false
+    NX.log("[MKXP] sin zlib: #{e.class}: #{e.message}")
+  end
+
+  def self.zinflate(cadena)
+    raise "zlib no disponible" unless ZLIB
+    z = Zlib::Inflate.new
+    begin
+      r = z.inflate(cadena)
+      z.finish
+      r
+    ensure
+      z.close rescue nil
+    end
+  end
+
+  def self.zdeflate(cadena, nivel = nil)
+    raise "zlib no disponible" unless ZLIB
+    z = nivel ? Zlib::Deflate.new(nivel) : Zlib::Deflate.new
+    begin
+      # Con Zlib::FINISH el flujo se cierra en la misma llamada: llamar despues
+      # a finish seria pedirle a un flujo terminado que termine otra vez.
+      z.deflate(cadena, Zlib::FINISH)
+    ensure
+      z.close rescue nil
+    end
+  end
 end
+NX.log("[nx] modulo MKXP (API de JoiPlay) definido: puts, launch, platform, zinflate, zdeflate")
 
 # --- constantes de Encoding -----------------------------------------------
 # Nuestro Ruby se enlazo con dmyenc.o (el Init_enc vacio) en lugar de la base
@@ -85,9 +154,11 @@ end
 #
 # Se reproduce aqui la misma regla de nombres que usa set_encoding_const en
 # encoding.c: lo que no sea alfanumerico pasa a "_" y la inicial se pone en
-# mayuscula. El juego solo usa UTF-8 (17 Encoding::UTF_8 y 23
-# force_encoding("UTF-8") en sus 770 scripts, ninguna otra codificacion y
-# ninguna conversion entre juegos de caracteres), asi que esto le basta.
+# mayuscula. Los juegos de Essentials solo usan UTF-8 (en Anil eran 17
+# Encoding::UTF_8 y 23 force_encoding("UTF-8") sobre 770 scripts, ninguna otra
+# codificacion y ninguna conversion entre juegos de caracteres), asi que esto
+# les basta; y como se registran TODAS las que el interprete conoce, un juego
+# que use otra tampoco se queda sin ella.
 ESPECIALES = %w[external internal locale filesystem]
 silencio, $VERBOSE = $VERBOSE, nil   # Encoding.find avisa por cada codificacion ausente
 Encoding.name_list.each do |nombre|
@@ -113,11 +184,11 @@ end
 
 # --- ruta de busqueda de require ------------------------------------------
 # rb_is_absolute_path solo acepta rutas que empiecen por "/". El directorio de
-# trabajo en Horizon es "sdmc:/switch/pokemon-anil", que no cumple, asi que
-# Ruby lo trata como relativo y lo expande DOS veces: primero al construir la
-# ruta de busqueda y otra vez al buscar el fichero. El resultado es
-# "sdmc:/switch/pokemon-anil/sdmc:/switch/pokemon-anil/lib/set.rb", que
-# evidentemente no existe.
+# trabajo en Horizon es "sdmc:/switch/<slug>", que no cumple, asi que Ruby lo
+# trata como relativo y lo expande DOS veces: primero al construir la ruta de
+# busqueda y otra vez al buscar el fichero. El resultado es
+# "sdmc:/switch/<slug>/sdmc:/switch/<slug>/lib/set.rb", que evidentemente no
+# existe.
 #
 # newlib acepta rutas sin dispositivo y las resuelve contra el dispositivo por
 # omision, que en homebrew es la SD. Quitando el prefijo "sdmc:" la ruta empieza
@@ -137,7 +208,7 @@ NX.log("[nx] $LOAD_PATH: #{$LOAD_PATH.inspect}")
 
 # --- comprobacion del cargador --------------------------------------------
 # El juego hace require de 'set', 'tsort', 'socket' e 'io/wait'. Los dos
-# ultimos son shims nuestros (Cable Club necesita sockets, que en Horizon no
+# ultimos son shims nuestros (los plugins de red necesitan sockets, que en Horizon no
 # hay). Si require falla, el gestor de plugins cierra el juego sin decir mas
 # que una linea en errorlog.txt, asi que conviene dejarlo dicho aqui.
 %w[set tsort socket io/wait].each do |feature|
@@ -160,7 +231,7 @@ end
 #       Marshal.neverload = true
 #       str = load_data(file, true)
 #
-# `Marshal.neverload` aparece UNA vez en los 770 scripts del juego y CERO veces
+# `Marshal.neverload` aparece UNA vez en los 770 scripts de Anil y CERO veces
 # en mkxp-z: es un resto de compatibilidad con el mkxp antiguo, donde ese
 # indicador servia para que load_data devolviera la cadena en bruto en vez de
 # deserializarla. En mkxp-z eso ya lo dice el segundo argumento de load_data

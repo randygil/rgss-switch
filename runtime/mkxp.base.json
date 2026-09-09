@@ -1,0 +1,64 @@
+//==============================================================================
+// mkxp.base.json — capa 1 de §5: lo que la Switch necesita SIEMPRE.
+//
+// Aquí sólo va lo que es cierto para cualquier juego de RPG Maker XP sobre esta
+// consola. Nada de este fichero depende de un juego concreto: el título de la
+// ventana, la resolución interna, el número de fuentes de sonido, los nombres de
+// los botones y los preload salen de las capas de encima (el mkxp.json del
+// propio juego, el perfil y la lista de shims), y las compone Empaquetar.ps1.
+//
+// Es JSON5 —lleva comentarios— porque nadie lo lee tal cual: el empaquetador lo
+// limpia y lo funde con las demás capas antes de escribir el mkxp.json que va a
+// la tarjeta.
+//==============================================================================
+{
+    // La Switch entrega 1280x720 tanto en dock como en portátil (el dock a
+    // 1080p lo escala el sistema). Un juego de RPG Maker XP dibuja contra
+    // 640x480 o 512x384, así que siempre hay que escalar: pantalla completa,
+    // sin barra, sin redimensionar y respetando el aspecto para no deformar.
+    "fullscreen": true,
+    "winResizable": false,
+    "fixedAspectRatio": true,
+
+    // El escalado ENTERO va desactivado a propósito: a 720p sólo cabría 1x
+    // (la imagen diminuta en medio de la pantalla). El suave aprovecha el panel
+    // entero —512x384 a 1,875x son 960x720 exactos, sin recortar ni deformar—.
+    "integerScalingActive": false,
+    "smoothScaling": true,
+
+    // Lanczos3 filtra mejor que el bilineal, pero es un shader caro para el
+    // Tegra X1 a 307 MHz de GPU en portátil. No sale gratis y no se activa.
+    "lanczos3Scaling": false,
+
+    // Los drivers de Tegra bajo Mesa/nouveau son justo el caso que este apaño
+    // cubre: texturas que no se sincronizan y tilesets que no aparecen. Se pone
+    // por omisión; un juego que traiga "subImageFix": false en su propio
+    // mkxp.json lo pisa, porque él sabrá por qué lo desactivó.
+    "subImageFix": true,
+
+    "vsync": true,
+    "syncToRefreshrate": true,
+
+    // Indexa las rutas en minúsculas. En la Switch NO es opcional: los recursos
+    // viven sobre FAT32/exFAT y son decenas de miles de PNG y WAV. Sin la caché,
+    // cada Bitmap.new dispara una apertura de FatFS —0,85 ms de IPC— y los mapas
+    // tardan segundos en cargar. Es la decisión de rendimiento más importante
+    // del port, y por eso se deja explícita aunque mkxp-z 2.4.2 ya la traiga.
+    "pathCache": true,
+
+    // Sin teclado no hay forma de invocar ninguno de los dos, y el menú de
+    // ajustes de mkxp-z además asume entrada de teclado.
+    "enableReset": false,
+    "enableSettings": false,
+
+    // RPG Maker XP. Se fija a mano para no depender de que el análisis del
+    // Game.ini —que declara RGSS10xE.dll— funcione igual en Horizon.
+    "rgssVersion": 1,
+
+    // lib/ = subconjunto de la biblioteca estándar de Ruby 3.1.7 (la misma
+    // versión que el intérprete compilado) más los shims del port. El
+    // empaquetador le añade lo que pida el perfil (stdlib, gems...).
+    "rubyLoadpath": ["lib"],
+
+    "printFPS": false
+}

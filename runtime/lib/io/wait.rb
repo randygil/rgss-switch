@@ -1,8 +1,9 @@
 # io/wait.rb — sustituto para Nintendo Switch.
 #
-# La extension nativa io/wait no se compilo. Cable Club la pide junto a
-# 'socket'. Como sus sockets nunca llegan a abrirse, basta con definir los
-# metodos sobre IO usando IO.select, que si esta en el nucleo de Ruby.
+# La extension nativa io/wait no se compilo. Los plugins de red de Essentials
+# (Cable Club y companyia) la piden junto a 'socket'. Como sus sockets nunca
+# llegan a abrirse, basta con definir los metodos sobre IO usando IO.select,
+# que si esta en el nucleo de Ruby.
 
 class IO
   unless method_defined?(:wait_readable)
