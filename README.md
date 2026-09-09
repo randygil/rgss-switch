@@ -53,7 +53,7 @@ Herramientas de desarrollo, todas por slug:
 | `recoger.ps1` | busca la SD de verdad y trae los cuatro registros, las partidas y los informes de Atmosphère |
 | `subir-ftp.py` | lo mismo por FTP, con la consola encendida |
 | `triaje.py` / `resolver-pila.py` | leen un registro o un volcado y dicen dónde estaba el hilo (`TRIAJE.md`, bitácora §5.65) |
-| `dump-scripts.py`, `dump-rgssad.py`, `comprobar-nro.py`, `comprobar-ruby18.rb`, `reconstruir-src.py` | extraer scripts, abrir un `.rgssad` cifrado, releer el NACP de un `.nro`, probar la capa de Ruby 1.8 en el PC, rehacer `src/` desde `patches/` |
+| `dump-scripts.py`, `dump-rgssad.py`, `leer-mapa.rb`, `comprobar-nro.py`, `comprobar-ruby18.rb`, `reconstruir-src.py` | extraer scripts, abrir un `.rgssad` cifrado, leer un `MapNNN.rxdata` con el Ruby del PC —cuántas cajas y qué menús tiene una introducción, antes de conducirla a ciegas—, releer el NACP de un `.nro`, probar la capa de Ruby 1.8 en el PC, rehacer `src/` desde `patches/` |
 
 ### Lo que tienes que poner tú
 
@@ -214,11 +214,11 @@ tiene las cifras, cómo se obtuvieron y el veredicto razonado de cada uno.
 | Pokémon Añil 4.0 | `pokemon-anil` | ruby31 | v21.1 | **jugable** | nada; es el patrón |
 | Project Vanguard 4.0.3 | `pokemon-vanguard` | ruby31 | v20.1 | **jugable** | título, introducción, nombre, primer mapa, menú y partida guardada en el emulador (`1e35fed`). El combate no se probó |
 | Pokémon Reborn 19.5.0 | `pokemon-reborn` | ruby31 | v19 (base) | **jugable** | hasta guardar partida en Lower Peridot Ward. Lleva postizos de `discord`, `poke-api-v2`, `rubygems` y de seis métodos que su mkxp-z propio añadía (`1e35fed`). Los mods en `patch/` sin probar |
-| Pokémon Ópalo 2.11 | `pokemon-opalo` | ruby18 | clásico (~v16) | `no-arranca` | carga 212 de 214 secciones y en `Mesón Batalla` —679 Pokémon construidos al cargar— desaparece **el proceso de Ryujinx**, sin traza de invitado. Lo primero a comprobar en consola real |
-| Pokémon Z 2.13 | `pokemon-z` | ruby18 | clásico (~v16) | `arranca` | título, partida nueva, rejilla del nombre y dos mapas de la introducción sin una excepción; no se llegó a guardar |
-| Pokémon Iberia 2.10 | `pokemon-iberia` | ruby18 | clásico (v15/v16) | `arranca` | título, partida nueva, rejilla, primer mapa y menú a la primera; falta guardar. El agua y las cascadas salen sin el efecto de `KleinBitmap.dll` |
-| Pokémon Titán 2.10 | `pokemon-titan` | ruby18 | clásico (v15/v16) | `arranca` | título, partida nueva e introducción a la primera; un sprite hecho de ruido junto a la profesora es lo que `RtlMoveMemory` no puede copiar |
-| Pokémon Uranium 1.3.2 | `pokemon-uranium` | rgss1 | clásico (v16/v17) | `PENDIENTE-PRUEBA` | su clase `Audio` entera pasa por FmodEx: hay que reescribirla contra la `Audio` de mkxp-z, no taparla |
+| Pokémon Ópalo 2.11 | `pokemon-opalo` | ruby18 | clásico (~v16) | `no-arranca` | carga 212 de 214 secciones y en `Mesón Batalla` muere **el proceso de Ryujinx** con `0xC0000005` dentro de `Ryujinx.exe` (visor de sucesos), igual en `HostMappedUnsafe` y en `SoftwarePageTable`; la pila del hilo RGSS aguanta 11.910 marcos, así que no es desbordamiento. Falla el anfitrión: toca consola real |
+| Pokémon Z 2.13 | `pokemon-z` | ruby18 | clásico (~v16) | **jugable** | introducción, mapa `66 Carriage`, menú propio (`Bag/Craft/Feats/Save`) y partida guardada. La trampa es el `¿ENTENDIDO?` del mapa 168, con `No` primero y volviendo a empezar. El combate no se probó |
+| Pokémon Iberia 2.10 | `pokemon-iberia` | ruby18 | clásico (v15/v16) | **jugable** | introducción, `17 Casa`, cuatro pasos, menú y partida guardada. El agua y las cascadas siguen sin el efecto de `KleinBitmap.dll`. El combate no se probó |
+| Pokémon Titán 2.10 | `pokemon-titan` | ruby18 | clásico (v15/v16) | **jugable** | introducción, `12 Casa`, menú y partida guardada, después de arreglar `Kernel#proc` (en 1.8 era `lambda`: `return` dentro de un `proc` mataba el cambio de mapa). Sigue el sprite de ruido de `RtlMoveMemory` |
+| Pokémon Uranium 1.3.2 | `pokemon-uranium` | rgss1 | clásico (v16/v17) | `arranca` | idioma, menú, introducción entera y el nombre; en el fundido al primer mapa muere el proceso **de Ryujinx** con `0xC0000005` en `0x1250ef`, a 780 bytes del de Ópalo: el mismo fallo del anfitrión. Su `Audio` de FmodEx ya está reescrita sobre la de mkxp-z |
 
 El estado sale de `juegos/<slug>/perfil.json` y lo cambia quien lo prueba, con
 la fecha en `notas`.

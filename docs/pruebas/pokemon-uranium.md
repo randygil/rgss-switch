@@ -261,3 +261,54 @@ de leer el archivo.
   usos) salen por `winmm` y no suenan: son el timbre del teléfono y los pitidos.
 - Los 4 `.mid` de `Audio/` no tienen soundfont
   (`Failed to load libfluidsynth.so`).
+
+---
+
+## Vuelta 7 — 9 de septiembre de 2026, tarde: el muro es de Ryujinx, y es el mismo que el de Ópalo
+
+La vuelta 6 dejó descartados el audio, `Graphics.resize_screen` y la memoria, y
+dejó pendientes dos cosas: el modo diagnóstico y **leer el registro del
+anfitrión**. Se hizo lo segundo, que era lo barato, y contestó.
+
+Se reprodujo el cierre una vez más —introducción entera con los bloques que ya
+estaban escritos, y el proceso desaparece en el fundido al primer mapa— y esta
+vez se miró donde nadie había mirado:
+
+- `C:\Games\publish\Logs\Ryujinx_1.3.3_*.log`: **no dice nada**. La última línea
+  de invitado es de los 7,9 s (`Failed to load libfluidsynth.so`) y a partir de
+  ahí sólo hay `ServicePcv GetClockRate: Stubbed`, tres por segundo, hasta que se
+  corta. Ni excepción de .NET, ni instrucción indefinida, ni región de memoria
+  inválida.
+- El **visor de sucesos de Windows** (`Application Error`, id 1000), en el
+  instante de la muerte:
+
+```
+Nombre de aplicación con errores: Ryujinx.exe, versión: 1.3.3.0
+Nombre del módulo con errores:    Ryujinx.exe, versión: 1.3.3.0
+Código de excepción:              0xc0000005
+Desplazamiento con errores:       0x00000000001250ef
+```
+
+**Violación de acceso dentro del emulador.** Y Ópalo, el otro cierre mudo del
+proyecto, muere con el mismo código de excepción en `0x1253fb`: **780 bytes de
+distancia dentro del mismo binario**, o sea la misma zona de código de
+Ryujinx 1.3.3. Los dos cierres mudos que quedaban son, hasta donde se ve desde
+fuera, un único fallo del anfitrión y no dos fallos del motor.
+
+Esto encaja con lo que ya se había medido y no se sabía interpretar: el contador
+de fotogramas del motor seguía diecisiete segundos más después de que el hilo
+RGSS se quedara dentro de una llamada nativa. Un anfitrión que se cae por una
+violación de acceso no le da al invitado ocasión de escribir nada.
+
+**Qué NO se hace**: esquivarlo. No se va a cambiar el motor para no pisar lo que
+sea que Ryujinx no aguanta, porque no sabemos qué es y cada apaño taparía la
+medición. Lo que hace falta es **una consola de verdad**, donde no hay anfitrión
+que se caiga; si allí pasa el fundido, esto queda como un fallo del emulador y se
+documenta, y si allí también muere, entonces habrá una traza de invitado de
+Atmosphère (`recoger.ps1` la trae) que es justo lo que aquí no hay.
+
+**Lo que sigue pendiente y no se ha hecho**: el modo diagnóstico completo con
+`nx-metodos.rb` para saber el último método llamado, y leer el evento 2 del mapa
+51 —el que hace la transferencia—, que ahora es más fácil que antes porque
+`leer-mapa.rb` lee un `MapNNN.rxdata` con el Ruby del PC (el de Uranium hay
+que sacarlo antes de `Uranium.rgssad` con `dump-rgssad.py`).

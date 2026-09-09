@@ -178,3 +178,100 @@ reserva, que es guardar junto al ejecutable, que es lo que hay que hacer aquí).
   anfitrión apunta más a lo segundo.
 - Si se confirma que es del emulador, Ópalo pasa a `arranca` sin tocar una
   línea; si no, hay que entender qué agota esa lista.
+
+---
+
+## Vuelta 5 — 9 de septiembre de 2026, tarde: quien se muere es Ryujinx, y está escrito
+
+La vuelta 4 dejó dicho que «un proceso de Ryujinx que desaparece sin escribir una
+línea es lo que se ve cuando el anfitrión se cae». Ahora hay la prueba, y es de
+Windows, no nuestra.
+
+### 1. El registro del anfitrión no dice nada… y el visor de sucesos sí
+
+`C:\Games\publish\Logs\Ryujinx_1.3.3_*.log` **se corta a los 7,2 s**, en
+`Failed to load libfluidsynth.so`, y no vuelve a escribir: ni excepción de .NET,
+ni `Undefined instruction`, ni `Invalid memory region`, ni una línea de GPU. El
+proceso muere unos veinte segundos después sin dejar rastro ahí.
+
+Lo que sí queda es el informe de errores de Windows (`Application Error`, id 1000):
+
+```
+Nombre de aplicación con errores: Ryujinx.exe, versión: 1.3.3.0
+Nombre del módulo con errores:    Ryujinx.exe, versión: 1.3.3.0
+Código de excepción:              0xc0000005
+Desplazamiento con errores:       0x00000000001253fb
+```
+
+`0xC0000005` es **violación de acceso**, y el módulo que falla es el propio
+`Ryujinx.exe`: no es una excepción gestionada que el emulador traduzca a un
+error de invitado, es el anfitrión leyendo o escribiendo donde no debe y
+muriéndose de golpe. Por eso no hay `errorlog.txt`, ni excepción de Ruby, ni
+traza de invitado: **el invitado no llega a enterarse**.
+
+Se repitió con `memory_manager_mode` en `HostMappedUnsafe` (el de la máquina) y
+en `SoftwarePageTable` (el modo comprobado, que debería convertir un acceso malo
+del invitado en una excepción de invitado con su dirección): **muere igual y en
+el mismo desplazamiento**. Si fuera un acceso del invitado fuera de su memoria,
+esos dos modos no darían el mismo resultado.
+
+### 2. La hipótesis del desbordamiento de pila, descartada con un número
+
+Con una sonda puesta a mano en la tarjeta (`lib/nx-sonda-opalo.rb`, con
+`diagnostico.txt` para que el motor baje cada línea con `fsync`):
+
+```
+[sonda] la pila del hilo RGSS aguanta 11910 marcos de Ruby y SystemStackError SI salta
+```
+
+O sea: Ruby conoce los límites de su pila de máquina en el hilo RGSS y el
+guardarraíl funciona. Una recursión de Ruby no puede ser lo que se sale. Y la
+profundidad de llamada en cada creación es **constante**:
+
+```
+[sonda] ENTRA creacion 154 especie 94 profundidad 1
+[sonda] SALE  creacion 154 ok
+[sonda] ENTRA creacion 155 especie 195 profundidad 1
+        (aquí se muere el proceso)
+```
+
+Nótese que **entra y no sale**: la muerte es *dentro* de la construcción número
+155, no en la maquinaria del literal que las acumula.
+
+### 3. Qué manda, medido con cuatro variantes de la sonda
+
+| Variante | Dónde muere |
+|---|---|
+| Tal cual | creación **155** |
+| `srand(4242)` antes de `TRAINERS` | creación **155** (no es el azar) |
+| Todas las especies forzadas a la 1 | creación **155** (no es la especie) |
+| Las cien primeras falseadas (se devuelve siempre el mismo objeto) | elemento **254**, que es la creación de verdad número **155** |
+| `PokeBattle_Pokemon.new(esp, niv, nil, false)` — **sin movimientos** | **no muere**: las 679 se construyen y el emulador aguanta los 100 s |
+| Sin movimientos, pero abriendo y recorriendo `attacksRS.dat` igual | creación **447** |
+
+Léase junto: no es la posición en el literal, no es la especie, no es el azar y
+**no es un número fijo de construcciones**. Es una cantidad de **trabajo** por
+construcción: quitando el reparto de movimientos el juego llega al final, y
+dejando sólo la lectura de `attacksRS.dat` el tope se triplica (155 → 447). Lo
+que se agota crece con lo que cada construcción hace, no con cuántas van.
+
+Esto además **corrige** lo que decía la vuelta 4: allí se anotó que 800
+creaciones extra de la especie 1 antes de la lista salían bien y aun así moría en
+la 155. Con las medidas de arriba eso no cuadra, y la explicación más probable es
+que aquellas 800 no pasaran por el mismo camino (`withMoves`).
+
+### 4. Veredicto
+
+**Apunta al emulador, no al motor.** Un `0xC0000005` dentro de `Ryujinx.exe`, en
+el mismo desplazamiento con dos gestores de memoria distintos, y sin ninguna
+excepción de invitado, es un fallo del anfitrión disparado por lo que el invitado
+le pide. Y no es sólo de Ópalo: **Uranium se muere exactamente igual**, con el
+mismo código de excepción y en `0x1250ef`, a 780 bytes del de Ópalo dentro del
+mismo binario (ver `pokemon-uranium.md`).
+
+Lo siguiente es **una consola de verdad**. No se va a esquivar con apaños en el
+motor: el motor no está haciendo nada ilegal que se pueda ver desde dentro, y
+cada apaño sería tapar una medición que no tenemos.
+
+La sonda queda guardada en `tmp/nx-sonda-opalo.rb` para quien la repita; se
+retiró de la instalación de la tarjeta al terminar.
