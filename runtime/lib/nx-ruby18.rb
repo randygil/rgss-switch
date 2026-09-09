@@ -1057,6 +1057,7 @@ module NX18Tarde
     audio unless @hecho[:audio]
     entrada                     # los juegos reabren Input en 4 o 5 secciones
     graficos
+    pantalla                    # la pantalla logica, en cuanto el juego dice cual es
   rescue Exception => e
     NX.log("[1.8] FALLO del repaso tardio #{e.class}: #{e.message}")
     @hecho[:stringinput] = true
@@ -1362,6 +1363,72 @@ module NX18Tarde
     aviso(:graficos, "[1.8] Graphics.snap_to_bitmap vuelve a ser el del motor")
   end
 
+  # --- La pantalla logica se quedaba en 640x480 -----------------------------
+  #
+  # Randy, con Opalo en su Switch y con Z en el emulador: "no esta nada centrado
+  # el viewport, se ve super curseado". Medido sobre la captura de Z en Ryujinx
+  # (docs/capturas/pokemon-z-viewport-antes-titulo.png): el juego ocupa 960x720
+  # de los 1200x895 que el emulador dedica a la consola, pegado a la esquina de
+  # arriba a la izquierda. 960/1200 = 720/895 = 0,8 justo, que es 512/640 y
+  # 384/480: la pantalla logica del motor era 640x480 y Essentials dibujaba sus
+  # 512x384 en un rincon de ella. El motor la centra y la escala bien -eso lo
+  # hace fixedAspectRatio-, pero centra los 640x480, no los 512x384.
+  #
+  # Por que 640x480: es el valor por omision de mkxp-z para RGSS1
+  # (src/config.cpp: `conf.defScreenW = (rgssVersion == 1 ? 640 : 544)`), y los
+  # mkxp.json de estos cinco juegos NO traen defScreenW/defScreenH -Anil y
+  # Vanguard si, y por eso Anil siempre se vio centrado-.
+  #
+  # Y por que el juego no lo arregla solo, que es lo que hace en el PC:
+  # Essentials clasico trae `pbSetResizeFactor` en Sprite_Resizer, que acaba
+  # llamando a `Graphics.resize_screen`; pero doce secciones mas adelante,
+  # PSystem_System hace
+  #
+  #     if !Kernel.respond_to?("pbSetResizeFactor")
+  #       def pbSetResizeFactor(dummy); end
+  #
+  # y `Kernel.respond_to?` sobre un metodo de nivel superior -que es privado en
+  # Object- contesta false, asi que el sello vacio PISA al de verdad. Medido con
+  # una sonda en el emulador (runtime/diagnostico/nx-sonda-viewport.rb):
+  #
+  #     [viewport] update 1: motor 640x480 | juego 512x384 | haveresizescreen true
+  #     [viewport] arity de pbSetResizeFactor = 1   (el de Sprite_Resizer es -1)
+  #
+  # o sea: el juego SABE que puede redimensionar y no lo pide nunca. Y con la
+  # sonda pidiendolo a mano, 512x384, la imagen sale centrada y llenando la
+  # pantalla (pokemon-z-viewport-despues-titulo.png). No es de la consola: en el PC
+  # pasa lo mismo, solo que alli la ventana es de 640x480 y el hueco negro se
+  # confunde con el marco.
+  #
+  # El arreglo es pedirlo nosotros, y no fijar 512x384 en mkxp.base.json: ahi
+  # valdria para estos cinco y romperia cualquier juego de RPG Maker XP que
+  # dibuje de verdad a 640x480. Aqui se pregunta al juego -su Graphics.width es
+  # su DEFAULTSCREENWIDTH- y se le da esa pantalla, sea cual sea. Si el juego no
+  # reescribe Graphics.width, los dos numeros coinciden y esto no hace nada.
+  #
+  # Corre entre seccion y seccion (NXFuente.transforma), o sea en cuanto
+  # Sprite_Resizer se ha evaluado y mucho antes del primer fotograma.
+  def self.pantalla
+    return unless NATIVO_GFX[:width] && NATIVO_GFX[:height]
+    return unless NATIVO_GFX[:resize_screen]
+    return unless defined?(Graphics)
+    w = (Graphics.width  rescue nil)
+    h = (Graphics.height rescue nil)
+    return unless w.is_a?(Numeric) && h.is_a?(Numeric)
+    w = w.to_i
+    h = h.to_i
+    # Un tamano absurdo seria peor que el que ya hay: el juego acaba de definir
+    # la constante y podria estar a medias.
+    return if w < 64 || h < 64 || w > 4096 || h > 4096
+    real_w = NATIVO_GFX[:width].call
+    real_h = NATIVO_GFX[:height].call
+    return if w == real_w && h == real_h
+    NATIVO_GFX[:resize_screen].call(w, h)
+    NX.log("[1.8] pantalla logica #{real_w}x#{real_h} -> "            "#{NATIVO_GFX[:width].call}x#{NATIVO_GFX[:height].call}: "            "Essentials dibuja #{w}x#{h} y su pbSetResizeFactor lo pisa un "            "`def pbSetResizeFactor(dummy); end`, asi que nunca lo pide")
+  rescue Exception => e
+    NX.log("[1.8] no se pudo ajustar la pantalla logica: #{e.class}: #{e.message}")
+  end
+
   NATIVO_GFX = {}
 
   def self.guarda_graficos
@@ -1369,6 +1436,17 @@ module NX18Tarde
     begin
       NATIVO_GFX[:snap_to_bitmap] = Graphics.method(:snap_to_bitmap)
     rescue NameError
+    end
+    # width, height y resize_screen del MOTOR, guardados antes de que
+    # Sprite_Resizer los tape con los suyos. Sin esto no hay forma de
+    # preguntarle a mkxp-z de que tamano es su pantalla de verdad: a partir de
+    # la seccion 25-35 `Graphics.width` es el 512 nominal del juego. Ver
+    # NX18Tarde.pantalla.
+    [:width, :height, :resize_screen].each do |nombre|
+      begin
+        NATIVO_GFX[nombre] = Graphics.method(nombre)
+      rescue NameError
+      end
     end
   end
 

@@ -140,6 +140,16 @@
 !/docs/capturas/pokemon-titan-hito-*.png
 !/docs/capturas/pokemon-titan-intro-profesora.png
 !/docs/capturas/pokemon-uranium-hito-*.png
+# El viewport descentrado que Randy vio en su consola con Opalo y en el
+# emulador con todos: antes y despues del arreglo de la pantalla logica de
+# nx-ruby18.rb. La pareja de Z es la MEDIDA -el juego ocupaba 960x720 de los
+# 1200x895 del area del emulador, o sea 0,8 justo, que es 512/640- y la de Anil
+# es el patron de "bien centrado" con el que se comparo.
+!/docs/capturas/pokemon-anil-viewport-*.png
+!/docs/capturas/pokemon-z-viewport-*.png
+!/docs/capturas/pokemon-iberia-viewport-*.png
+!/docs/capturas/pokemon-titan-viewport-*.png
+!/docs/capturas/pokemon-uranium-viewport-*.png
 # Y el .nro del empaquetador arrancando en el emulador por primera vez.
 !/docs/capturas/pokemon-reborn-empaquetador-titulo.png
 # Y la prueba del fallo que motivo el cambio de nx-teclado.rb: la pantalla que

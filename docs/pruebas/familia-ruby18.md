@@ -270,3 +270,101 @@ tarjeta.
 | Iberia | **jugable** | `Game.rxdata` 65.609 B, mapa 17 `Casa` |
 | Titán | **jugable** | `Game.rxdata` 56.737 B, mapa 12 `Casa` |
 | Ópalo | `no-arranca` | el que se muere es Ryujinx: `0xC0000005` (ver `pokemon-opalo.md`) |
+
+---
+
+## El undécimo: la pantalla lógica se quedaba en 640×480 (9 de septiembre de 2026, noche)
+
+Randy, con Ópalo en su Switch de verdad y con el emulador delante: «no está nada
+centrado el viewport, se ve super curseado». Le pasaba en la consola **y** en
+Ryujinx, y en los cuatro juegos de esta familia y en Uranium.
+
+### La medida
+
+Ryujinx en ventana, con 1600×895 de área de cliente para la consola. Añil, que
+es el patrón de «bien centrado», ocupa **1200×895 empezando en x = 200**: el 4:3
+centrado que se espera. Pokémon Z, en la misma ventana, ocupaba **960×720
+pegado a la esquina de arriba a la izquierda** de ese mismo rectángulo
+(`pokemon-z-viewport-antes-titulo.png` frente a
+`pokemon-anil-viewport-patron-titulo.png`).
+
+960/1200 = 720/895 = **0,8 justo**, y 0,8 es 512/640 y 384/480. O sea: la
+pantalla lógica del motor era **640×480** y Essentials clásico dibujaba sus
+**512×384** en un rincón de ella. El motor centraba y escalaba perfectamente…
+los 640×480.
+
+Con una sonda de preload (`runtime/diagnostico/nx-sonda-viewport.rb`), en el
+emulador:
+
+```
+[viewport] update 1: motor 640x480 | juego 512x384 | haveresizescreen true |
+           factor 1.0 offset 0,0 | screensize 1 border 0 | Graphics.fullscreen true
+[viewport] arity de pbSetResizeFactor = 1   (el de Sprite_Resizer es -1)
+[viewport] la sonda pidio 512x384: motor 512x384
+```
+
+Tres cosas en tres líneas: (1) la pantalla del motor y la que el juego cree que
+tiene **no son la misma**; (2) el juego **sabe** que puede redimensionar
+—`haveresizescreen` es `true`, o sea que el `alias oldresizescreen resize_screen`
+funcionó— y no lo pide nunca: envolviendo `Graphics.resize_screen` para que
+registre cada llamada, no salió ni una; y (3) el motor sí sabe hacerlo: la sonda
+lo pidió a mano y la imagen salió centrada y llenando la pantalla.
+
+### La causa, con la línea
+
+`Sprite_Resizer` trae `pbSetResizeFactor`, que acaba en `Graphics.resize_screen`.
+Pero **doce secciones más adelante**, `PSystem_System` (Ópalo e Iberia/Titán
+`PokemonSystem`, Z `PSystem_System`) hace:
+
+```ruby
+if !Kernel.respond_to?("pbSetResizeFactor")
+  def pbSetResizeFactor(dummy); end
+```
+
+`Kernel.respond_to?` sobre un método de nivel superior contesta **false** —los
+`def` del nivel superior son privados en `Object`, y `respond_to?` no cuenta los
+privados—, así que el sello vacío **pisa al de verdad**. Por eso `arity` es 1 y
+no −1. No es cosa de 1.8 ni de la consola: en el PC pasa lo mismo, sólo que allí
+la ventana es de 640×480 y el hueco negro se confunde con el marco.
+
+Se cierra el círculo con el registro de la consola de Randy: en
+`mkxp-ruby.log` de Ópalo sale `[win32api] user32!GetSystemMetrics pedido por el
+script` y **nunca** `llamado`. `GetSystemMetrics` sólo se llama desde
+`Win32API.fillScreen` y `Win32API.restoreScreen`, que cuelgan de
+`pbConfigureFullScreen`/`pbConfigureWindowedScreen`, que cuelgan del
+`pbSetResizeFactor` que está sellado.
+
+### El arreglo
+
+`NX18Tarde.pantalla`, en `runtime/lib/nx-ruby18.rb`, entre sección y sección
+—o sea en cuanto `Sprite_Resizer` se ha evaluado y mucho antes del primer
+fotograma—: se le pregunta al juego de qué tamaño es su pantalla
+(`Graphics.width`/`height`, que a esas alturas ya son su `DEFAULTSCREENWIDTH`) y
+se le da esa pantalla con el `resize_screen` del motor, guardado antes de que el
+juego lo tape.
+
+```
+[1.8] pantalla logica 640x480 -> 512x384: Essentials dibuja 512x384 y su
+      pbSetResizeFactor lo pisa un `def pbSetResizeFactor(dummy); end`,
+      asi que nunca lo pide
+```
+
+Y **no** se pone `defScreenW/H: 512x384` en `mkxp.base.json`: allí valdría para
+estos cinco y rompería cualquier juego de RPG Maker XP que dibuje de verdad a
+640×480. Aquí se pregunta, y si el juego no reescribe `Graphics.width` los dos
+números coinciden y esto no hace nada.
+
+Los cinco lo dicen igual en su registro y los cuatro que arrancan en el emulador
+salen centrados y llenando la pantalla:
+`pokemon-z-viewport-despues-{titulo,mapa}.png`,
+`pokemon-iberia-viewport-despues-titulo.png`,
+`pokemon-titan-viewport-despues-titulo.png` y
+`pokemon-uranium-viewport-despues-titulo.png`. Los cinco declaran
+`DEFAULTSCREENWIDTH = 512` / `DEFAULTSCREENHEIGHT = 384` en su `Settings`, y los
+cinco traen el sello de `pbSetResizeFactor`.
+
+Y de paso queda dicho por qué Añil nunca se vio así: su perfil trae
+`defScreenW/H` a 512×384 (y Vanguard y Reborn los traen en su propio
+`mkxp.json`), así que su pantalla lógica ya nacía del tamaño correcto. Los
+cuatro de Ruby 1.8 y Uranium no los traen, y el valor por omisión de mkxp-z para
+RGSS1 es 640×480 (`src/config.cpp`).
