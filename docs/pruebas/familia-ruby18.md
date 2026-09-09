@@ -162,3 +162,11 @@ sobran**: quien venga detrás puede lanzar con `-Espera 30`.
 - Z pregunta el idioma **antes** del título, con `English` arriba y `Spanish`
   debajo: una ABAJO y una Z.
 - Ópalo, Iberia y Titán van directos al título.
+- **`-Espera 40` basta**, y desde esta sesión el emulador se lanza en ventana y
+  en silencio: estas pruebas corren en la misma máquina en la que hay alguien
+  trabajando, y a pantalla completa la dejan inservible durante los diez o
+  quince minutos que dura un guion.
+
+Con eso, Iberia llegó a `17 Casa` con el jugador andando y al menú de pausa
+(tecla X, `Input::B`) sin una sola excepción: es el punto más lejano de la
+familia hasta ahora.
