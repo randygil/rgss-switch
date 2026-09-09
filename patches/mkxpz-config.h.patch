@@ -1,0 +1,30 @@
+Config aprende la clave "patches" de mkxp.json.
+
+Algunos juegos grandes reparten sus correcciones en una carpeta aparte que se
+monta DELANTE del juego, de modo que lo que hay dentro pisa al fichero del
+mismo nombre; Pokemon Reborn trae "patch/" y lo declara asi en su mkxp.json.
+El mkxp-z de escritorio lo entiende y este no, asi que la carpeta viajaba a la
+tarjeta y no la miraba nadie: el juego arrancaba con los ficheros sin corregir
+y sin que nada lo dijera.
+
+La lectura es tolerante por construccion: el valor por omision es un array
+vacio, asi que un mkxp.json que no nombre la clave se comporta exactamente
+igual que antes. Quien monta las carpetas es sharedstate.cpp, antes que el
+contenedor y antes que ".", porque PhysFS resuelve por orden de montaje.
+
+--- src/config.h.orig
++++ src/config.h
+@@ -107,6 +107,13 @@
+     
+     std::vector<std::string> rubyLoadpaths;
+     
++    /* Carpetas de parche, montadas ANTES que el juego: lo que haya dentro
++     * pisa al fichero del mismo nombre del juego. Es como distribuyen sus
++     * correcciones algunos juegos grandes (Pokemon Reborn trae "patch/"), y
++     * el mkxp-z de escritorio lo lee de la clave "patches" de mkxp.json. Sin
++     * esto, la carpeta viaja a la tarjeta y no la mira nadie. */
++    std::vector<std::string> patches;
++    
+     /* Editor flags */
+     struct {
+         bool debug;

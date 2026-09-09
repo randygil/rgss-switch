@@ -1,5 +1,5 @@
---- src/config.cpp.orig	2026-08-30 19:42:43.199897900 -0400
-+++ src/config.cpp	2026-08-30 19:44:26.409667000 -0400
+--- src/config.cpp.orig
++++ src/config.cpp
 @@ -97,16 +97,35 @@
      return defaultValue;
  }
@@ -38,7 +38,15 @@
      }
      catch (const std::exception &e) {
          Debug() << "Failed to parse" << path << ":" << e.what();
-@@ -247,8 +266,20 @@
+@@ -178,6 +197,7 @@
+         {"RTP", json::array({})},
+         {"fontSub", json::array({})},
+         {"rubyLoadpath", json::array({})},
++        {"patches", json::array({})},
+         {"JITEnable", false},
+         {"JITVerboseLevel", 0},
+         {"JITMaxCache", 100},
+@@ -247,9 +267,22 @@
      readGameINI();
      
      // Now check for an extra mkxp.conf in the user's save directory and merge anything else from that
@@ -57,9 +65,53 @@
      json::value userConf = readConfFile(userConfPath.c_str());
 +#endif
      copyObject(optsJ, userConf);
++    nx_boot_trace("[boot] 6i copyObject(userConf) OK");
      
      // now RESUME
-@@ -393,7 +424,13 @@
+     
+@@ -284,11 +317,17 @@
+     SET_OPT_CUSTOMKEY(BGM.trackCount, BGMTrackCount, integer);
+     SET_STRINGOPT(customScript, customScript);
+     SET_OPT(useScriptNames, boolean);
++    nx_boot_trace("[boot] 6j bloque SET_OPT completo");
+     
+     fillStringVec(opts["preloadScript"], preloadScripts);
+     fillStringVec(opts["RTP"], rtps);
+     fillStringVec(opts["fontSub"], fontSubs);
+     fillStringVec(opts["rubyLoadpath"], rubyLoadpaths);
++    /* Si la clave no esta, el valor por omision de arriba es un array
++     * vacio y esto no monta nada: un mkxp.json que no la nombre se
++     * comporta exactamente igual que antes. */
++    fillStringVec(opts["patches"], patches);
++    nx_boot_trace("[boot] 6k fillStringVec completo");
+     
+     auto &bnames = opts["bindingNames"].as_object();
+     
+@@ -301,6 +340,7 @@
+     BINDING_NAME(z);
+     BINDING_NAME(l);
+     BINDING_NAME(r);
++    nx_boot_trace("[boot] 6l bindingNames OK");
+     
+     rgssVersion = clamp(rgssVersion, 0, 3);
+     SE.sourceCount = clamp(SE.sourceCount, 1, 64);
+@@ -308,6 +348,7 @@
+     
+     // Determine whether to open a console window on... Windows
+     winConsole = getEnvironmentBool("MKXPZ_WINDOWS_CONSOLE", editor.debug);
++    nx_boot_trace("[boot] 6m getEnvironmentBool OK");
+     
+ #ifdef __APPLE__
+     // Determine whether to use the Metal renderer on macOS
+@@ -322,6 +363,7 @@
+     manualFolderSelect = getEnvironmentBool("MKXPZ_FOLDER_SELECT", false);
+     
+     raw = optsJ;
++    nx_boot_trace("[boot] 6n Config::read terminado");
+ }
+ 
+ static void setupScreenSize(Config &conf) {
+@@ -393,7 +435,13 @@
      if (dataPathApp.empty())
          dataPathApp = game.title;
      

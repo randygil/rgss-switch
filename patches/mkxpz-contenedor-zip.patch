@@ -5,7 +5,8 @@ cuesta lo que pesan, cuesta lo que son: cada fichero es una entrada de
 directorio, una asignacion de clusters y una escritura de la tabla de FAT32.
 Los mismos bytes en un fichero se copian a la velocidad de la tarjeta.
 
-Asi que, si esta, se monta anil-datos.zip. PhysFS ya sabe leer un zip (el
+Asi que, si esta, se monta el contenedor -datos.zip, el nombre lo fija
+nx_juego.h-. PhysFS ya sabe leer un zip (el
 archivador viene compilado en el libphysfs de portlibs) y mkxp-z ya monta un
 .rgssad cuando lo encuentra: esto es lo mismo con un formato que el jugador
 puede mirar y comprobar antes de copiarlo. El zip va ALMACENADO, sin comprimir,
@@ -23,17 +24,21 @@ que es quien toca filesystem.cpp.
 
 --- a/src/sharedstate.cpp
 +++ b/src/sharedstate.cpp
-@@ -60,7 +60,8 @@
+@@ -60,7 +60,12 @@
  	return 0;
  }
  
 -extern "C" void nx_boot_trace(const char *msg);   /* nx/nx_boot.c */
++#ifdef __SWITCH__
++#include "nx_juego.h"   /* NX_CONTENEDOR: el nombre del contenedor, en un sitio */
++#endif
++
 +extern "C" void nx_boot_trace(const char *msg);      /* nx/nx_boot.c */
 +extern "C" void nx_aviso_registra(const char *msg);  /* nx/nx_aviso.c */
  extern "C" void nx_espera_paso(float fraccion);      /* nx/nx_espera.cpp */
  
  struct SharedStatePrivate
-@@ -138,6 +139,71 @@
+@@ -138,6 +139,94 @@
  			fclose(tmp);
  		}
  
@@ -75,7 +80,30 @@ que es quien toca filesystem.cpp.
 +		 * Guardado en claro, leer del contenedor es leer de un fichero a un
 +		 * desplazamiento distinto, y nada mas. */
 +		{
-+			const char *paquete = "anil-datos.zip";
++			/* Las carpetas de parche van DELANTE de todo, contenedor
++			 * incluido: PhysFS resuelve cada ruta recorriendo los puntos de
++			 * montaje en el orden en que se montaron, asi que "delante" es
++			 * literalmente lo que quiere decir "pisa al del juego". Si la
++			 * carpeta no esta -lo normal-, addPath tira Exception y se sigue:
++			 * un parche que falta no es motivo para no arrancar. */
++			for (size_t i = 0; i < config.patches.size(); ++i)
++			{
++				try
++				{
++					fileSystem.addPath(config.patches[i].c_str());
++					nx_boot_trace((std::string("[boot] 10a- parche montado: ")
++					               + config.patches[i]).c_str());
++				}
++				catch (const Exception &exc)
++				{
++					nx_boot_trace((std::string("[boot] 10a- parche NO montado: ")
++					               + config.patches[i] + ": " + exc.msg).c_str());
++				}
++			}
++
++			/* El nombre lo fija nx_juego.h, que es donde lo comparten el
++			 * motor, la pantalla de aviso y el empaquetador. */
++			const char *paquete = NX_CONTENEDOR;
 +			FILE *tmpz = fopen(paquete, "rb");
 +			if (tmpz)
 +			{
@@ -83,7 +111,7 @@ que es quien toca filesystem.cpp.
 +				try
 +				{
 +					fileSystem.addPath(paquete);
-+					nx_boot_trace("[boot] 10a+ contenedor anil-datos.zip montado");
++					nx_boot_trace("[boot] 10a+ contenedor " NX_CONTENEDOR " montado");
 +					nx_espera_paso(0.55f);
 +				}
 +				catch (const Exception &exc)
@@ -91,7 +119,7 @@ que es quien toca filesystem.cpp.
 +					/* Un contenedor ilegible no tumba el arranque: puede que las
 +					 * carpetas sueltas esten y con eso baste. Lo que no puede es
 +					 * pasar en silencio. */
-+					nx_aviso_registra((std::string("anil-datos.zip no se pudo montar: ")
++					nx_aviso_registra((std::string(NX_CONTENEDOR " no se pudo montar: ")
 +					                   + exc.msg).c_str());
 +				}
 +			}
