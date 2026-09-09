@@ -813,6 +813,80 @@ class Object
   end
 end
 
+# Kernel#proc — en 1.8 era `lambda`, y por eso `return` dentro valia.
+#
+# Medido en Titan el 9 de septiembre de 2026, en la transferencia al primer
+# mapa jugable, y NO es un rincon: mata el juego entero al cambiar de mapa.
+#
+#     Section116:95:in `block in <main>': unexpected return (LocalJumpError)
+#             from Section040:54:in `block in trigger'   (PBEvent#trigger)
+#             from Section088:622:in `setMapChanged'
+#             from Section019:230:in `transfer_player'
+#
+# La linea es `Events.onMapChange+=proc {|sender,e| return if !$PokemonGlobal ...`
+# de PokemonRoaming.rb. En Ruby 1.8 `Kernel#proc` era un alias de `lambda`, o
+# sea que el Proc que salia era de los que TIENEN marco propio y `return` sale
+# de el; en 1.9 `proc` pasa a ser `Proc.new`, el `return` intenta salir del
+# metodo que ya no existe -el bloque se escribio en el nivel superior- y
+# LocalJumpError mata el hilo RGSS. Sin excepcion de Essentials, porque el
+# `rescue` del cargador no cubre esto: la pantalla se queda negra a 0 FPS.
+#
+# Cuantos hay, contados sobre los cinco corpus con las llaves emparejadas y no
+# con un grep de tres lineas: 74 en Opalo, 74 en Z, 72 en Iberia, 72 en Titan y
+# 78 en Uranium, siempre en los mismos nueve o diez ficheros -los manejadores de
+# objetos (`ItemHandlers::UseInField`), los MO de campo, el Pokemon errante, el
+# Poke Radar, el Chatter, los Pokemon oscuros-. En Anil, que es v21.1 sobre Ruby
+# 3.1, son CERO: la version moderna de Essentials ya los reescribio. O sea que
+# esto es exactamente una diferencia de 1.8 y afecta a los cinco juegos de las
+# dos familias viejas.
+#
+# COMO se arregla, y por que asi y no convirtiendo el bloque en lambda. Un
+# bloque no se puede volver lambda en 3.1 sin pasar por `define_method`, y eso
+# le cambia el `self` al bloque, que es justo lo que estos manejadores
+# necesitan conservar. Lo que si se puede es envolverlo: por fuera un Proc
+# normal que llama al de dentro y recoge el LocalJumpError que lanza su
+# `return`, devolviendo `exit_value`, que es el valor que el juego queria
+# devolver. Desde el que llama, el efecto es identico al de 1.8 y ademas se
+# conserva la tolerancia de arity de los Proc, que es MAS permisiva que la del
+# lambda de 1.8: no puede romper nada que antes funcionara.
+#
+# `arity` se repone a mano sobre el envoltorio porque hay codigo que lo mira
+# para decidir como llamar -PBEvent#trigger hace `if callback.arity>2` para
+# distinguir los manejadores de tres argumentos-, y un `|*args|` contesta -1.
+module NX18Proc
+  @cazados = 0
+
+  def self.envuelve(bloque)
+    envoltorio = Proc.new do |*args, &interno|
+      begin
+        bloque.call(*args, &interno)
+      rescue LocalJumpError => e
+        if @cazados < 5
+          @cazados += 1
+          # source_location del bloque, y no caller: el que llama es siempre
+          # este envoltorio. El bloque se creo dentro de un eval del motor, o
+          # sea que su source_location es "SeccionNNN:linea", que es
+          # exactamente lo que hay que mirar en el registro.
+          donde = bloque.source_location.to_a.join(":")
+          NX.log("[1.8] `return` dentro de un proc de 1.8 en #{donde}")
+        end
+        e.exit_value
+      end
+    end
+    envoltorio.define_singleton_method(:arity) { bloque.arity }
+    envoltorio
+  end
+end
+
+module Kernel
+  def proc(&bloque)
+    return NX18Proc.envuelve(bloque) if bloque
+    raise ArgumentError, "tried to create Proc object without a block"
+  end
+  private :proc
+end
+NX.log("[1.8] Kernel#proc devuelve el proc de 1.8: `return` dentro sale del proc")
+
 # Lo que se busco y NO se encontro en ninguno de los cinco juegos, y por eso no
 # esta definido: Array#indexes / Array#indices (0), Array#choice (0),
 # Hash#index (0), Hash#indexes (0), Object#to_a (los 9 `.to_a` del corpus son
@@ -924,7 +998,7 @@ end
 #   guarda el mapa entero a PNG); es una herramienta de desarrollo atada a un
 #   atajo de teclado que en la consola no se puede pulsar, no el dibujado del
 #   mapa. Quien pruebe Iberia debe mirar el agua y las cascadas, no el mapa.
-NX.log("[nx] nx-ruby18.rb cargado: Array#nitems, Thread.critical, Object#type, Object#id")
+NX.log("[nx] nx-ruby18.rb cargado: Array#nitems, Thread.critical, Object#type, Object#id, Kernel#proc")
 # ---------------------------------------------------------------------------
 # ENV["TEMP"]: en Horizon el entorno esta vacio
 # ---------------------------------------------------------------------------
