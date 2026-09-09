@@ -214,7 +214,7 @@ tiene las cifras, cómo se obtuvieron y el veredicto razonado de cada uno.
 | Pokémon Añil 4.0 | `pokemon-anil` | ruby31 | v21.1 | **jugable** | nada; es el patrón |
 | Project Vanguard 4.0.3 | `pokemon-vanguard` | ruby31 | v20.1 | **jugable** | título, introducción, nombre, primer mapa, menú y partida guardada en el emulador (`1e35fed`). El combate no se probó |
 | Pokémon Reborn 19.5.0 | `pokemon-reborn` | ruby31 | v19 (base) | **jugable** | hasta guardar partida en Lower Peridot Ward. Lleva postizos de `discord`, `poke-api-v2`, `rubygems` y de seis métodos que su mkxp-z propio añadía (`1e35fed`). Los mods en `patch/` sin probar |
-| Pokémon Ópalo 2.11 | `pokemon-opalo` | ruby18 | clásico (~v16) | `no-arranca` | carga 212 de 214 secciones y en `Mesón Batalla` muere **el proceso de Ryujinx** con `0xC0000005` dentro de `Ryujinx.exe` (visor de sucesos), igual en `HostMappedUnsafe` y en `SoftwarePageTable`; la pila del hilo RGSS aguanta 11.910 marcos, así que no es desbordamiento. Falla el anfitrión: toca consola real |
+| Pokémon Ópalo 2.11 | `pokemon-opalo` | ruby18 | clásico (~v16) | **jugable** | probado en la **consola de verdad** (2026-09-09): introducción, estadio, `2 Pueblo Brisa`, centro Pokémon y `6 Ruta 1` en siete minutos, sin una excepción, arrancado por `argv[0]` desde hbmenu. En Ryujinx sigue muriendo **el proceso del emulador** con `0xC0000005` en el `Mesón Batalla`: era el anfitrión. El combate y ese mesón, sin probar en hardware |
 | Pokémon Z 2.13 | `pokemon-z` | ruby18 | clásico (~v16) | **jugable** | introducción, mapa `66 Carriage`, menú propio (`Bag/Craft/Feats/Save`) y partida guardada. La trampa es el `¿ENTENDIDO?` del mapa 168, con `No` primero y volviendo a empezar. El combate no se probó |
 | Pokémon Iberia 2.10 | `pokemon-iberia` | ruby18 | clásico (v15/v16) | **jugable** | introducción, `17 Casa`, cuatro pasos, menú y partida guardada. El agua y las cascadas siguen sin el efecto de `KleinBitmap.dll`. El combate no se probó |
 | Pokémon Titán 2.10 | `pokemon-titan` | ruby18 | clásico (v15/v16) | **jugable** | introducción, `12 Casa`, menú y partida guardada, después de arreglar `Kernel#proc` (en 1.8 era `lambda`: `return` dentro de un `proc` mataba el cambio de mapa). Sigue el sprite de ruido de `RtlMoveMemory` |
@@ -421,7 +421,19 @@ otro, y esto es lo que sólo se ve corriendo:
 - **El primer combate no se ha probado en ninguno de los seis jugables.** Todos
   llegan a guardar partida; el combate es el código más denso de Essentials y el
   siguiente hito, sobre todo en los cuatro de Ruby 1.8.
-- **Ópalo y Uranium mueren por el anfitrión, no por el motor.** Los dos cierres
+- **El viewport no estaba centrado, y lo vio Randy en su consola.** La pantalla
+  lógica del motor se quedaba en 640×480 —el valor por omisión de mkxp-z para
+  RGSS1— y Essentials clásico dibujaba sus 512×384 en la esquina de arriba a la
+  izquierda: medido en el emulador, 960×720 de los 1200×895 que ocupa la
+  consola, o sea 0,8 justo, que es 512/640. El juego trae `pbSetResizeFactor`
+  para arreglarlo solo y **doce secciones más adelante se lo pisa él mismo** con
+  un `def pbSetResizeFactor(dummy); end` protegido por un `Kernel.respond_to?`
+  que contesta false. Lo pide ahora `NX18Tarde.pantalla`, en
+  `runtime/lib/nx-ruby18.rb`, y vale para los cinco juegos de las dos familias
+  viejas: docs/pruebas/familia-ruby18.md, «El undécimo».
+- **Ópalo y Uranium mueren por el anfitrión, no por el motor**, y con Ópalo ya
+  está demostrado: en la consola de Randy jugó hasta `6 Ruta 1` sin una
+  excepción (`docs/pruebas/pokemon-opalo.md`). Los dos cierres
   mudos son el mismo: una violación de acceso `0xC0000005` dentro de
   `Ryujinx.exe` 1.3.3, a 780 bytes una de otra (visor de sucesos de Windows; los
   `Logs/` de Ryujinx no dicen nada), igual con `HostMappedUnsafe` que con
@@ -437,9 +449,11 @@ otro, y esto es lo que sólo se ve corriendo:
   sin efecto en Iberia y Titán), `RtlMoveMemory` (un sprite hecho de ruido junto
   a la profesora de Titán, porque `__id__` ya no es un puntero), y los `.mid` de
   Iberia, Titán y Uranium, que suenan a nada sin un `midiSoundFont`.
-- **La vía `argv[0]` no se ha probado en hardware.** Se ha probado en Ryujinx,
-  que lanza sin `argv` y por tanto sólo ejercita la vía del `romfs`. En la
-  consola, desde hbmenu, es la que debería usarse.
+- ~~La vía `argv[0]` no se ha probado en hardware.~~ **Probada**: el
+  `mkxp-debug.log` de Ópalo en la consola de Randy abre con `argc = 1
+  argv[0] = sdmc:/switch/pokemon-opalo/pokemon-opalo.nro` y el motor encuentra
+  su juego por ahí. En Ryujinx esa vía no se ejercita nunca, porque el emulador
+  lanza los `.nro` con `argc = 0`.
 - **`KleinBitmap.dll`** (Ópalo, Iberia, Titán, Z, Uranium) y qué le pasa al mapa
   cuando esas llamadas devuelven 0. Sin verlo en pantalla no se puede decir más.
 - **Los mods de Reborn en `patch/`**: la clave `patches` existe en el motor y la

@@ -275,3 +275,95 @@ cada apaño sería tapar una medición que no tenemos.
 
 La sonda queda guardada en `tmp/nx-sonda-opalo.rb` para quien la repita; se
 retiró de la instalación de la tarjeta al terminar.
+
+---
+
+## En la consola: **jugable** (9 de septiembre de 2026, 18:05)
+
+Randy lo encendió en su Switch de verdad y **llegó a Ruta 1 sin una sola
+excepción**. El cierre mudo de las tres vueltas anteriores era del emulador y de
+nadie más: en hardware, el mismo `.nro` con el mismo juego juega siete minutos.
+
+Registros en `docs/consola/20260909-180524-pokemon-opalo/` (bajados por FTP).
+
+### Lo que dicen las tres primeras líneas
+
+```
+[nx] mkxp-z arrancando en Horizon OS; argc = 1 argv[0] = sdmc:/switch/pokemon-opalo/pokemon-opalo.nro
+[nx] directorio de trabajo: sdmc:/switch/pokemon-opalo (argv[0])
+[    67] [juego] carpeta: sdmc:/switch/pokemon-opalo
+```
+
+`argc = 1`: es la **primera vez que la vía (1) de CONVENCIONES §3 —el directorio
+de `argv[0]`— se ejercita en hardware**. En Ryujinx nunca se prueba, porque el
+emulador lanza los `.nro` con `argc = 0` y siempre se cae a `romfs:/juego.txt`.
+
+```
+[   631] [gfx] inicial: nwindow 1920x1080 | applet 1280x720 | modo portatil
+[  1970] [boot] 11 SharedState OK, arrancando el interprete Ruby
+[ 19668] [gfx] suscrito al cambio de resolucion
+[fuente] TOTAL: 214 secciones, 3 tocadas, 25 arreglos, 3425.8 ms
+```
+
+El motor está listo en 2,0 s y las 214 secciones pasan por `NXFuente` en 3,4 s,
+igual que en el emulador. Ni `errorlog.txt`, ni una sola excepción en
+`mkxp-debug.log`, ni un `[win32api] ... sin semantica` en los siete minutos.
+
+### Los mapas recorridos
+
+```
+[ 30656] [donde] mapa 156 Intro de verdad en (9,7)
+[ 40015] [donde] mapa 159 Estadio Pokemon en (28,9)
+[ 53968] [donde] mapa 160 Estadio Pokemon en (11,13)
+[109029] [donde] mapa   1 Intro en (10,7)
+[154365] [donde] mapa   3 Casa de Switch en (25,9)
+[273428] [donde] mapa   2 Pueblo Brisa en (7,12)
+[289793] [donde] mapa   5 Refugio Pokemon en (5,16)
+[327879] [donde] mapa   2 Pueblo Brisa en (42,17)
+[332607] [donde] mapa   6 Ruta 1 en (2,18)
+```
+
+Nueve cambios de mapa en 434 s de sesión: introducción entera, el estadio, la
+casa, el pueblo, el centro Pokémon y la primera ruta. **El `Mesón Batalla` que
+mataba a Ryujinx no aparece en este camino**, así que sigue sin comprobarse en
+hardware; lo que sí queda comprobado es que el motor no tenía nada que ver con
+aquel cierre.
+
+### Montón
+
+```
+[411132] [mem] pico del monton 642 MB (libre en el monton 17 MB)
+[434678] [monton] malloc 641 MB en uso | 660 pedidos al sistema | el sistema dice 3185 de 3189 MB
+[434696] [monton] texturas vivas: 126 MB en 1164 | pico 126 MB en 1164
+[434708] [monton] ruby: 117 recogidas | 685477 slots vivos (26 MB) | 416674 viejos
+```
+
+642 MB de pico sobre los 3.189 MB que la consola da a un homebrew: sobra sitio.
+Las texturas vivas no pasan de 126 MB y el montón de Ruby se queda en 26 MB.
+
+### Tirones
+
+Veinte marcos por encima del umbral en siete minutos. El primero es el arranque
+(4.232 ms, cargando la pantalla de título) y el resto son cambios de mapa:
+
+```
+[ 18726] [tiron] marco 4232 ms
+[ 30662] [tiron] marco 1254 ms      mapa 156
+[ 40023] [tiron] marco 1263 ms      mapa 159
+[127337] [tiron] marco 1177 ms
+[438815] [tiron] marco 617 ms | cpu 85 ms | io 4x 5 ms | blt 279x 1 ms | ... | resto 607 ms
+```
+
+En el último, desglosado: 4 ficheros abiertos, 279 blits, 85 ms de CPU medida y
+607 ms de «resto». O sea que lo que cuesta no es ni la E/S ni el dibujo contado,
+igual que en Añil.
+
+### Y una pega, que Randy vio y aquí no se veía
+
+«No está nada centrado el viewport, se ve super curseado». Era verdad, y no era
+de la consola: la pantalla lógica del motor se quedaba en 640×480 y Essentials
+dibujaba sus 512×384 en un rincón. Está contado entero, con la medida y la línea
+del script, en [`familia-ruby18.md`](familia-ruby18.md) («El undécimo»).
+Arreglado en `runtime/lib/nx-ruby18.rb`; en la tarjeta cambian **sólo** `lib/` y
+el `.nro`, y de Ópalo la comprobación la hace Randy porque en Ryujinx sigue sin
+llegar al título.
