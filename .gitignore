@@ -34,6 +34,7 @@
 !/VERSION
 !/GUIA.md
 !/CONVENCIONES.md
+!/CLAUDE.md
 !/juegos/
 !/empaquetar.sh
 !/Empaquetar.ps1
@@ -109,6 +110,7 @@
 !/docs/test-results-ryujinx.txt
 !/docs/test-results-hardware-real.txt
 !/docs/censo-juegos.md
+!/docs/bitacora-anil.md
 # Un fichero por juego encendido: que se empaqueto, cada vuelta (sintoma ->
 # linea del registro -> causa -> arreglo), tiempos y lo que queda.
 !/docs/pruebas/
