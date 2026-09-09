@@ -1,0 +1,33 @@
+# Orden en que se aplican los parches de mkxp-z sobre
+# mkxp-z 2.4.2 (src/mkxpz.tar.gz). Lo deduce y lo
+# comprueba reconstruir-src.py: no se edita a mano.
+mkxpz-alijos-bitmap.patch
+mkxpz-audio-track-nil.patch
+mkxpz-binding-mri.cpp.patch
+mkxpz-bordes-opacos.patch
+mkxpz-botones-nintendo.patch
+mkxpz-config.cpp.patch
+mkxpz-config.h.patch
+mkxpz-debugwriter.h.patch
+mkxpz-encoding.h.patch
+mkxpz-eventthread-noresize.patch
+mkxpz-filesystem.hpp.patch
+mkxpz-fluid-fun.cpp.patch
+mkxpz-fuente-cronometrada.patch
+mkxpz-gl-util.patch
+mkxpz-httplib.h.patch
+mkxpz-input.cpp.patch
+mkxpz-latido-por-segundo.patch
+mkxpz-lector-contenedor.patch
+mkxpz-main.cpp.patch
+mkxpz-me-vuelve-muda.patch
+mkxpz-montaje-ventana.patch
+mkxpz-nucleo-musica.patch
+mkxpz-pathcache-readdir.patch
+mkxpz-fichero-lento.patch
+mkxpz-sharedstate-trazas.patch
+mkxpz-contenedor-zip.patch
+mkxpz-system.h.patch
+mkxpz-systemImpl.cpp.patch
+mkxpz-textura-sin-memoria.patch
+mkxpz-vorbis-ov-hole.patch

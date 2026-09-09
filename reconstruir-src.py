@@ -67,9 +67,15 @@ def donde_aplicar(arbol, parche):
     nivel, ficheros = cabeceras(parche)
     if not ficheros:
         return None, 0
+    # cabeceras() YA le quito el "a/" o el "b/", asi que aqui no se recorta
+    # otra vez. Recortarlo dos veces dejaba "binding/binding-mri.cpp" en
+    # "binding-mri.cpp", el fichero se encontraba igual —resuelve() busca por
+    # la cola— pero el cwd salia una carpeta mas adentro, y desde ahi patch -p1
+    # buscaba binding/binding/binding-mri.cpp y contestaba que no aplica. Es lo
+    # que hacia que los DOCE parches con cabeceras de git (a/... b/...) se
+    # dieran por rotos estando bien: los mismos doce que README 5.71 daba por
+    # investigar.
     cola = ficheros[0]
-    if nivel:
-        cola = "/".join(cola.split("/")[nivel:])
     rel = resuelve(arbol, cola)
     if rel is None:
         return None, nivel
@@ -84,9 +90,10 @@ def donde_aplicar(arbol, parche):
 
 
 def resuelve(base, ruta):
-    """El destino se escribe de tres maneras segun quien generara el parche
-    -"a/src/x.cpp", "src/x.cpp", "display/gl/x.cpp"-, asi que en vez de adivinar
-    la raiz se busca el fichero por su cola dentro del arbol original."""
+    """El destino se escribe de cuatro maneras segun quien generara el parche
+    -"a/src/x.cpp", "src/x.cpp", "display/gl/x.cpp" y "x.cpp" a secas-, asi que
+    en vez de adivinar la raiz se busca el fichero por su cola dentro del arbol
+    original."""
     cand = [ruta, os.path.join("src", ruta), os.path.join("binding", ruta)]
     cola = ruta
     while "/" in cola:
@@ -97,6 +104,23 @@ def resuelve(base, ruta):
         p = os.path.join(base, c.replace("/", os.sep))
         if os.path.isfile(p):
             return os.path.relpath(p, base).replace(os.sep, "/")
+
+    # Ultimo recurso: por el nombre a secas, recorriendo el arbol.
+    #
+    # Cuatro parches se generaron con `diff -u x.cpp.orig x.cpp` DENTRO de la
+    # carpeta del fichero, asi que su cabecera dice "keybindings.cpp" o
+    # "audio.cpp" y no hay ninguna cola que recortar: viven en src/input/ y en
+    # src/audio/, dos niveles adentro, y las candidatas de arriba nunca llegan
+    # ahi. Se buscan por nombre, y SOLO si el nombre es unico en todo el arbol:
+    # adivinar cual de dos filesystem.cpp es el bueno seria peor que no
+    # encontrarlo, porque fallaria en silencio y en otro sitio.
+    nombre = ruta.split("/")[-1]
+    hallados = []
+    for dirpath, _dirs, files in os.walk(base):
+        if nombre in files:
+            hallados.append(os.path.relpath(os.path.join(dirpath, nombre), base))
+    if len(hallados) == 1:
+        return hallados[0].replace(os.sep, "/")
     return None
 
 
@@ -129,8 +153,7 @@ def main():
         for p in parches:
             _n, ficheros = cabeceras(p)
             for f in ficheros:
-                cola = "/".join(f.split("/")[_n:]) if _n else f
-                rel = resuelve(arbol, cola)
+                rel = resuelve(arbol, f)   # ya viene sin el "a/" ni el "b/"
                 if rel:
                     tocados[rel] = True
                 else:
@@ -177,14 +200,36 @@ def main():
                 iguales += 1
             else:
                 distintos.append(rel)
+        # Los que NADIE parchea y aun asi han cambiado.
+        #
+        # Es el fallo que hizo escribir este guion: un fichero que se toca en
+        # el arbol y del que nunca se saca parche no aparece en `tocados`, asi
+        # que la comparacion de arriba ni lo mira y el informe sale en verde
+        # con el trabajo perdido dentro. Se compara TODO el arbol contra el
+        # 2.4.2, no solo lo que los parches nombran.
+        huerfanos = []
+        for dirpath, dirs, files in os.walk(arbol):
+            dirs[:] = [d for d in dirs if d not in (".git",)]
+            for f in files:
+                abs_h = os.path.join(dirpath, f)
+                rel = os.path.relpath(abs_h, arbol).replace(os.sep, "/")
+                if rel in tocados:
+                    continue
+                real = os.path.join(FUENTE, rel.replace("/", os.sep))
+                if os.path.isfile(real) and not igual(abs_h, real):
+                    huerfanos.append(rel)
+        for rel in huerfanos:
+            print("SIN PARCHE    %s (cambiado y no lo cuenta ningun parche)" % rel)
+
         for rel in distintos:
             print("SE DESVIA     %s" % rel)
         for rel in ausentes:
             print("NO ESTA EN src/  %s" % rel)
         print()
-        print("%d fichero(s) salen identicos, %d se desvian" % (iguales, len(distintos)))
+        print("%d fichero(s) salen identicos, %d se desvian, %d sin parche"
+              % (iguales, len(distintos), len(huerfanos)))
 
-        limpio = not quedan and not distintos and not ausentes
+        limpio = not quedan and not distintos and not ausentes and not huerfanos
         if "--orden" in sys.argv and limpio:
             with open(os.path.join(RAIZ, "patches", "ORDEN.txt"), "w",
                       encoding="utf-8", newline="\n") as fh:

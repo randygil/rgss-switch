@@ -1,30 +1,16 @@
-Contenedor de datos: un solo fichero para las 22.148 rutas del juego.
 
-Los recursos son 668 MB en 22.148 ficheros, y copiarlos a una tarjeta SD no
-cuesta lo que pesan, cuesta lo que son: cada fichero es una entrada de
-directorio, una asignacion de clusters y una escritura de la tabla de FAT32.
-Los mismos bytes en un fichero se copian a la velocidad de la tarjeta.
-
-Asi que, si esta, se monta el contenedor -datos.zip, el nombre lo fija
-nx_juego.h-. PhysFS ya sabe leer un zip (el
-archivador viene compilado en el libphysfs de portlibs) y mkxp-z ya monta un
-.rgssad cuando lo encuentra: esto es lo mismo con un formato que el jugador
-puede mirar y comprobar antes de copiarlo. El zip va ALMACENADO, sin comprimir,
-porque el 80% de los bytes ya son PNG y OGG y porque una entrada comprimida
-obliga a PhysFS a inflar en cada lectura y a rebobinar en cada busqueda hacia
-atras, que es lo que hace un OGG al volver a su punto de bucle.
-
-Se monta ANTES que ".", igual que el .rgssad: PhysFS resuelve por orden de
-montaje y preguntar al directorio de la tarjeta por un fichero que no esta ahi
-cuesta la misma IPC de 0,85 ms que si estuviera (§5.48). Con el contenedor
-delante, el acierto es una consulta en memoria.
-
-El indice de rutas del contenedor lo construye mkxpz-pathcache-readdir.patch,
-que es quien toca filesystem.cpp.
 
 --- a/src/sharedstate.cpp
 +++ b/src/sharedstate.cpp
-@@ -60,7 +60,12 @@
+@@ -29,6 +29,7 @@
+ #include "glstate.h"
+ #include "shader.h"
+ #include "texpool.h"
++#include "debugwriter.h"
+ #include "font.h"
+ #include "eventthread.h"
+ #include "gl-util.h"
+@@ -60,7 +61,13 @@
  	return 0;
  }
  
@@ -35,10 +21,19 @@ que es quien toca filesystem.cpp.
 +
 +extern "C" void nx_boot_trace(const char *msg);      /* nx/nx_boot.c */
 +extern "C" void nx_aviso_registra(const char *msg);  /* nx/nx_aviso.c */
- extern "C" void nx_espera_paso(float fraccion);      /* nx/nx_espera.cpp */
++extern "C" void nx_espera_paso(float fraccion);      /* nx/nx_espera.cpp */
  
  struct SharedStatePrivate
-@@ -138,6 +139,94 @@
+ {
+@@ -126,6 +133,7 @@
+ 			gl.ReleaseShaderCompiler();
+ 
+ 		nx_boot_trace("[boot] 10a miembros construidos (shaders compilados)");
++		nx_espera_paso(0.25f);
+ 		std::string archPath = config.execName + gameArchExt();
+ 
+ 		/* Check if a game archive exists */
+@@ -136,8 +144,111 @@
  			fclose(tmp);
  		}
  
@@ -132,4 +127,134 @@ que es quien toca filesystem.cpp.
 +
  		fileSystem.addPath(".");
  		nx_boot_trace("[boot] 10b PhysFS: directorio de juego montado");
- 		nx_espera_paso(0.60f);
++		nx_espera_paso(0.60f);
++
++#ifdef __SWITCH__
++		/* AQUI NO SE PUEDE SONAR MUSICA, y conviene dejarlo escrito porque es
++		 * el sitio natural para intentarlo: PhysFS ya tiene el juego montado y
++		 * el contexto de OpenAL se creo en el paso 9. Pero audio.bgmPlay()
++		 * termina en alstream.cpp:264, que abre el fichero con
++		 *
++		 *     shState->fileSystem().openRead(handler, filename)
++		 *
++		 * y shState no se asigna hasta que ESTE constructor termina. El intento
++		 * costo un "Invalid memory access at virtual address 0x0" en la consola.
++		 * La musica de la carga la pone runtime/lib/nx-musica.rb, que es un
++		 * script de precarga y corre con todo publicado. */
++#endif
+ 
+ 		for (size_t i = 0; i < config.rtps.size(); ++i)
+ 			fileSystem.addPath(config.rtps[i].c_str());
+@@ -146,10 +257,23 @@
+ 		{
+ 			fileSystem.createPathCache();
+ 			nx_boot_trace("[boot] 10c pathCache construido");
++			nx_espera_paso(0.85f);
+ 		}
+ 
+ 		fileSystem.initFontSets(fontState);
+ 		nx_boot_trace("[boot] 10d fuentes indexadas");
++		nx_espera_paso(0.90f);
++
++		/* La pantalla de carga dibuja con GL crudo y GLState es una cache: hay
++		 * que volver a poner de acuerdo cache y driver, o la primera escena del
++		 * juego sale con el programa y el color de fondo equivocados. Es
++		 * exactamente lo que hace el constructor de GLState, repetido. */
++		_glState.clearColor.init(Vec4(0, 0, 0, 1));
++		_glState.blendMode.init(BlendNormal);
++		_glState.blend.init(true);
++		_glState.scissorTest.init(false);
++		_glState.scissorBox.init(IntRect(0, 0, config.defScreenW, config.defScreenH));
++		_glState.program.init(0);
+ 
+ 		globalTexW = 128;
+ 		globalTexH = 64;
+@@ -158,12 +282,12 @@
+ 		TEX::bind(globalTex);
+ 		TEX::setRepeat(false);
+ 		TEX::setSmooth(false);
+-		TEX::allocEmpty(globalTexW, globalTexH);
++		nxReservaTextura(globalTex, globalTexW, globalTexH);
+ 		globalTexDirty = false;
+ 
+ 		TEXFBO::init(gpTexFBO);
+ 		/* Reuse starting values */
+-		TEXFBO::allocEmpty(gpTexFBO, globalTexW, globalTexH);
++		nxReservaTexturaFBO(gpTexFBO, globalTexW, globalTexH);
+ 		TEXFBO::linkFBO(gpTexFBO);
+ 		nx_boot_trace("[boot] 10e texturas globales creadas");
+ 
+@@ -274,7 +398,7 @@
+ 
+ 	if (p->globalTexDirty)
+ 	{
+-		TEX::allocEmpty(p->globalTexW, p->globalTexH);
++		nxReservaTextura(p->globalTex, p->globalTexW, p->globalTexH);
+ 		p->globalTexDirty = false;
+ 	}
+ }
+@@ -314,8 +438,15 @@
+ 
+ 	if (needResize)
+ 	{
+-		TEX::bind(p->gpTexFBO.tex);
+-		TEX::allocEmpty(p->gpTexFBO.width, p->gpTexFBO.height);
++		/* Reespecificacion sobre un FBO vivo: gpTexFBO.tex ya es el color
++		 * attachment de gpTexFBO.fbo, asi que si la reserva falla el nulo de
++		 * §5.64 salta en la siguiente validacion del framebuffer, no aqui. Por
++		 * el guardian, entonces. */
++		if (nxReservaTexturaFBO(p->gpTexFBO, p->gpTexFBO.width,
++		                        p->gpTexFBO.height) != GL_NO_ERROR)
++			Debug() << "[gp] sin memoria de video para la textura de proposito"
++			        << "general de" << p->gpTexFBO.width << "x"
++			        << p->gpTexFBO.height;
+ 	}
+ 
+ 	return p->gpTexFBO;
+@@ -332,8 +463,24 @@
+ 	}
+ 	else
+ 	{
++		/* El atlas de tiles es la textura MAS GRANDE que este juego pide jamas
++		 * -TileAtlas::minSize devuelve varios megabytes- y hasta el 6 de
++		 * septiembre de 2026 se creaba a pelo, sin pasar por el fondo de
++		 * texturas y sin pasar por el guardian de §5.64. Si hay un sitio donde
++		 * una reserva va a fallar por tamano, es este.
++		 *
++		 * No se lanza: allocateAtlas() se llama desde el prepare() de Tilemap,
++		 * o sea desde la senal prepareDraw, y desenrollar la pila desde ahi
++		 * dejaria las pilas de glState a medias. Con el guardian delante, lo
++		 * peor que pasa es que el atlas se quede en 1x1 y el mapa salga en
++		 * blanco un fotograma; el fondo se acaba de soltar entero, asi que el
++		 * siguiente suele salir bien. */
+ 		TEXFBO::init(tex);
+-		TEXFBO::allocEmpty(tex, w, h);
++
++		if (nxReservaTexturaFBO(tex, w, h) != GL_NO_ERROR)
++			Debug() << "[atlas] sin memoria de video para el atlas de tiles de"
++			        << w << "x" << h << "- el mapa sale en blanco";
++
+ 		TEXFBO::linkFBO(tex);
+ 	}
+ 
+@@ -346,6 +493,20 @@
+ 	if (tex.tex == TEX::ID(0))
+ 		return;
+ 
++	/* Y no hay que guardar dos veces el mismo, que es la otra forma de matar
++	 * el proceso por aqui.
++	 *
++	 * Tilemap hace `releaseAtlasTex(atlas.gl); requestAtlasTex(...)` sin
++	 * limpiar su copia, igual que hacia Window. Si el request de en medio
++	 * fracasa a medias, atlas.gl sigue nombrando el atlas que ya esta aparcado
++	 * aqui, y el destructor de TilemapPrivate lo vuelve a soltar: la linea de
++	 * abajo haria fini(p->atlasTex) sobre esa misma textura y acto seguido la
++	 * guardaria destruida, para entregarla como buena en el proximo mapa del
++	 * mismo tamano. El clear() del lado de Tilemap ya lo evita; esta linea lo
++	 * cierra tambien desde aqui, que es donde se puede comprobar. */
++	if (tex == p->atlasTex)
++		return;
++
+ 	TEXFBO::fini(p->atlasTex);
+ 
+ 	p->atlasTex = tex;

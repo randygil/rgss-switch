@@ -47,7 +47,7 @@
 # una tarjeta y encender la consola.
 !/comprobar-nro.py
 !/dump-rgssad.py
-!/anilftp.py
+!/subir-ftp.py
 !/resolver-pila.py
 !/triaje.py
 !/TRIAJE.md
@@ -62,6 +62,9 @@
 !/patches/
 /patches/*
 !/patches/*.patch
+# ORDEN.txt lo escribe reconstruir-src.py cuando el arbol se rehace entero
+# desde los parches. Es la unica constancia del orden en que se aplican.
+!/patches/ORDEN.txt
 !/patches/nxcompat.c
 !/patches/extinit.c
 !/patches/include/

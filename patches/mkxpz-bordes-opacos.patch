@@ -1,0 +1,60 @@
+Bitmap#nx_opaque_bounds: los bordes del contenido opaco, en C.
+
+Lo pide el findCenter de [MUI] Pokemon UI, que recorre el bitmap pixel a pixel
+desde Ruby con get_pixel para saber donde empieza y acaba lo que se ve. Sobre
+un sprite de tamano normal son decenas de miles de llamadas al motor por cada
+una de esas cuentas, y cada llamada cruza la frontera de Ruby: en la consola
+eso es un tiron visible cada vez que se abre el menu.
+
+Aqui va el mismo barrido dentro del motor y devuelve los cuatro numeros de una
+vez. Las reglas de barrido se copian del original a proposito, con sus rarezas
+-izquierda y arriba se buscan desde la columna y la fila 1, derecha y abajo
+desde el borde hacia dentro-: si diera otro resultado que el codigo del juego,
+el menu saldria descentrado y nadie sabria por que. Quien lo usa es
+runtime/lib/nx-centro.rb, que sustituye findCenter cuando el juego lo define.
+
+El barrido en si vive en bitmap.cpp y lo trae mkxpz-alijos-bitmap.patch; esto
+es la declaracion y el enganche con Ruby.
+
+--- a/src/display/bitmap.h
++++ b/src/display/bitmap.h
+@@ -85,6 +85,11 @@
+ 	void clear();
+ 
+ 	Color getPixel(int x, int y) const;
++	/* Bordes del contenido opaco, con las mismas reglas de barrido que el
++	 * findCenter de [MUI] Pokemon UI: izquierda y arriba se buscan desde la
++	 * columna/fila 1, derecha y abajo desde el borde hacia dentro. -1 si no hay
++	 * ningun pixel opaco en ese sentido. Ver nx-centro.rb. */
++	void opaqueBounds(int &left, int &right, int &top, int &bottom) const;
+ 	void setPixel(int x, int y, const Color &color);
+     
+     bool getRaw(void *output, int output_size);
+--- a/binding/bitmap-binding.cpp
++++ b/binding/bitmap-binding.cpp
+@@ -208,6 +208,17 @@
+     return wrapObject(color, ColorType);
+ }
+ 
++RB_METHOD(bitmapOpaqueBounds) {
++    RB_UNUSED_PARAM;
++    Bitmap *b = getPrivateData<Bitmap>(self);
++
++    int left = -1, right = -1, top = -1, bottom = -1;
++    GUARD_EXC(b->opaqueBounds(left, right, top, bottom););
++
++    return rb_ary_new_from_args(4, INT2NUM(left), INT2NUM(right),
++                                   INT2NUM(top), INT2NUM(bottom));
++}
++
+ RB_METHOD(bitmapSetPixel) {
+     Bitmap *b = getPrivateData<Bitmap>(self);
+     
+@@ -748,6 +759,7 @@
+     _rb_define_method(klass, "clear", bitmapClear);
+     _rb_define_method(klass, "get_pixel", bitmapGetPixel);
+     _rb_define_method(klass, "set_pixel", bitmapSetPixel);
++    _rb_define_method(klass, "nx_opaque_bounds", bitmapOpaqueBounds);
+     _rb_define_method(klass, "hue_change", bitmapHueChange);
+     _rb_define_method(klass, "draw_text", bitmapDrawText);
+     _rb_define_method(klass, "text_size", bitmapTextSize);

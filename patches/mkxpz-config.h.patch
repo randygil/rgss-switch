@@ -1,20 +1,8 @@
-Config aprende la clave "patches" de mkxp.json.
 
-Algunos juegos grandes reparten sus correcciones en una carpeta aparte que se
-monta DELANTE del juego, de modo que lo que hay dentro pisa al fichero del
-mismo nombre; Pokemon Reborn trae "patch/" y lo declara asi en su mkxp.json.
-El mkxp-z de escritorio lo entiende y este no, asi que la carpeta viajaba a la
-tarjeta y no la miraba nadie: el juego arrancaba con los ficheros sin corregir
-y sin que nada lo dijera.
 
-La lectura es tolerante por construccion: el valor por omision es un array
-vacio, asi que un mkxp.json que no nombre la clave se comporta exactamente
-igual que antes. Quien monta las carpetas es sharedstate.cpp, antes que el
-contenedor y antes que ".", porque PhysFS resuelve por orden de montaje.
-
---- src/config.h.orig
-+++ src/config.h
-@@ -107,6 +107,13 @@
+--- a/src/config.h
++++ b/src/config.h
+@@ -107,6 +107,22 @@
      
      std::vector<std::string> rubyLoadpaths;
      
@@ -24,6 +12,15 @@ contenedor y antes que ".", porque PhysFS resuelve por orden de montaje.
 +     * el mkxp-z de escritorio lo lee de la clave "patches" de mkxp.json. Sin
 +     * esto, la carpeta viaja a la tarjeta y no la mira nadie. */
 +    std::vector<std::string> patches;
++    
++    /* Cada cuanto se repite un boton que se mantiene pulsado, en segundos:
++     * lo que tarda en empezar a repetirse y lo que pasa entre repeticiones.
++     * mkxp-z 2.4.2 los tiene fijos (0,400 s y 0,100 s; 0,375 con RGSS2+) y
++     * algunos juegos los declaran en su mkxp.json -Pokemon Reborn pide 0,3 y
++     * 0,05 para que el menu no se sienta pastoso-. Cero significa "el de
++     * siempre", que es lo que vale para todos los demas. */
++    double inputRepeatStart;
++    double inputRepeatDelay;
 +    
      /* Editor flags */
      struct {

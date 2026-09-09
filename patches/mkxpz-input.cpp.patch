@@ -1,0 +1,56 @@
+El retardo de repeticion sale de mkxp.json.
+
+Cuanto tarda un boton mantenido en empezar a repetirse, y cada cuanto repite,
+estaba fijo en el codigo: 0,400 s y 0,100 s, o 0,375 con RGSS2 en adelante.
+Algunos juegos lo declaran en su mkxp.json porque con los valores de fabrica
+su menu se siente pastoso -Pokemon Reborn pide 0,3 y 0,05- y el empaquetador
+deja pasar esas dos claves a la capa 2, asi que llegaban al motor y no las
+miraba nadie.
+
+Cero sigue queriendo decir "el de siempre", que es lo que vale para todos los
+demas juegos, y un valor negativo se ignora: con repeatDelay a cero el modulo
+que decide la repeticion dividiria por cero.
+
+Los valores se copian en el constructor y no se leen donde se usan, porque
+recalcRepeatTime se vuelve a llamar cada vez que cambian los fotogramas por
+segundo y alli ya no hay ninguna configuracion a mano.
+
+--- a/src/input/input.cpp
++++ b/src/input/input.cpp
+@@ -712,6 +712,13 @@
+     unsigned int repeatStart;
+     unsigned int repeatDelay;
+     
++    /* Lo que pida el mkxp.json del juego, en segundos, o 0 = el de siempre.
++     * Se copian en el constructor porque recalcRepeatTime se vuelve a llamar
++     * cada vez que cambian los fotogramas por segundo, y alli ya no hay
++     * ninguna configuracion a mano. */
++    double confRepeatStart;
++    double confRepeatDelay;
++    
+     double last_update;
+ 
+     int vScrollDistance;
+@@ -734,6 +741,13 @@
+         double start = (rgssVer >= 2) ? 0.375 : 0.400;
+         double delay = 0.100;
+         
++        /* Un valor negativo o absurdo dejaria repeatDelay en 0 y el modulo de
++         * abajo dividiria por cero. Solo se hace caso a lo que tiene sentido. */
++        if (confRepeatStart > 0)
++            start = confRepeatStart;
++        if (confRepeatDelay > 0)
++            delay = confRepeatDelay;
++        
+         repeatStart = ceil(start / framems);
+         repeatDelay = ceil(delay / framems);
+     }
+@@ -741,6 +755,8 @@
+     InputPrivate(const RGSSThreadData &rtData)
+     {
+         last_update = 0;
++        confRepeatStart = rtData.config.inputRepeatStart;
++        confRepeatDelay = rtData.config.inputRepeatDelay;
+         
+         initStaticKbBindings();
+         initMsBindings();

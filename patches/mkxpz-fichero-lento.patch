@@ -1,47 +1,38 @@
-Que fichero es el que tarda: la linea [lento].
 
-En la primera sesion de la 1.1.1 en la consola no hubo ni una caida, pero si
-veintiocho tirones en tres minutos, el peor de 1,38 s. El reparto es siempre
-parecido:
 
-    marco 945 ms | dec 1x 222 ms | abr 2x 236 ms | fis 2x 1 ms | resto 592 ms
-
-Y ahi hay una trampa de lectura que conviene deshacer: "abr" no mide abrir. Mide
-FileSystem::openRead entera, y openRead llama al manejador, que para un Bitmap es
-descomprimir el PNG. Abrir de verdad es "fis", y son 2,5-3,5 ms por fichero: no
-es el problema. Los 220 ms son descomprimir UNA imagen. El peor de la sesion son
-452 ms en una sola.
-
-Sabemos cuanto cuesta y no cual es, que para decidir algo es como no saber nada:
-no se puede juzgar si sobra resolucion, si es una tira de animacion de las que se
-redondean a potencia de dos, o si es una imagen que el juego pide en mitad de un
-fotograma cuando podia haberla pedido antes. Asi que cualquier apertura que pase
-de 40 ms deja su nombre en el registro:
-
-    [ 34211] [lento] 222 ms abriendo Graphics/Battlebacks/field_bg
-
-Va en produccion. El umbral esta puesto para que en una sesion normal salgan unas
-pocas lineas -las que se notan al jugar- y ninguna de las que no. Una linea de
-registro cuesta una write(); lo que se esta midiendo cuesta doscientas veces mas.
-
-El tiempo se saca con armGetSystemTick y no de nx_sale, que no lo devuelve:
-cambiarle la firma obligaria a tocar los seis ficheros que la declaran por su
-cuenta, y no vale la pena por un numero que ya esta ahi.
-
-Va contra .antes-lento -el fichero despues de mkxpz-pathcache-readdir y
-mkxpz-montaje-ventana- porque filesystem.cpp lo tocan ya esos dos parches y un
-diff contra el original se llevaria por delante lo suyo.
-
---- src/filesystem/filesystem.cpp.antes-lento
-+++ src/filesystem/filesystem.cpp
-@@ -134,6 +134,7 @@
- enum { NX_G_IO = 0, NX_G_EXISTE = 9, NX_G_ABRIR = 10, NX_G_FISICO = 13 };
- extern "C" u64  nx_entra(void);
- extern "C" void nx_sale(int cual, u64 t0);
+--- a/src/filesystem/filesystem.cpp
++++ b/src/filesystem/filesystem.cpp
+@@ -130,6 +130,15 @@
+ }
+ 
+ #ifdef __SWITCH__
++#include <switch.h>
++enum { NX_G_IO = 0, NX_G_EXISTE = 9, NX_G_ABRIR = 10, NX_G_FISICO = 13 };
++extern "C" u64  nx_entra(void);
++extern "C" void nx_sale(int cual, u64 t0);
 +extern "C" void nx_boot_trace(const char *msg);
- extern "C" void nx_io_abre(void);
++extern "C" void nx_io_abre(void);
++#endif
++
++#ifdef __SWITCH__
+ #include <fcntl.h>
+ #include <unistd.h>
+ #include <sys/stat.h>
+@@ -364,14 +373,6 @@
+ }
  #endif
  
+-#ifdef __SWITCH__
+-#include <switch.h>
+-enum { NX_G_IO = 0, NX_G_EXISTE = 9, NX_G_ABRIR = 10, NX_G_FISICO = 13 };
+-extern "C" u64  nx_entra(void);
+-extern "C" void nx_sale(int cual, u64 t0);
+-extern "C" void nx_io_abre(void);
+-#endif
+-
+ static inline PHYSFS_File *sdlPHYS(SDL_RWops *ops) {
+   return static_cast<PHYSFS_File *>(ops->hidden.unknown.data1);
+ }
 @@ -1332,7 +1333,42 @@
  
  void FileSystem::openRead(OpenHandler &handler, const char *filename) {

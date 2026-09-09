@@ -1,0 +1,431 @@
+
+
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -69,6 +69,7 @@
+ #ifdef MKXPZ_BUILD_XCODE
+ #include <Availability.h>
+ #include "TouchBar.h"
++
+ #if __MAC_OS_X_VERSION_MAX_ALLOWED < __MAC_10_15
+ #define MKXPZ_INIT_GL_LATER
+ #endif
+@@ -116,9 +117,46 @@
+ static SDL_GLContext initGL(SDL_Window *win, Config &conf,
+                             RGSSThreadData *threadData);
+ 
++extern "C" void nx_boot_trace(const char *msg);
++extern "C" void nx_resolucion_pantalla(int *ancho, int *alto);   /* nx/nx_boot.c */
++extern "C" void nx_probe_fs(const char *path);   /* nx/nx_boot.c */
++extern "C" void nx_probe_threads(const char *donde);
++extern "C" void nx_probe_sync(void);   /* nx/nx_thread_probe.c */
++#ifdef __SWITCH__
++/* nx/nx_juego.h: la carpeta del juego y los nombres que comparte todo el
++   port. Es la unica respuesta a "donde esta el juego", y por eso este
++   fichero es el que la contesta. */
++#include <stdio.h>
++#include "nx_juego.h"
++#endif
++
++#ifdef __SWITCH__
++extern "C" void nx_nucleo(const char *quien, int preferido);
++/* nx/nx_aviso.c — la pantalla que dice que ha pasado. En Horizon,
++   SDL_ShowSimpleMessageBox devuelve -1 y no pinta nada, asi que todos los
++   fallos de arranque se ven igual: la consola vuelve al menu homebrew en
++   silencio. Estas tres funciones son las que rompen ese silencio. */
++extern "C" int  nx_revision_arranque(void);
++extern "C" void nx_aviso_registra(const char *msg);
++extern "C" int  nx_aviso_pendiente(void);
++extern "C" void nx_aviso_mostrar(void);
++/* nx/nx_espera.cpp — el logo y la barra de CARGANDO mientras el arranque
++   trabaja. Sin esto, veinte segundos de pantalla negra que nadie distingue de
++   un cuelgue. */
++extern "C" void nx_espera_abre(SDL_Window *ventana);
++extern "C" void nx_espera_paso(float fraccion);
++extern "C" void nx_espera_cierra(void);
++#endif
++
+ int rgssThreadFun(void *userdata) {
+   RGSSThreadData *threadData = static_cast<RGSSThreadData *>(userdata);
+ 
++#ifdef __SWITCH__
++  /* Este es el hilo que descomprime, dibuja y ejecuta Ruby: el que hay que
++   * dejar suelto en los tres nucleos (nx/nx_nucleos.c). */
++  nx_nucleo("rgss", -1);
++#endif
++
+ #ifdef MKXPZ_INIT_GL_LATER
+   threadData->glContext =
+       initGL(threadData->window, threadData->config, threadData);
+@@ -128,7 +166,23 @@
+   SDL_GL_MakeCurrent(threadData->window, threadData->glContext);
+ #endif
+ 
++  /* SONDA: el viewport recien creado el contexto ES el tamano de la
++   * superficie EGL, que es el unico dato fiable. Ni SDL ni nwindow lo dan:
++   * los dos contestan 1920x1080 aunque la imagen salga cortada. */
++  {
++    GLint vp[4] = {0, 0, 0, 0};
++    gl.GetIntegerv(GL_VIEWPORT, vp);
++    Debug() << "[gfx] viewport inicial" << vp[0] << vp[1] << vp[2] << vp[3];
++  }
++
+   /* Setup AL context */
++  nx_boot_trace("[boot] 8 initGL OK, hilo RGSS vivo");
++#ifdef __SWITCH__
++  /* Lo primero que se puede hacer con un contexto GL es dejar de ensenar negro.
++     A partir de aqui la pantalla dice que el juego esta cargando, y los hitos
++     de dentro de SharedState mueven la barra. */
++  nx_espera_abre(threadData->window);
++#endif
+   ALCcontext *alcCtx = alcCreateContext(threadData->alcDev, 0);
+ 
+   if (!alcCtx) {
+@@ -137,8 +191,12 @@
+   }
+ 
+   alcMakeContextCurrent(alcCtx);
++  nx_boot_trace("[boot] 9 contexto OpenAL creado");
++  if (nx_diagnostico())
++    nx_probe_threads("desde hilo RGSS");
+ 
+   try {
++    nx_boot_trace("[boot] 10 antes de SharedState::initInstance");
+     SharedState::initInstance(threadData);
+   } catch (const Exception &exc) {
+     rgssThreadError(threadData, exc.msg);
+@@ -147,6 +205,15 @@
+     return 0;
+   }
+ 
++#ifdef __SWITCH__
++  /* La barra al final y la pantalla fuera: de aqui en adelante dibuja el juego.
++     Se retira ANTES de arrancar Ruby porque el interprete tarda todavia un rato
++     en pedir su primer fotograma, y en ese hueco es mejor dejar el logo puesto
++     que un fundido a negro. */
++  nx_espera_paso(1.0f);
++  nx_espera_cierra();
++#endif
++  nx_boot_trace("[boot] 11 SharedState OK, arrancando el interprete Ruby");
+   /* Start script execution */
+   scriptBinding->execute();
+ 
+@@ -178,6 +245,11 @@
+ 
+ static void showInitError(const std::string &msg) {
+   Debug() << msg;
++#ifdef __SWITCH__
++  /* El cuadro de dialogo de SDL no existe en Horizon: se guarda el mensaje y se
++     pinta al final de main(), cuando SDL ya ha soltado la ventana. */
++  nx_aviso_registra(msg.c_str());
++#endif
+   SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "mkxp-z", msg.c_str(), 0);
+ }
+ 
+@@ -201,7 +273,197 @@
+   }
+ }
+ 
++#ifdef __SWITCH__
++#include <switch.h>
++#include <unistd.h>
++#include <libgen.h>
++
++/* Arranque de Horizon: donde esta el juego.
++
++   WORKDIR_CURRENT hace que mkxp-z busque mkxp.json, Data/ y Graphics/ en el
++   directorio de trabajo, y hbmenu no garantiza cual es. El orden de busqueda
++   es el de CONVENCIONES 3 y no admite atajos:
++
++     (a) El directorio de argv[0], que es donde esta el .nro que se pulso
++         (p.ej. "sdmc:/switch/<juego>/<juego>.nro").
++     (b) La ruta escrita en romfs:/juego.txt. Es lo que lleva un NSP, porque
++         una aplicacion instalada no tiene argv: el sistema la lanza sin
++         argumentos y (a) no puede contestar nada.
++     (c) Nada. No se adivina.
++
++   Antes habia un paso (c) con dos rutas convenidas escritas aqui dentro. Con
++   un solo juego eso era comodo; con un motor generico es peor que no tener
++   nada, porque un juego mal instalado arrancaria el de al lado sin decirlo.
++   Lo que queda de aquello es la pantalla de aviso, que ahora dice QUE se
++   probo y con que valor en vez de un "no lo encuentro" a secas. */
++/* Un directorio de trabajo vale si tiene el juego dentro.
++ *
++ * chdir() puede salir bien y dejarnos igual de perdidos: la carpeta existe,
++ * pero no es la del juego. Es lo que pasa con el .nro puesto en la raiz de
++ * /switch para que hbmenu lo ensene en la primera pantalla —que es como lo
++ * quiere usar quien juega, sin ir a buscarlo dos carpetas adentro—: el
++ * directorio que sale de argv[0] es /switch, chdir funciona, y mkxp-z se pone a
++ * buscar mkxp.json y Data/ donde no hay nada.
++ *
++ * Asi que se comprueba lo unico que de verdad decide: si mkxp.json esta ahi. */
++static bool nxHayJuegoAqui(const char *donde)
++{
++    if (chdir(donde) != 0)
++        return false;
++    if (access("mkxp.json", R_OK) == 0)
++        return true;
++    Debug() << "[nx]" << donde << "existe pero no tiene mkxp.json; sigo buscando";
++    return false;
++}
++
++static void nxSetupWorkdir(int argc, char *argv[])
++{
++    char apunte[160];
++
++    /* (a) el directorio del .nro */
++    if (argc > 0 && argv[0] && argv[0][0]) {
++        char buf[512];
++        strncpy(buf, argv[0], sizeof(buf) - 1);
++        buf[sizeof(buf) - 1] = 0;
++        char *slash = strrchr(buf, '/');
++        if (slash) {
++            *slash = 0;
++            snprintf(apunte, sizeof(apunte), "argv[0] -> %.130s", buf);
++            nx_intento(apunte);
++            if (nxHayJuegoAqui(buf)) {
++                Debug() << "[nx] directorio de trabajo:" << buf << "(argv[0])";
++                nx_carpeta_juego_fija(buf);
++                return;
++            }
++        } else {
++            nx_intento("argv[0] no lleva ninguna barra: no dice ningun directorio");
++        }
++    } else {
++        nx_intento("argv[0] vacio (lanzado como aplicacion, no como .nro)");
++    }
++
++    /* (b) romfs:/juego.txt
++     *
++     * Un binario solo lleva romfs si alguien se lo puso: elf2nro --romfsdir
++     * para un .nro, hacbrewpack --romfsdir para un NSP. Si no lo lleva,
++     * romfsInit devuelve error y esto es un intento fallido mas, no un fallo.
++     *
++     * PERO PEDIR UN ROMFS QUE NO EXISTE NO ES GRATIS EN EL EMULADOR. Cuando
++     * libnx cree que somos una aplicacion instalada, romfsInit acaba en
++     * fsOpenDataStorageByCurrentProcess; en la consola eso devuelve un error y
++     * aqui no pasaria nada, pero Ryujinx tira una excepcion sin recoger y se
++     * lleva el emulador entero por delante ("The given key '127' was not
++     * present in the dictionary", en VirtualFileSystem.GetRomFs). Y lo cree
++     * siempre: medido el 9 de septiembre de 2026, un .nro suelto lanzado en
++     * Ryujinx contesta envIsNso()=1 -o sea "soy una aplicacion instalada",
++     * que es mentira- con ProgramId 0 y argc 0.
++     *
++     * Por eso el .nro del motor se compila SIEMPRE con --romfsdir aunque su
++     * romfs no lleve ningun juego.txt (ver mkxp-z-nx/Makefile y romfs/): con
++     * un romfs vacio la llamada es segura, el fopen falla como toca y quien
++     * lanzo el binario ve la pantalla de aviso en vez de un emulador cerrado.
++     * El resultado de romfsInit se guarda y se ensena, que es como se llego
++     * hasta aqui. */
++    {
++        Result r = romfsInit();
++        FILE *f = R_SUCCEEDED(r) ? fopen("romfs:/juego.txt", "rb") : NULL;
++        if (!f) {
++            char m[96];
++            snprintf(m, sizeof(m), "romfs:/juego.txt no esta (romfsInit -> 0x%08x)",
++                     (unsigned)r);
++            nx_intento(m);
++        } else {
++            char linea[512] = {0};
++            char *p = linea;
++            if (fgets(linea, sizeof(linea), f)) {
++                /* Una linea, y lo que sobra a los lados no cuenta: el fichero
++                 * lo escribe el empaquetador y puede acabar en CRLF.
++                 *
++                 * El BOM tambien se salta. El acuerdo dice UTF-8 sin BOM, pero
++                 * un juego.txt escrito a mano en el Bloc de notas de Windows
++                 * lo lleva delante, y entonces la ruta empieza por tres bytes
++                 * invisibles y chdir contesta que no existe. Un fallo que no
++                 * se ve en un editor no deberia costar una tarde. */
++                if ((unsigned char)p[0] == 0xEF && (unsigned char)p[1] == 0xBB
++                    && (unsigned char)p[2] == 0xBF)
++                    p += 3;
++                while (*p == ' ' || *p == '\t')
++                    p++;
++                size_t n = strlen(p);
++                while (n && (p[n-1] == '\n' || p[n-1] == '\r'
++                             || p[n-1] == ' ' || p[n-1] == '\t'
++                             || p[n-1] == '/'))
++                    p[--n] = 0;
++            }
++            fclose(f);
++            snprintf(apunte, sizeof(apunte), "romfs:/juego.txt -> %.120s",
++                     *p ? p : "(vacio)");
++            nx_intento(apunte);
++            if (*p && nxHayJuegoAqui(p)) {
++                Debug() << "[nx] directorio de trabajo:" << p << "(romfs:/juego.txt)";
++                nx_carpeta_juego_fija(p);
++                return;
++            }
++        }
++    }
++
++    /* (c) nada. El chdir de nxHayJuegoAqui puede habernos dejado en cualquier
++     * sitio, pero no se fija ninguna carpeta convenida: quien lea el aviso
++     * vera los intentos de arriba, que es lo unico que ayuda. */
++    Debug() << "[nx] NO se pudo fijar el directorio de trabajo";
++    nx_carpeta_juego_rendirse();
++}
++#endif
++
++#ifdef __SWITCH__
++#endif
++
+ int main(int argc, char *argv[]) {
++#ifdef __SWITCH__
++    nx_boot_trace("[boot] 3/3 main() alcanzado");
++    Debug() << "[nx] mkxp-z arrancando en Horizon OS; argc =" << argc
++            << "argv[0] =" << (argc > 0 && argv[0] ? argv[0] : "(vacio)");
++
++    /* De donde se lanzo ESTE proceso, en el registro de arranque y no solo en
++     * el de depuracion.
++     *
++     * El 6 de septiembre de 2026 costo veinte minutos entender por que la
++     * consola seguia arrancando la b14 con la b61 recien subida: habia dos
++     * instalaciones en la tarjeta -una con el contenedor y otra con las
++     * carpetas sueltas- y se jugo la otra. El registro de arranque no podia
++     * decirlo, porque la ruta del registro esta fijada en nx/nx_boot.c y las
++     * dos instalaciones escriben en el MISMO fichero. O sea que dos binarios
++     * distintos dejaban sus lineas mezcladas sin nada que los distinguiera mas
++     * que el sello de compilacion, que es justo lo que estaba en duda.
++     *
++     * Con esta linea, la siguiente vez se ve de un vistazo: el sello dice QUE
++     * binario y esta dice DE DONDE salio. */
++    {
++        char linea[320];
++        snprintf(linea, sizeof(linea), "[nro] %s",
++                 (argc > 0 && argv[0]) ? argv[0] : "(sin ruta: lanzado sin argumentos)");
++        nx_boot_trace(linea);
++    }
++
++    nxSetupWorkdir(argc, argv);
++    {
++        char cwd[512] = {0};
++        if (getcwd(cwd, sizeof(cwd))) Debug() << "[nx] getcwd ->" << cwd;
++        Debug() << "[nx] mkxp.json accesible:" << (access("mkxp.json", R_OK) == 0);
++        Debug() << "[nx] Data/Scripts.rxdata accesible:"
++                << (access("Data/Scripts.rxdata", R_OK) == 0);
++    }
++    /* La revision del inventario va AQUI, antes de SDL_Init, por dos razones:
++       la consola de libnx y SDL no pueden tener la ventana por defecto a la
++       vez, y porque si faltan los datos no hay ningun motivo para gastar dos
++       segundos abriendo GL y OpenAL antes de decirlo. Devuelve distinto de cero
++       cuando no se puede seguir; el informe ya esta en pantalla y en el
++       registro. */
++    if (nx_revision_arranque() != 0) {
++        nx_boot_trace("[boot] la revision de arranque aborta: falta algo en la SD");
++        return 0;
++    }
++#endif
+     SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0");
+     SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
+ 
+@@ -209,12 +471,34 @@
+     SDL_SetHint(SDL_HINT_OPENGL_ES_DRIVER, "1");
+ #endif
+ 
++#ifdef __SWITCH__
++    /* Las autopruebas del arranque valen oro cuando algo no arranca y son
++     * segundo y medio de espera cuando todo va bien. Solo con diagnostico.txt. */
++    if (nx_diagnostico()) {
++        nx_probe_fs("lib/socket.rb");
++        {
++            /* La misma prueba por la ruta absoluta: es la comparacion que
++             * destapo lo de nx_realpath.c. La carpeta ya no esta escrita
++             * aqui, sale de donde se encontro el juego. */
++            char abs[600];
++            if (nx_ruta_juego(abs, sizeof(abs), "lib/socket.rb"))
++                nx_probe_fs(abs);
++        }
++        nx_probe_fs("mkxp.json");
++        nx_probe_threads("desde main");
++        nx_probe_sync();
++    }
++    nx_boot_trace("[boot] 4 antes de SDL_Init");
++#endif
+     /* initialize SDL first */
+     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) < 0) {
+       showInitError(std::string("Error initializing SDL: ") + SDL_GetError());
+       return 0;
+     }
+ 
++#ifdef __SWITCH__
++    nx_boot_trace("[boot] 5 SDL_Init OK");
++#endif
+     if (!EventThread::allocUserEvents()) {
+       showInitError("Error allocating SDL user events");
+       return 0;
+@@ -235,9 +519,15 @@
+     mkxp_fs::setCurrentDirectory(dataDir);
+ #endif
+     
++#ifdef __SWITCH__
++    nx_boot_trace("[boot] 6 eventos de usuario OK, leyendo mkxp.json");
++#endif
+     /* now we load the config */
+     Config conf;
+     conf.read(argc, argv);
++#ifdef __SWITCH__
++    nx_boot_trace("[boot] 7 mkxp.json leido");
++#endif
+ 
+ #if defined(__WIN32__)
+     // Create a debug console in debug mode
+@@ -265,6 +555,14 @@
+     if (conf.windowTitle.empty())
+       conf.windowTitle = conf.game.title;
+ 
++#ifdef __SWITCH__
++    /* El titulo que ensenara la pantalla de aviso si el motor se cae mas
++       adelante. Hasta aqui lo unico que hay es el Title= de Game.ini, leido a
++       mano; a partir de aqui manda la configuracion, que es la que el juego ha
++       elegido de verdad. */
++    nx_titulo_juego_fija(conf.windowTitle.c_str());
++#endif
++
+     assert(conf.rgssVersion >= 1 && conf.rgssVersion <= 3);
+     printRgssVersion(conf.rgssVersion);
+ 
+@@ -427,9 +725,15 @@
+ 
+     int winW, winH, drwW, drwH;
+     SDL_GetWindowSize(win, &winW, &winH);
+-    rtData.windowSizeMsg.post(Vec2i(winW, winH));
+-    
+     SDL_GL_GetDrawableSize(win, &drwW, &drwH);
++#ifdef __SWITCH__
++    /* SDL de devkitPro contesta 1920x1080 tanto en la base como en portatil,
++     * pero en portatil el bufer real es 1280x720. Ver nx/nx_pantalla.c. */
++    nx_resolucion_pantalla(&winW, &winH);
++    drwW = winW;
++    drwH = winH;
++#endif
++    rtData.windowSizeMsg.post(Vec2i(winW, winH));
+     rtData.drawableSizeMsg.post(Vec2i(drwW, drwH));
+ 
+     /* Load and post key bindings */
+@@ -473,6 +777,9 @@
+ 
+     if (!rtData.rgssErrorMsg.empty()) {
+       Debug() << rtData.rgssErrorMsg;
++#ifdef __SWITCH__
++      nx_aviso_registra(rtData.rgssErrorMsg.c_str());
++#endif
+       SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, conf.game.title.c_str(),
+                                rtData.rgssErrorMsg.c_str(), win);
+     }
+@@ -501,6 +808,14 @@
+     IMG_Quit();
+     SDL_Quit();
+ 
++#ifdef __SWITCH__
++    /* Ahora, y no antes: la consola de libnx necesita la ventana por defecto,
++       que SDL no suelta hasta SDL_Quit. Si no hubo fallo, no pinta nada y se
++       vuelve al menu homebrew como siempre. */
++    if (nx_aviso_pendiente())
++      nx_aviso_mostrar();
++#endif
++
+     return 0;
+ }
+ 

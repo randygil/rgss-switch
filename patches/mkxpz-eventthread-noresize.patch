@@ -1,6 +1,17 @@
---- eventthread.cpp.orig	2026-08-30 22:22:21.329388700 -0400
-+++ eventthread.cpp	2026-08-30 22:22:21.367989300 -0400
-@@ -468,22 +468,49 @@
+
+
+--- a/src/eventthread.cpp
++++ b/src/eventthread.cpp
+@@ -177,6 +177,8 @@
+     SDL_JoystickUpdate();
+     if (SDL_NumJoysticks() > 0 && SDL_IsGameController(0)) {
+             ctrl = SDL_GameControllerOpen(0);
++            Debug() << "[hid] joysticks:" << SDL_NumJoysticks()
++                    << "| mando abierto:" << (ctrl ? SDL_GameControllerName(ctrl) : "(ninguno)");
+     }
+     
+     char buffer[128];
+@@ -468,22 +470,59 @@
                          setFullscreen(win, static_cast<bool>(event.user.code));
                          break;
                          
@@ -28,6 +39,16 @@
                      case REQUEST_WINRESIZE :
 +#ifndef __SWITCH__
                          SDL_SetWindowSize(win, event.window.data1, event.window.data2);
++#else
++                        /* La ventana no cambia, pero el encaje SI: quien pide
++                         * esto es Graphics::resizeScreen, que ya ha cambiado la
++                         * resolucion interna y cuenta con que el evento de
++                         * redimension acabe llamando a recalculateScreenSize.
++                         * Sin este aviso, scSize y scOffset se quedan con las
++                         * cuentas de la resolucion ANTERIOR y la imagen sale
++                         * descentrada y cortada. */
++                        windowSizeMsg.post(Vec2i(winW, winH));
++                        drawableSizeMsg.post(Vec2i(winW, winH));
 +#endif
                          rtData.rqWindowAdjust.clear();
                          break;
@@ -50,7 +71,7 @@
                          rtData.rqWindowAdjust.clear();
                          break;
                          
-@@ -668,9 +695,16 @@
+@@ -668,9 +707,16 @@
  
  void EventThread::setFullscreen(SDL_Window *win, bool mode)
  {
