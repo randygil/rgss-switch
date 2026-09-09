@@ -28,8 +28,6 @@
 !/gen-xxd.sh
 !/fixup-arm64.py
 !/reconstruir-src.py
-!/pack-anil.sh
-!/empaquetar-nsp.sh
 !/construir.sh
 !/publicar.sh
 !/PUBLICAR.md
@@ -44,6 +42,10 @@
 
 #--- Utillaje de desarrollo y verificacion ------------------------------------
 !/dump-scripts.py
+# Lee de vuelta el NACP, el icono y el title id que Empaquetar.ps1 escribe en
+# cada <slug>.nro. Sin el, comprobar que salieron bien costaba copiar el .nro a
+# una tarjeta y encender la consola.
+!/comprobar-nro.py
 !/dump-rgssad.py
 !/anilftp.py
 !/resolver-pila.py

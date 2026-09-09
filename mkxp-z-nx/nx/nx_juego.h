@@ -42,7 +42,7 @@
 extern "C" {
 #endif
 
-/* La carpeta del juego una vez decidida (p.ej. "sdmc:/switch/pokemon-anil"),
+/* La carpeta del juego una vez decidida (p.ej. "sdmc:/switch/<slug>"),
  * sin barra final, o NULL si todavia no se sabe. */
 const char *nx_carpeta_juego(void);
 

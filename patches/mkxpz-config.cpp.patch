@@ -116,7 +116,7 @@
          dataPathApp = game.title;
      
 +#ifdef __SWITCH__
-+    /* Las partidas guardadas van junto al juego, en sdmc:/switch/pokemon-anil/,
++    /* Las partidas guardadas van junto al juego, en sdmc:/switch/<juego>/,
 +       que es escribible. Dejarlo vacio hace que se use el directorio actual. */
 +    customDataPath = "";
 +#else

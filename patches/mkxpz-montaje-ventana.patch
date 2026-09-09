@@ -5,10 +5,10 @@ enteros en una sola linea. Seis arranques seguidos de un jugador de verdad, en
 su consola:
 
   [   919] [boot] 10a miembros construidos (shaders compilados)
-  [ 56455] [boot] 10a+ contenedor anil-datos.zip montado
+  [ 56455] [boot] 10a+ contenedor datos.zip montado
 
 Entre esas dos lineas de sharedstate.cpp no hay mas que un fopen, un fclose y el
-fileSystem.addPath("anil-datos.zip") que se parchea aqui. Las seis sesiones dan
+fileSystem.addPath del contenedor que se parchea aqui. Las seis sesiones dan
 54,7 - 55,7 s, y hasta el interprete 56,0 - 57,1. El mismo tramo en la 1.0.0,
 que llevaba los recursos en carpetas sueltas, es addPath(".") y cuesta 14 ms;
 su arranque entero eran 2,0 - 2,4 s. Es una regresion de veinticinco veces que
@@ -109,7 +109,7 @@ Ver README 5.68.
 + * Medido en la consola de un jugador, seis arranques seguidos de la 1.1.0:
 + *
 + *   [   919] [boot] 10a miembros construidos (shaders compilados)
-+ *   [ 56455] [boot] 10a+ contenedor anil-datos.zip montado
++ *   [ 56455] [boot] 10a+ contenedor datos.zip montado
 + *
 + * Cincuenta y cinco segundos y medio, y entre esas dos lineas no hay mas que un
 + * fopen, un fclose y el addPath de aqui abajo. El mismo tramo con las carpetas
@@ -134,7 +134,7 @@ Ver README 5.68.
 + * que ese Io no baje al sistema de ficheros cada vez que le piden cuatro bytes.
 + * Este mantiene delante un trozo del fichero: la primera lectura pequena trae
 + * 64 KiB y las siguientes miles se sirven de ahi con un memcpy. El indice
-+ * central de anil-datos.zip son 2,1 MB contiguos pegados al final del archivo y
++ * central del contenedor son 2,1 MB contiguos pegados al final del archivo y
 + * se recorren hacia delante, asi que las 429.229 llamadas se quedan en 66: 33
 + * lecturas de 64 KiB y sus 33 lseek. El tell y el seek dejan ademas de ser
 + * llamadas al sistema, porque la posicion la llevamos nosotros y solo se hace
@@ -345,7 +345,7 @@ Ver README 5.68.
 +
 +#ifdef __SWITCH__
 +  /* Un archivo se monta por la ventana de lectura de arriba: es la diferencia
-+   * entre los 55,5 s que costaba montar anil-datos.zip en la consola y unos
++   * entre los 55,5 s que costaba montar el contenedor en la consola y unos
 +   * pocos cientos de milisegundos. Un directorio no pasa por aqui -PHYSFS_Io no
 +   * sabe recorrer carpetas- y para el sigue mandando PHYSFS_mount.
 +   *

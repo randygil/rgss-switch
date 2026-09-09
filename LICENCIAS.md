@@ -52,7 +52,8 @@ bajo la licencia de su origen. No hay nada que elegir aquí.
 | pixman | MIT | sí |
 | uchardet | MPL 1.1 / GPL 2.0 / LGPL 2.1 | sí |
 | SDL_sound | zlib | sí |
-| [hacbrewpack](https://github.com/The-4N/hacbrewpack) | ISC | no, es una herramienta |
+| [hacbrewpack](https://github.com/The-4N/hacbrewpack) | ISC | sí, en `tools/` de la entrega |
+| `nacptool` y `npdmtool` ([switch-tools](https://github.com/switchbrew/switch-tools)) | ISC | sí, en `tools/` de la entrega |
 | Liberation Sans (dentro de mkxp-z) | SIL OFL 1.1 | empotrada |
 | SDL_GameControllerDB | zlib | empotrada |
 
@@ -62,13 +63,15 @@ lo sería.
 
 ### Material que no se distribuye, y no por descuido
 
-- **Pokémon Añil 4.0** — los 702 MB de `Data/`, `Graphics/`, `Audio/` y
-  `Fonts/`, y los 770 scripts Ruby del juego. Pon tú tu propia copia y apunta
-  `pack-anil.sh` a ella con la variable `JUEGO`. Ni los assets ni los scripts
-  extraídos están versionados aquí.
+- **Los juegos.** Ninguno. `rgss-switch` es el motor y nada más: ni los
+  `Data/`, `Graphics/`, `Audio/` y `Fonts/` de ningún juego, ni sus scripts
+  Ruby. Pon tú tu propia copia y señálasela a `Empaquetar.cmd`, que la
+  convierte en una carpeta para la tarjeta en tu propia máquina. Nada de eso
+  está versionado aquí ni viaja en la entrega.
 - **Pokémon** es marca de Nintendo, Creatures y GAME FREAK. Este porteo no está
   asociado ni respaldado por ellos, ni por los autores del juego.
-- **`prod.keys`** — las claves de tu consola, que `empaquetar-nsp.sh` necesita
-  para firmar el NSP. Salen de tu propio hardware con Lockpick_RCM y de ningún
-  otro sitio. El `.gitignore` las bloquea por patrón, además de por la lista
+- **`prod.keys`** — las claves de tu consola, que `Empaquetar.ps1` necesita
+  para firmar el NSP (sin ellas entrega sólo el `.nro` y dice por qué). Salen
+  de tu propio hardware con Lockpick_RCM y de ningún otro sitio; se leen donde
+  están y no se copian a ninguna parte. El `.gitignore` las bloquea por patrón, además de por la lista
   blanca.

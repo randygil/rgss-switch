@@ -1,6 +1,6 @@
 Que el juego pueda leer de dentro del contenedor.
 
-Con los datos en anil-datos.zip el motor leia bien -graficos, mapas, musica-
+Con los datos en el contenedor el motor leia bien -graficos, mapas, musica-
 pero el JUEGO se quedaba sin efectos de sonido y la pantalla de titulo se caia.
 La causa no es una sino tres, y las tres son la misma idea: Pokemon Essentials y
 sus plugins no siempre piden los ficheros por los envoltorios que Essentials

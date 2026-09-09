@@ -227,7 +227,7 @@ un .rgssad de verdad, un 7z.
 +/* ---------------------------------------------------------------------------
 + * El indice de un contenedor, leido por nosotros.
 + *
-+ * Medido en la consola, con el juego dentro de anil-datos.zip:
++ * Medido en la consola, con el juego dentro del contenedor:
 + *
 + *   [cache] PhysFS: 22321 entradas, 171 directorios en 33272 ms
 + *   [cache]   de ellos 342 ms en PHYSFS_stat y 107 ms en el resto
