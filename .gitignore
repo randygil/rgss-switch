@@ -58,6 +58,9 @@
 !/jugar.ps1
 !/recoger.ps1
 !/comprobar-ruby18.rb
+# lee un MapNNN.rxdata con el Ruby del PC: cuantas cajas y que menus tiene una
+# introduccion, ANTES de gastar una vuelta de emulador conduciendo a ciegas
+!/leer-mapa.rb
 
 #--- Parches a Ruby y a mkxp-z, mas los shims de C ----------------------------
 !/patches/
