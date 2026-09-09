@@ -70,7 +70,11 @@ LIBS	:= -lruby-static -lnxcompat -lz -lpthread -lnx -lm
 # list of directories containing libraries, this must be the top level containing
 # include and lib
 #---------------------------------------------------------------------------------
-LIBDIRS	:= $(PORTLIBS) $(LIBNX) /c/anilswitch/out/nx
+# out/nx es donde build-ruby-switch.sh deja libruby-static.a y sus cabeceras.
+# Sale de donde esta este Makefile y no de una ruta fija al repositorio de al
+# lado: si no, un clon en otro sitio se enlaza contra el interprete del clon
+# original y no lo dice.
+LIBDIRS	:= $(PORTLIBS) $(LIBNX) $(CURDIR)/../out/nx
 
 
 #---------------------------------------------------------------------------------

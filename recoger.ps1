@@ -22,9 +22,16 @@
 #
 # La SD se busca sola: es la unica unidad extraible que tiene a la vez
 # /atmosphere y /switch.
+#
+#   .\recoger.ps1 -Juego pokemon-anil
+#
+# El slug es obligatorio y decide de que carpeta de la tarjeta se recogen los
+# registros y las partidas: SD:/switch/<slug>/. Los informes de Atmosphere son
+# de la consola entera y se traen igual.
 param(
+    [Parameter(Mandatory=$true)][string]$Juego,
     [string]$Unidad = "",
-    [string]$Destino = "C:\anilswitch\docs\consola",
+    [string]$Destino = "",
     [int]$Ultimos = 6,        # cuantos informes de Atmosphere traerse
     [switch]$Limpiar          # borra los registros de la SD tras copiarlos
 )
@@ -49,11 +56,15 @@ if (-not $Unidad) {
 }
 Write-Output "SD encontrada en $Unidad"
 
+if (-not $Destino) { $Destino = Join-Path $PSScriptRoot "docs\consola" }
 $sello = Get-Date -Format "yyyyMMdd-HHmmss"
-$dir = Join-Path $Destino $sello
+$dir = Join-Path $Destino "$sello-$Juego"
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 
-$juego = Join-Path $Unidad "switch\pokemon-anil"
+$juego = Join-Path $Unidad "switch\$Juego"
+if (-not (Test-Path $juego)) {
+    Write-Output "AVISO: no esta $juego; solo se recogen los informes de Atmosphere"
+}
 $copiados = 0
 
 # 1. Registros y partidas del juego.

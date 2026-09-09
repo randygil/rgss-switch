@@ -1,6 +1,8 @@
 /*
  * hello-ruby-nx - CRuby 3.1.7 como homebrew nativo de Nintendo Switch.
- * Hito H2 del porteo de Pokemon Anil a Horizon OS.
+ * Hito H2 del porteo: banco de pruebas del interprete, aislado del motor.
+ * Nacio con Pokemon Anil, que fue el primer juego, y sigue sirviendo para
+ * comprobar que CRuby arranca en la consola sin arrastrar mkxp-z entero.
  *
  * Los resultados se emiten por TRES vias, para poder verificarlos tanto en
  * consola real como en emulador:
@@ -107,7 +109,7 @@ int main(int argc, char **argv)
         run("version",   "RUBY_VERSION");
         run("plataforma","RUBY_PLATFORM");
         run("aritmetica","(1..100).reduce(:+)");
-        run("cadenas",   "'Pokemon Anil'.reverse.upcase");
+        run("cadenas",   "'rgss-switch'.reverse.upcase");
         run("bloques",   "[3,1,2].sort.map { |n| n * n }.inspect");
         run("hash",      "{a: 1, b: 2}.transform_values { |v| v * 10 }.inspect");
         run("struct",    "Struct.new(:x, :y).new(4, 5).to_a.inspect");

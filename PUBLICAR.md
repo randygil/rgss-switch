@@ -3,7 +3,7 @@
 1. Sube el número en `VERSION` (por ejemplo `1.0.1`) y confirma el cambio junto
    con lo demás.
 2. `./construir.sh` — compila el `.nro`, el `.nsp` si tienes `prod.keys`, y deja
-   `release/anil-switch-1.0.1.zip`. Comprueba en la salida que el sello es el
+   `release/rgss-switch-0.1.0.zip`. Comprueba en la salida que el sello es el
    que esperas.
 3. Comprueba que `construir.sh` archivó los símbolos: tiene que haber
    `release/simbolos/1.0.1-bNN/` con el `.elf`, el `.nro` y el `SELLO.txt`.

@@ -27,11 +27,11 @@ jobs:
         run: |
           export DEVKITPRO=/opt/devkitpro
           ./build-ruby-switch.sh && ./finalize-ruby.sh
-      - name: pokemon-anil.nro y entrega
+      - name: rgss-switch.nro y entrega
         run: |
           export DEVKITPRO=/opt/devkitpro
           ./construir.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: anil-switch
+          name: rgss-switch
           path: release/*.zip

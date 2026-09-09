@@ -8,8 +8,9 @@
 #      guion las construye: eso son horas y no se hace aqui por accidente.
 #   2. Regenera los shaders (gen-xxd.sh) si falta generated/.
 #   3. Compila el motor (make en mkxp-z-nx/): sale rgss-switch.nro y .elf.
-#   4. Monta release/rgss-switch-<VERSION>/ con el layout de CONVENCIONES 7 y
-#      lo comprime.
+#   4. Monta release/rgss-switch-<VERSION>/ con el layout de CONVENCIONES 7 -mas
+#      mkxp.diagnostico.json y diagnostico/, que usa Empaquetar.ps1
+#      -Diagnostico- y lo comprime.
 #   5. Archiva los simbolos de ESTA compilacion en release/simbolos/, que es lo
 #      que permite leer la pila de un volcado de un jugador (README 5.65).
 #
@@ -126,6 +127,25 @@ if [ -f tools/hacbrewpack/hacbrewpack.exe ]; then
   cp tools/hacbrewpack/hacbrewpack.exe "$ENT/tools/"
 else
   aviso "no esta tools/hacbrewpack/hacbrewpack.exe: la entrega no podra hacer NSP (solo .nro)"
+fi
+
+# --- el modo diagnostico ------------------------------------------------
+# Lo monta Empaquetar.ps1 -Diagnostico: otra configuracion (registro linea a
+# linea, autopruebas del arranque) y unos shims de Ruby que solo sirven para
+# depurar. No se empaquetan en una instalacion normal, pero tienen que VIAJAR
+# en la entrega: quien se encuentra un fallo raro esta lejos de este arbol y
+# lo unico que tiene es el zip.
+if [ -f runtime/mkxp.diagnostico.json ]; then
+  cp runtime/mkxp.diagnostico.json "$ENT/mkxp.diagnostico.json"
+else
+  aviso "no hay runtime/mkxp.diagnostico.json: Empaquetar.ps1 -Diagnostico no tendra configuracion"
+fi
+if ls runtime/diagnostico/*.rb >/dev/null 2>&1; then
+  mkdir -p "$ENT/diagnostico"
+  cp runtime/diagnostico/*.rb "$ENT/diagnostico/"
+  echo "diagnostico/: $(ls -1 "$ENT"/diagnostico/*.rb | wc -l) shims"
+else
+  aviso "no hay runtime/diagnostico/*.rb: Empaquetar.ps1 -Diagnostico no tendra shims"
 fi
 
 cp Empaquetar.ps1 Empaquetar.cmd GUIA.md LICENSE LICENCIAS.md "$ENT/"

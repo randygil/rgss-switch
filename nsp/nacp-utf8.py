@@ -3,9 +3,11 @@
 """Escribe el nombre y el autor del juego en el NACP, en UTF-8 de verdad.
 
 nacptool los toma de la linea de ordenes, y ahi es donde se pierden: el shell de
-MSYS2 pasa los argumentos en la pagina de codigos ANSI, asi que "Pokemon Anil"
-con acentos llega al fichero como Latin-1 —"Pok\xe9mon A\xf1il"— y Horizon, que
-espera UTF-8, pinta un nombre roto en el menu HOME.
+MSYS2 pasa los argumentos en la pagina de codigos ANSI, asi que un titulo con
+acentos o enes llega al fichero como Latin-1 —"Pok\xe9mon A\xf1il" en vez de
+"Pokémon Añil"— y Horizon, que espera UTF-8, pinta un nombre roto en el menu
+HOME. Con un motor generico esto deja de ser una rareza de un juego: el
+titulo lo pone cada jugador desde el Game.ini del suyo.
 
 El NACP empieza con 16 entradas de idioma de 0x300 bytes: 0x200 para el nombre y
 0x100 para el autor. Se reescriben todas con los mismos bytes correctos, que es

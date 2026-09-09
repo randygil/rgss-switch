@@ -1,5 +1,12 @@
 #!/bin/bash
-# desplegar.sh — copia a la tarjeta y COMPRUEBA que ha llegado.
+# desplegar.sh <slug> [origen] — copia a la tarjeta y COMPRUEBA que ha llegado.
+#
+#   SD=/f ./desplegar.sh pokemon-anil out/sdcard/switch/pokemon-anil
+#
+# El slug decide la carpeta de destino: SD:/switch/<slug>/. El origen, si no
+# se da, es la carpeta del mismo nombre que deje Empaquetar.ps1 en out/. Antes
+# los dos estaban escritos aqui dentro, que con un motor generico solo sirve
+# para desplegar siempre el mismo juego encima del que se queria probar.
 #
 # Existe por un fallo concreto. La comprobacion que traia el despliegue a mano
 # era esta:
@@ -17,9 +24,20 @@
 # tantos ficheros pedidos, tantos verificados, y si no cuadra se sale con error.
 set -u
 
+RAIZ=$(cd "$(dirname "$0")" && pwd)
+SLUG=${1:-}
+if [ -z "$SLUG" ]; then
+    echo "uso: [SD=/f] ./desplegar.sh <slug> [carpeta de origen]"
+    exit 1
+fi
 SD=${SD:-/f}
-JUEGO="$SD/switch/pokemon-anil"
-PKG=/c/anilswitch/out/sdcard/switch/pokemon-anil
+JUEGO="$SD/switch/$SLUG"
+PKG=${2:-$RAIZ/out/sdcard/switch/$SLUG}
+if [ ! -d "$PKG" ]; then
+    printf %s\n "no existe la carpeta de origen: $PKG"
+    printf %s\n "  (la deja Empaquetar.ps1; o pasala como segundo argumento)"
+    exit 1
+fi
 pedidos=0
 buenos=0
 
@@ -60,29 +78,34 @@ if [ ! -d "$SD/switch" ]; then
     rojo "no veo $SD/switch: la tarjeta no esta puesta"
     exit 1
 fi
-if ! touch "$SD/.anil-prueba" 2>/dev/null; then
+if ! touch "$SD/.rgss-prueba" 2>/dev/null; then
     rojo "$SD no admite escritura"
     exit 1
 fi
-rm -f "$SD/.anil-prueba"
+rm -f "$SD/.rgss-prueba"
 
 mkdir -p "$JUEGO/lib"
 
 echo "--- binario y configuracion ---"
-copia "$PKG/pokemon-anil.nro" "$JUEGO/pokemon-anil.nro"
-copia "$PKG/mkxp.json"        "$JUEGO/mkxp.json"
-copia "$PKG/preload.rb"       "$JUEGO/preload.rb"
-copia "$PKG/Game.ini"         "$JUEGO/Game.ini"
+copia "$PKG/$SLUG.nro" "$JUEGO/$SLUG.nro"
+copia "$PKG/mkxp.json" "$JUEGO/mkxp.json"
+# preload.rb y Game.ini son del juego y puede que no los traiga: se copian si
+# estan y no se cuentan como falta si no.
+for f in preload.rb Game.ini; do
+    [ -f "$PKG/$f" ] && copia "$PKG/$f" "$JUEGO/$f"
+done
 
 echo "--- sondas de Ruby ---"
 for f in "$PKG"/lib/nx-*.rb; do
     copia "$f" "$JUEGO/lib/$(basename "$f")"
 done
 
-if [ "${NSP:-1}" = "1" ]; then
+# El NSP, si Empaquetar.ps1 lo hizo (necesita prod.keys). Va junto a la
+# carpeta switch/ de la salida, no dentro.
+if [ "${NSP:-1}" = "1" ] && [ -f "$PKG/../../$SLUG.nsp" ]; then
     echo "--- NSP ---"
-    copia /c/anilswitch/out/pokemon-anil.nsp "$SD/pokemon-anil.nsp"
-    [ -d "$SD/NSP" ] && copia /c/anilswitch/out/pokemon-anil.nsp "$SD/NSP/pokemon-anil.nsp"
+    copia "$PKG/../../$SLUG.nsp" "$SD/$SLUG.nsp"
+    [ -d "$SD/NSP" ] && copia "$PKG/../../$SLUG.nsp" "$SD/NSP/$SLUG.nsp"
 fi
 
 echo

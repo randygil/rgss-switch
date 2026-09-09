@@ -27,8 +27,8 @@ if [ "${1:-}" = "--sin-empujar" ]; then SIN_EMPUJAR=1; shift; fi
 
 if [ -n "${1:-}" ]; then echo "$1" > VERSION; fi
 VERSION=$(cat VERSION)
-ZIP="release/anil-switch-$VERSION.zip"
-ENT="release/anil-switch-$VERSION"
+ZIP="release/rgss-switch-$VERSION.zip"
+ENT="release/rgss-switch-$VERSION"
 TAG="v$VERSION"
 
 echo "=== comprobaciones ==="
@@ -36,10 +36,10 @@ echo "=== comprobaciones ==="
 [ -f "$ZIP" ] || { echo "no existe $ZIP: ejecuta ./construir.sh"; exit 1; }
 # El zip tiene que ser de ESTA version: un zip viejo con un VERSION nuevo es el
 # error clasico, y se detecta leyendo lo que el propio zip dice de si mismo.
-SELLO=$(unzip -p "$ZIP" "anil-switch-$VERSION/VERSION.txt" 2>/dev/null | awk '{print $1}')
+SELLO=$(unzip -p "$ZIP" "rgss-switch-$VERSION/VERSION.txt" 2>/dev/null | awk '{print $1}')
 [ "$SELLO" = "$VERSION" ] || { echo "el zip dice '$SELLO' y VERSION dice '$VERSION': recompila con ./construir.sh"; exit 1; }
 git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && { echo "la etiqueta $TAG ya existe; sube VERSION"; exit 1; }
-strings -a "$ENT/pokemon-anil.nro" | grep -q "\[build\] $VERSION " || { echo "el .nro de la entrega no lleva el sello $VERSION"; exit 1; }
+strings -a "$ENT/motor/rgss-switch.nro" | grep -q "\[build\] $VERSION " || { echo "el .nro de la entrega no lleva el sello $VERSION"; exit 1; }
 echo "ok: $ZIP ($(du -h "$ZIP" | cut -f1)) es la $VERSION"
 
 echo "=== simbolos ==="
@@ -49,17 +49,17 @@ echo "=== simbolos ==="
 # comprueba que construir.sh dejo los simbolos de ESTA compilacion —mismo hash
 # de .nro, no solo mismo sello— y se marcan como publicados para que la poda de
 # construir.sh no los toque nunca mas.
-SELLO_NRO=$(strings -a "$ENT/pokemon-anil.nro" | grep -m1 '^\[build\] ' | sed 's/^\[build\] //')
+SELLO_NRO=$(strings -a "$ENT/motor/rgss-switch.nro" | grep -m1 '^\[build\] ' | sed 's/^\[build\] //')
 BNUM=$(printf '%s\n' "$SELLO_NRO" | awk '{print $2}')
 SIM="release/simbolos/$VERSION-$BNUM"
-[ -f "$SIM/pokemon-anil.elf" ] || { echo "no hay .elf archivado en $SIM: recompila con ./construir.sh (no se publica sin simbolos)"; exit 1; }
-HNRO_ENT=$(sha256sum "$ENT/pokemon-anil.nro" | awk '{print $1}')
-HNRO_SIM=$(sha256sum "$SIM/pokemon-anil.nro" | awk '{print $1}')
+[ -f "$SIM/rgss-switch.elf" ] || { echo "no hay .elf archivado en $SIM: recompila con ./construir.sh (no se publica sin simbolos)"; exit 1; }
+HNRO_ENT=$(sha256sum "$ENT/motor/rgss-switch.nro" | awk '{print $1}')
+HNRO_SIM=$(sha256sum "$SIM/rgss-switch.nro" | awk '{print $1}')
 [ "$HNRO_ENT" = "$HNRO_SIM" ] || { echo "el .nro archivado en $SIM no es el de la entrega; recompila con ./construir.sh"; exit 1; }
 sed -i 's/^publicada: .*/publicada: si/' "$SIM/SELLO.txt"
 grep -q '^publicada: si' "$SIM/SELLO.txt" || echo "publicada: si" >> "$SIM/SELLO.txt"
 printf '%-16s %-28s %s\n' "$VERSION-$BNUM" "$SELLO_NRO" "$HNRO_ENT" >> release/simbolos/INDICE.txt
-echo "ok: $SIM marcado como publicado (.elf $(du -h "$SIM/pokemon-anil.elf" | cut -f1))"
+echo "ok: $SIM marcado como publicado (.elf $(du -h "$SIM/rgss-switch.elf" | cut -f1))"
 echo "    para leer una pila:  python resolver-pila.py --sello '$SELLO_NRO' mkxp-boot.log"
 
 echo "=== notas ==="
@@ -79,14 +79,14 @@ if [ -f "$NOTAS" ]; then
   cat "$NOTAS"
 else
 {
-  echo "## Pokémon Añil 4.0 para Switch — port $VERSION"
+  echo "## rgss-switch $VERSION — RPG Maker XP en Nintendo Switch"
   echo
-  echo "Descarga \`anil-switch-$VERSION.zip\`, descomprime, doble clic en \`Empaquetar.cmd\` y elige tu carpeta de Añil 4.0. Guía completa: GUIA.md dentro del zip."
+  echo "Descarga \`rgss-switch-$VERSION.zip\`, descomprime, doble clic en \`Empaquetar.cmd\` y elige la carpeta de tu juego para PC. Guía completa: GUIA.md dentro del zip."
   echo
   echo "### Cambios"
   if [ -n "$ULTIMA" ]; then git log --format='- %s' "$ULTIMA..HEAD"; else git log --format='- %s'; fi
   echo
-  echo "El juego no está incluido: hace falta tu propia copia de Pokémon Añil 4.0 para PC."
+  echo "Ningún juego va incluido: esto es el motor. Hace falta tu propia copia del juego para PC."
 } > "$NOTAS"
 cat "$NOTAS"
 fi
