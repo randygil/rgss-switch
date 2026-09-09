@@ -25,7 +25,20 @@ param(
     [string]$Ruta = "",
     [int]$Espera = 150,
     [string[]]$Guion = @("foto:titulo", "tecla:Z", "esperar:3000", "foto:tras-enter"),
-    [string]$Etiqueta = "juego"
+    [string]$Etiqueta = "juego",
+    # EN VENTANA POR OMISION, y esto no es una preferencia estetica.
+    #
+    # Una prueba de estas dura entre cinco y quince minutos y corre en la misma
+    # maquina en la que hay alguien trabajando. Con -fullscreen el emulador se
+    # come la pantalla y cada pulsacion del guion le roba el foco a lo que
+    # tuviera delante: durante la sesion del 9 de septiembre de 2026 Randy no
+    # pudo usar su ordenador mientras se probaba Iberia. En ventana el juego se
+    # ve igual de bien -las capturas recortan al area de cliente- y se puede
+    # dejar corriendo en un rincon.
+    #
+    # El volumen se pone a 0 en la configuracion del emulador por el mismo
+    # motivo; ahi no hay parametro de linea de ordenes que valga.
+    [switch]$PantallaCompleta
 )
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
@@ -36,8 +49,10 @@ Add-Type -Name Nativo -Namespace Win32 -MemberDefinition @"
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h);
 [DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
 [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(System.IntPtr h, out int pid);
-[DllImport("user32.dll")] public static extern bool GetWindowRect(System.IntPtr h, out RECT r);
+[DllImport("user32.dll")] public static extern bool GetClientRect(System.IntPtr h, out RECT r);
+[DllImport("user32.dll")] public static extern bool ClientToScreen(System.IntPtr h, ref POINT p);
 public struct RECT { public int Left, Top, Right, Bottom; }
+public struct POINT { public int X, Y; }
 "@
 [Win32.Nativo]::SetProcessDPIAware() | Out-Null
 
@@ -54,11 +69,17 @@ New-Item -ItemType Directory -Force -Path $dir | Out-Null
 
 # -Ruta acepta tanto el .nro (menu homebrew) como el .nsp (aplicacion instalada):
 # Ryujinx arranca los dos igual desde la linea de ordenes.
+$argumentos = @()
+if ($PantallaCompleta) { $argumentos += "--fullscreen" }
+$argumentos += "`"$Ruta`""
 $p = Start-Process -FilePath "C:\Games\publish\Ryujinx.exe" `
-        -ArgumentList "--fullscreen", "`"$Ruta`"" -PassThru
+        -ArgumentList $argumentos -PassThru
 Write-Output "Ryujinx PID $($p.Id); esperando $Espera s a que arranque el juego"
 Start-Sleep -Seconds $Espera
 
+# Traer la ventana al frente le roba el foco a quien este usando la maquina, y
+# solo hace falta para MANDAR TECLAS: keybd_event va a la ventana activa. Para
+# una foto no se pide, porque CopyFromScreen no lo necesita.
 function Enfocar {
     $p.Refresh()
     if ($p.MainWindowHandle -ne [System.IntPtr]::Zero) {
@@ -89,7 +110,6 @@ function Foto([string]$nombre) {
         Write-Output "  foto $nombre OMITIDA: el emulador ya habia terminado"
         return
     }
-    Enfocar
     $h = $p.MainWindowHandle
     $pid_frente = 0
     [Win32.Nativo]::GetWindowThreadProcessId([Win32.Nativo]::GetForegroundWindow(), [ref]$pid_frente) | Out-Null
@@ -97,24 +117,36 @@ function Foto([string]$nombre) {
         Write-Output "  foto $nombre OMITIDA: delante hay otra ventana (pid $pid_frente)"
         return
     }
-    # Y solo el rectangulo de SU ventana, no la pantalla: en ventana -no en
+    # Y solo el AREA DE CLIENTE de su ventana, no la pantalla: en ventana -no en
     # pantalla completa- detras esta el escritorio de quien usa la maquina.
+    # GetWindowRect no vale: incluye el marco invisible que pinta DWM y en una
+    # foto de Iberia eso dejo medio WhatsApp dentro. GetClientRect da el tamano
+    # y ClientToScreen, donde empieza.
     $w = New-Object Win32.Nativo+RECT
-    [Win32.Nativo]::GetWindowRect($h, [ref]$w) | Out-Null
+    [Win32.Nativo]::GetClientRect($h, [ref]$w) | Out-Null
+    $o = New-Object Win32.Nativo+POINT
+    [Win32.Nativo]::ClientToScreen($h, [ref]$o) | Out-Null
     $ancho = $w.Right - $w.Left
     $alto  = $w.Bottom - $w.Top
-    if ($ancho -le 0 -or $alto -le 0) {
+    # NUNCA se copia la pantalla entera como reserva, y esto se probo y se
+    # deshizo el mismo dia: con el emulador a pantalla completa GetClientRect
+    # devuelve solo la barra de menu, y el apano de "pues copio la pantalla"
+    # guardo el navegador de Randy en docs/capturas. Si el area de cliente no
+    # da, no hay foto.
+    if ($ancho -le 20 -or $alto -le 200) {
         Write-Output "  foto $nombre OMITIDA: la ventana mide ${ancho}x${alto}"
         return
     }
     $bmp = New-Object System.Drawing.Bitmap $ancho, $alto
     $g = [System.Drawing.Graphics]::FromImage($bmp)
-    $g.CopyFromScreen((New-Object System.Drawing.Point $w.Left, $w.Top), [System.Drawing.Point]::Empty, (New-Object System.Drawing.Size $ancho, $alto))
+    $g.CopyFromScreen((New-Object System.Drawing.Point $o.X, $o.Y), [System.Drawing.Point]::Empty, (New-Object System.Drawing.Size $ancho, $alto))
     $bmp.Save($ruta, [System.Drawing.Imaging.ImageFormat]::Png)
     $g.Dispose(); $bmp.Dispose()
     Write-Output "  foto -> $ruta"
 }
 
+# Un unico traspie al principio -si no, la primera tecla se pierde-, y a partir
+# de ahi solo antes de cada tecla.
 Enfocar
 foreach ($accion in $Guion) {
     if ($p.HasExited) { Write-Output "el emulador ya habia terminado"; break }

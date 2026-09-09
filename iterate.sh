@@ -84,7 +84,11 @@ echo "desplegado en $SD"
 cd C:/Games/publish || exit 1
 OBJETIVO="$SD/$SLUG.nro"
 echo "lanzando $OBJETIVO durante $SECS s"
-timeout "$SECS" ./Ryujinx.exe --fullscreen "$OBJETIVO" \
+# En ventana y no a pantalla completa: esto corre en la misma maquina en la que
+# hay alguien trabajando, y un emulador que se come la pantalla durante los
+# minutos que dura la prueba la deja inservible. El volumen esta a 0 en la
+# configuracion del emulador, por el mismo motivo.
+timeout "$SECS" ./Ryujinx.exe "$OBJETIVO" \
     > "$RAIZ/docs/ryujinx-$SLUG.log" 2>&1
 echo "salida del emulador: $?"
 
