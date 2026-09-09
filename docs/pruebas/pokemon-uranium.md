@@ -127,6 +127,101 @@ o no?»— pero deja de depender de un nombre fijo. En el registro:
 [   355] [ OK  ] Uranium.rgssad (hace que el juego lea del contenedor)
 ```
 
+### Vuelta 5 — `RegexpError` en `DrawText`, hija del arreglo de la vuelta 1
+
+**Síntoma**: al abrir «Reconfigure Controls» en el diálogo del profesor, el juego
+escribe `errorlog.txt` y se para.
+
+**Registro**:
+
+```
+Exception: RegexpError
+Message: /.../n has a non escaped non ASCII character in non ASCII-8BIT script
+DrawText:921:in `getLineBrokenChunks'
+SpriteWindow_text:1055:in `resizeToFitInternal'
+... Control Binding:533:in `pbStartScene'
+```
+
+**Causa**: la línea 921 de `DrawText` es **la única de las 260 secciones que
+interpola `WordRegexp` fuera de su propio módulo**, y lo hace con `/n`:
+
+```ruby
+while (c = textmsg.slice!(/(?:\n|[ \r\t\f]+|#{CJKUtils::WordRegexp::WordRegexp}[ \r\t\f]*)/n))
+```
+
+Con los literales de bytes originales todo era `ASCII-8BIT` y el `/n` cuadraba;
+con el módulo reescrito en UTF-8 (vuelta 1) ya no. **No se puede resolver
+escribiendo los rangos con `\uNNNN`**: Ruby normaliza el escape al construir la
+expresión y `Regexp#source` devuelve el carácter, así que el `/n` lo vuelve a
+ver igual. Probado.
+
+**Arreglo**: un segundo parche en el mismo shim, `parche_drawtext`, que le quita
+el `/n` a esa línea. Sin él la expresión es UTF-8 y `slice!` corta por
+caracteres, que es exactamente lo que un partidor de líneas quiere hacer con un
+texto UTF-8. `getLineBrokenChunks` no es un rincón: es el ajuste de línea de
+todas las ventanas que se dimensionan solas.
+
+Y este error **no se ve compilando**: es de ejecución, como el de la vuelta 1.
+La prueba del PC lo comprueba construyendo la expresión de la línea 921 con el
+módulo nuevo puesto (`tmp/uranium-prueba.rb`, apartado 7).
+
+### Vuelta 6 — el muro: el proceso muere al acabar la introducción
+
+**Síntoma**: se completa la introducción entera —idioma, menú, partida nueva,
+las ~45 cajas de diálogo del profesor, el nombre en la rejilla, «Let's go!»— y
+en el fundido a negro que lleva al primer mapa de verdad **el proceso invitado
+desaparece**. Sin pantalla de error, sin `errorlog.txt`, sin excepción de Ruby y
+sin excepción de C++.
+
+Reproducido **cinco veces**. Lo que se sabe, medido:
+
+- La última llamada de Ruby que se registra es siempre la misma:
+  `Audio.bgm_fade(4000)`, **y devuelve** (`[audio<] bgm_fade -> nil`). Se
+  instrumentó cada llamada al Audio nativo, antes y después: todas entran y
+  salen. La capa de audio nueva no es.
+- Una sonda de latido en `Graphics.update` deja de escribir a la vez
+  (`[latido] 6780 escena=Scene_Map mapa=51`), pero eso **no** prueba que Ruby
+  muera ahí: `Graphics.transition` tiene su propio bucle de fotogramas y no pasa
+  por `Graphics.update`.
+- El contador de fotogramas del motor (`[monton]`, cada 30 s) **sigue 17
+  segundos más** y luego para. O sea: el hilo RGSS se queda dentro de una
+  llamada nativa que no vuelve, y el proceso se cae después.
+- No es la memoria: 397 MB de montón y 79 MB de texturas vivas, con 3.282 MB
+  disponibles.
+- **No es `Graphics.resize_screen`**, que era el sospechoso del informe de la
+  fase 1. Se probó retirándolo del motor antes de que `Sprite_Resizer` lo aliase
+  —con lo que `@@haveresizescreen` sale `false` y el juego no redimensiona
+  nada— y el proceso murió exactamente igual.
+- No es un tope de tiempo del emulador ni del guion: Añil corre 193 s en la
+  misma máquina sin inmutarse, y Uranium ha llegado a 160 s vivo cuando el guion
+  se desincronizaba y no alcanzaba la transición.
+
+Queda por probar, para el que siga: el modo diagnóstico completo
+(`Empaquetar.ps1 -Diagnostico`, con `nx-metodos.rb`, que envuelve cientos de
+métodos y diría el último que se llamó), y leer el evento 2 del mapa 51, que es
+el que hace la transferencia.
+
+**Cómo se conduce esta introducción**, para no repetir el trabajo:
+
+- La pantalla de idioma sale **antes** del título: una ABAJO para `Español`, Z,
+  y sale un diálogo de confirmación con la ✗ marcada; hay que ir a la ✓ con
+  DERECHA y otra Z.
+- Detrás vienen tres avisos de fuentes (tres Z).
+- **La trampa**: a las ~30 cajas el profesor pregunta «Want the low-down on what
+  you'll be doing?» con un menú de cuatro —`Adventure`, `Controls`,
+  `Reconfigure Controls`, `No Info Needed`— y `Adventure` **vuelve a empezar la
+  explicación**. Un guion que sólo pulse Z se queda dando vueltas para siempre;
+  costó cuatro vueltas verlo. Hay que bajar tres veces y elegir `No Info
+  Needed`.
+- La rejilla del nombre es la de Essentials clásico y responde al mismo patrón
+  Z-C-Z que la familia `ruby18`: Z mete la letra, C salta a `OK`, Z confirma, y
+  después una Z más para el `Yes` de «Your name is X?».
+- Contar pulsaciones **no es fiable**: el mismo guion desincroniza entre
+  ejecuciones según la cadencia. Lo que sí funciona es repetir bloques de
+  `ABAJO ABAJO ABAJO Z Z Z Z Z Z` (las flechas no hacen nada sobre una caja de
+  texto y eligen `No Info Needed` cuando aparece el menú) y rematar con parejas
+  `C Z` (la C no hace nada sobre una caja de texto y es `OK` en la rejilla).
+
 ## Dónde se llegó
 
 | Hito | Captura |
@@ -134,9 +229,15 @@ o no?»— pero deja de depender de un nombre fijo. En el registro:
 | Selección de idioma, 60 FPS | `pokemon-uranium-hito-1-idioma.png` |
 | Menú principal (New Game / Options / Exit) | `pokemon-uranium-hito-2-menu-principal.png` |
 | Partida nueva: la introducción del profesor | `pokemon-uranium-hito-3-intro.png` |
+| El nombre del jugador, en la rejilla | `pokemon-uranium-hito-4-nombre-rejilla.png` |
+| El final de la introducción: «Let’s go!» | `pokemon-uranium-hito-5-vamos-alla.png` |
 
-`[donde] mapa 51 en (0,0)` en `mkxp-boot.log`: el juego ha cargado su primer
-mapa. **Ni una sola excepción** en el camino: no hay `errorlog.txt`.
+`[donde] mapa 51 en (0,0)` en `mkxp-boot.log`: el mapa de la introducción, con
+el profesor. **Ni una sola excepción** en todo ese camino: no hay
+`errorlog.txt`.
+
+Lo que **no** se ha alcanzado: el primer mapa jugable, andar, el menú de pausa,
+guardar y el combate. El muro es el de la vuelta 6.
 
 ## Tiempos
 

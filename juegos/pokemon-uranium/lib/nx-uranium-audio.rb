@@ -425,6 +425,50 @@ module NXUranioSecciones
     (lineas[0...ini] + nuevo + lineas[(fin + 1)..-1].to_a).join
   end
 
+
+  # 0059 "DrawText" linea 921: el /n que sobrevivio al modulo
+  #
+  # Consecuencia directa del parche de arriba, y se vio en el emulador:
+  #
+  #   Exception: RegexpError
+  #   Message: /.../n has a non escaped non ASCII character in non ASCII-8BIT script
+  #   DrawText:921:in `getLineBrokenChunks'
+  #   SpriteWindow_text:1055:in `resizeToFitInternal'
+  #   ... Control Binding:533:in `pbStartScene'
+  #
+  # La linea es esta, y es la UNICA de las 260 secciones que interpola
+  # WordRegexp fuera de su propio modulo:
+  #
+  #   while (c = textmsg.slice!(/(?:\n|[ \r\t\f]+|
+  #                              #{CJKUtils::WordRegexp::WordRegexp}[ \r\t\f]*)/n))
+  #
+  # Con los literales de bytes originales todo era ASCII-8BIT y el /n cuadraba.
+  # Ahora WordRegexp es UTF-8 y meterla en un /.../n es el error de arriba. No
+  # se puede resolver escribiendo los rangos con \uNNNN: Ruby normaliza el
+  # escape al construir la expresion y `source` devuelve el caracter, asi que el
+  # /n lo vuelve a ver igual (probado).
+  #
+  # Se le quita el /n a esa linea, que es lo que sobra: sin el, la expresion es
+  # UTF-8 y `slice!` corta por CARACTERES, que es justo lo que un partidor de
+  # lineas quiere hacer con un texto UTF-8. Es el mismo cambio de significado
+  # que el del modulo, y en la misma direccion.
+  def self.parche_drawtext(codigo)
+    src = codigo.to_s.dup.force_encoding("UTF-8")
+    src = src.scrub("?") unless src.valid_encoding?
+    tocado = 0
+    lineas = src.lines.map do |l|
+      if l.include?("WordRegexp") && l.include?("/n")
+        nueva = l.sub(%r{/n\)}, "/)")
+        tocado += 1 if nueva != l
+        nueva
+      else
+        l
+      end
+    end
+    return nil if tocado == 0
+    lineas.join
+  end
+
   # Se compara por nombre NORMALIZADO —minusculas y sin nada que no sea letra o
   # numero— porque el nombre llega tal cual lo escribio RPG Maker XP dentro de
   # Scripts.rxdata: "RGSS Linker" y "F-mod main script" hoy, pero un espacio de
@@ -449,7 +493,8 @@ module NXUranioSecciones
 
   # Los que no se sustituyen enteros: se les cambia un trozo y siguen su camino
   # normal por NXFuente.
-  PARCHES = { "cjkutilities" => :parche_cjk }.freeze
+  PARCHES = { "cjkutilities" => :parche_cjk,
+              "drawtext"     => :parche_drawtext }.freeze
 
   def self.parche(nombre, codigo)
     m = PARCHES[normaliza(nombre)]
@@ -491,7 +536,7 @@ if defined?(NXFuente) && NXFuente.respond_to?(:transforma)
 
         parcheado = NXUranioSecciones.parche(nombre, codigo.to_s)
         if parcheado
-          NX.log("[uranio] seccion #{nombre.inspect} PARCHEADA (module WordRegexp reescrito en UTF-8)")
+          NX.log("[uranio] seccion #{nombre.inspect} PARCHEADA (las expresiones regulares de bytes de 1.8, en UTF-8)")
           codigo = parcheado
         end
         nx_transforma_sin_uranio(nombre, codigo)
