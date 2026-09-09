@@ -223,3 +223,21 @@ arranque lo dice entero:
 - `patches`/`System.file_exist?` no aplican a este juego.
 - `Data/PluginScripts.rxdata` se quedo dentro del contenedor y **no dio ningun
   fallo de escritura**: la sospecha que llevaba el perfil no se cumplio.
+
+## Regresion de Anil
+
+Los tres arreglos de aqui son **genericos** —`nx-teclado.rb`, `Dir.pwd` en
+`nx-compat.rb` y `File.file?` en el motor—, asi que se volvio a encender Anil
+con ellos puestos antes de dar la sesion por buena: `.nro` rehecho con el motor
+de HEAD, los dos shims copiados a su `lib/`, sin tocar sus partidas.
+
+Llega a la pantalla de carga con `Partida 1 / Randy / Pueblo Paleta / 7m`
+intacta, `errorlog.txt` no se crea, y en `mkxp-ruby.log` salen sus cuatro shims
+de perfil y la linea nueva:
+
+```
+[teclado] PokemonEntryScene -> la rejilla con cursor (la del teclado queda en NXPokemonEntrySceneTeclado)
+```
+
+Antes decia "entrada de texto encaminada a la rejilla" y hacia lo mismo por otro
+camino; el resultado en Anil no cambia.
