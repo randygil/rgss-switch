@@ -1,5 +1,6 @@
 /*
- * nx_ficheros.cpp — que FileTest.exist? vea tambien dentro del contenedor.
+ * nx_ficheros.cpp — que FileTest.exist? y File.file? vean tambien dentro del
+ * contenedor.
  *
  * EL FALLO. Con los datos en el contenedor, el juego se quedaba sin efectos de
  * sonido. Los graficos si aparecian, y esa asimetria es la pista: son dos
@@ -37,6 +38,7 @@
 #include <ruby.h>
 
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include "sharedstate.h"
 #include "filesystem.h"
@@ -88,6 +90,60 @@ static VALUE nx_existe(int argc, VALUE *argv, VALUE self)
     return Qfalse;
 }
 
+/* File.file? es el mismo hueco con otro nombre, y lo destapo un plugin de
+ * Project Vanguard la primera vez que se abrio su menu de pausa:
+ *
+ *   Exception: RuntimeError
+ *   Message: You are missing the graphic for this UI. ...
+ *   [Encounter List UI (v20)] 002_UI_Encounters.rb:94:in `pbStartScene'
+ *
+ * y la linea 94 es
+ *
+ *   if !File.file?("Graphics/Pictures/EncounterUI/"+WINDOWSKIN)
+ *
+ * sobre una imagen que SI esta, dentro de datos.zip. El juego no se queja de
+ * que falte el fichero: se queja de que Ruby no lo ve, que es otra cosa.
+ *
+ * Se separa de nx_existe porque file? tiene que seguir contestando que no a un
+ * directorio: en la tarjeta se mira con stat y solo vale un fichero regular.
+ * Dentro del contenedor se contesta como exists?, y ahi si hay un estiramiento:
+ * PhysFS diria que "Graphics" existe y este metodo diria que es un fichero. Se
+ * asume a proposito -quien pregunta por File.file? en estos juegos siempre esta
+ * preguntando por un recurso con extension- y queda escrito aqui por si algun
+ * dia una carpeta del contenedor se cuela por este camino.
+ */
+static VALUE nx_es_fichero(int argc, VALUE *argv, VALUE self)
+{
+    VALUE ruta;
+    const char *p;
+    struct stat st;
+
+    (void)self;
+    rb_scan_args(argc, argv, "1", &ruta);
+
+    ruta = rb_get_path(ruta);
+    p = RSTRING_PTR(ruta);
+    if (!p || !*p)
+        return Qfalse;
+
+    if (stat(p, &st) == 0)
+        return S_ISREG(st.st_mode) ? Qtrue : Qfalse;
+
+    if (!shState)
+        return Qfalse;
+
+    if (shState->fileSystem().exists(p))
+        return Qtrue;
+
+    {
+        const char *real = shState->fileSystem().desensitize(p);
+        if (real && real != p && shState->fileSystem().exists(real))
+            return Qtrue;
+    }
+
+    return Qfalse;
+}
+
 void nx_ficheros_init(void)
 {
     VALUE mFileTest = rb_const_get(rb_cObject, rb_intern("FileTest"));
@@ -99,5 +155,8 @@ void nx_ficheros_init(void)
     rb_define_singleton_method(rb_cFile, "exist?", RUBY_METHOD_FUNC(nx_existe), -1);
     rb_define_singleton_method(rb_cFile, "exists?", RUBY_METHOD_FUNC(nx_existe), -1);
 
-    nx_boot_trace("[fs] FileTest.exist? contesta tambien por el contenedor");
+    rb_define_module_function(mFileTest, "file?", RUBY_METHOD_FUNC(nx_es_fichero), -1);
+    rb_define_singleton_method(rb_cFile, "file?", RUBY_METHOD_FUNC(nx_es_fichero), -1);
+
+    nx_boot_trace("[fs] FileTest.exist? y File.file? contestan tambien por el contenedor");
 }
