@@ -136,6 +136,7 @@
 !/docs/capturas/pokemon-iberia-hito-*.png
 !/docs/capturas/pokemon-titan-hito-*.png
 !/docs/capturas/pokemon-titan-intro-profesora.png
+!/docs/capturas/pokemon-uranium-hito-*.png
 # Y el .nro del empaquetador arrancando en el emulador por primera vez.
 !/docs/capturas/pokemon-reborn-empaquetador-titulo.png
 # Y la prueba del fallo que motivo el cambio de nx-teclado.rb: la pantalla que

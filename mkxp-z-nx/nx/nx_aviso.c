@@ -34,6 +34,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <dirent.h>
+#include <strings.h>
 
 #include "nx_juego.h"
 
@@ -96,6 +98,57 @@ static int existe(const char *ruta, int *es_dir, u64 *tam)
     if (es_dir) *es_dir = S_ISDIR(st.st_mode) ? 1 : 0;
     if (tam)    *tam = (u64)st.st_size;
     return 1;
+}
+
+/* El archivo cifrado del juego, se llame como se llame.
+ *
+ * NX_LLAVE es "Game.rgssad" porque ese es el nombre por omision de mkxp-z
+ * (config.cpp: execName = "Game"; sharedstate.cpp monta execName +
+ * gameArchExt()). Pero un perfil puede cambiar execName, y hay una razon de
+ * peso para hacerlo: Pokemon Uranium pregunta por su archivo POR SU NOMBRE
+ * dentro de sus propios scripts —cinco veces, FileTests v17 lineas 356, 367,
+ * 394 y 425 y PSystem_System linea 5, todas safeExists?("./Uranium.rgssad")—
+ * y decide con eso si lee sus datos del archivo o del sistema de ficheros.
+ * Con el archivo renombrado a Game.rgssad, el juego concluye que no hay
+ * archivo, abre sus .dat con File.open y se muere con
+ * "undefined method `fgetdw' for #<FileInt>", porque el FileInt de PhysFS no
+ * es el File al que el juego le anadio FileInputMixin. Medido en el emulador
+ * el 9 de septiembre de 2026.
+ *
+ * Asi que esta pantalla no puede exigir un nombre fijo: lo que tiene que
+ * comprobar es que HAYA un archivo de la familia RGSSAD. Se busca primero el
+ * nombre de siempre —la llave de ocho bytes que escribe el empaquetador— y si
+ * no esta, se recorre la carpeta buscando cualquier .rgssad, .rgss2a o
+ * .rgss3a. Devuelve 1 y deja el nombre en `nombre`; 0 si no hay ninguno. */
+static int busca_archivo(char *nombre, size_t n)
+{
+    static const char *exts[] = { ".rgssad", ".rgss2a", ".rgss3a" };
+    DIR *d;
+    struct dirent *e;
+    u64 ignora;
+    size_t i;
+
+    if (existe(NX_LLAVE, 0, &ignora)) {
+        snprintf(nombre, n, "%s", NX_LLAVE);
+        return 1;
+    }
+
+    d = opendir(".");
+    if (!d)
+        return 0;
+    while ((e = readdir(d)) != NULL) {
+        size_t largo = strlen(e->d_name);
+        for (i = 0; i < sizeof(exts) / sizeof(exts[0]); i++) {
+            size_t le = strlen(exts[i]);
+            if (largo > le && strcasecmp(e->d_name + largo - le, exts[i]) == 0) {
+                snprintf(nombre, n, "%s", e->d_name);
+                closedir(d);
+                return 1;
+            }
+        }
+    }
+    closedir(d);
+    return 0;
 }
 
 /* Revision del contenedor.
@@ -412,8 +465,11 @@ int nx_revision_arranque(void)
      * escribe; si no esta, el juego arranca y muere a los veinte segundos, y
      * eso es exactamente lo que esta pantalla existe para no repetir. */
     if (paquete == 1) {
-        if (existe(NX_LLAVE, 0, &ignora)) {
-            anota("[ OK  ] " NX_LLAVE " (la llave que hace que el juego lea del contenedor)");
+        char archivo[64];
+        if (busca_archivo(archivo, sizeof(archivo))) {
+            snprintf(linea, sizeof(linea),
+                     "[ OK  ] %s (hace que el juego lea del contenedor)", archivo);
+            anota(linea);
         } else {
             anota("[FALTA] " NX_LLAVE "      sin el, el juego no mira dentro del contenedor");
             if (!motivo[0])

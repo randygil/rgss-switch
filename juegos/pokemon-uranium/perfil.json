@@ -11,7 +11,9 @@
   },
   "motor": "rgss1",
   "estado": "sin-probar",
-  "mkxp": {},
+  "mkxp": {
+    "execName": "Uranium"
+  },
   "preload": [
     "nx-uranium-audio.rb"
   ],

@@ -330,6 +330,101 @@ module NXUranioSecciones
     end
   RUBY
 
+
+  # 0055 "CJK Utilities": el module WordRegexp, en UTF-8
+  #
+  # Este NO es de audio, pero mata el arranque igual y sale del mismo sitio: un
+  # fuente escrito para Ruby 1.8, donde toda expresion regular era una secuencia
+  # de BYTES. El modulo declara once literales con \xNN -las clases de caracteres
+  # chinos, japoneses y coreanos- y otros cuatro con letras acentuadas y griegas
+  # escritas tal cual, y luego los MEZCLA en expresiones dinamicas:
+  #
+  #     WesternLatinWord = /(?:#{LatinCharSet}|#{GreekCharSet}|#{FullWidthLatin}|
+  #                          [0-9]|#{FullWidthNumber})+\-?/     (linea 96)
+  #
+  # En 1.8 eso era todo bytes y casaba. En 3.1 los de \xNN son ASCII-8BIT y los
+  # de letras son UTF-8, y juntarlos da, medido en el emulador en la primera
+  # vuelta:
+  #
+  #   Section054:96:in `<module:WordRegexp>':
+  #     encoding mismatch in dynamic regexp : UTF-8 and ASCII-8BIT (RegexpError)
+  #
+  # Un error de EJECUCION, no de compilacion: por eso el censo -que compilaba las
+  # 260 secciones- no lo vio, y por eso NXFuente tampoco puede verlo. Es mas: el
+  # /n que NXFuente le anade a la linea 94 (FullWidthNumber, el unico byte-regex
+  # que venia sin el) es lo que hace falta para COMPILAR y no cambia nada aqui,
+  # porque la linea 93 ya traia el suyo.
+  #
+  # No se puede arreglar poniendo /n a los otros: Ruby 3.1 rechaza en compilacion
+  # un /.../n con caracteres no ASCII sin escapar ("has a non escaped non ASCII
+  # character in non ASCII-8BIT script"). Asi que se va por el otro lado: se
+  # reescriben los once literales de bytes como clases de CARACTERES Unicode, con
+  # lo que todo el modulo queda en UTF-8 y las dinamicas se construyen solas.
+  #
+  # Y no es una aproximacion. Cada rango se saco de los propios bytes y se
+  # comprobo uno a uno contra el literal original recorriendo U+0020..U+FFFF
+  # entero: los once dan EXACTAMENTE el mismo resultado (tmp/uranium-prueba.rb).
+  # Encima ahora casan caracteres y no bytes, que es lo que el modulo queria
+  # decir: `WordRegexp::CJK.match(text)` sobre un texto UTF-8.
+  CJK_WORDREGEXP = <<~'RUBY'
+    module WordRegexp
+      HanZi = /[一-龥]/
+      Kana = /[ぁ-んァ-ヶー]/
+      HangulSyllables = /[가-힯]/
+      HangulJamo = /[ᄀ-ᇿ]/
+      HangulJamoExtendedA = /[ꥠ-꥿]/
+      HangulJamoExtendedB = /[ힰ-퟿]/
+      HangulCompatibilityJamo = /[ㄱ-㆏]/
+
+      Hangul = /(?:#{HangulSyllables}|#{HangulJamo}|#{HangulJamoExtendedA}|#{HangulJamoExtendedB}|#{HangulCompatibilityJamo})/
+
+      CJK = /(#{HanZi}|#{Kana}|#{Hangul})/
+
+      LatinCharSet = /[a-zA-ZÀ-ÿĀ-ſ]/
+      FullWidthLatin = /[Ａ-Ｚａ-ｚ]/
+      FullWidthNumber = /[０-９]/
+      GreekCharSet = /[Ά-ώ]/
+      WesternLatinWord = /(?:#{LatinCharSet}|#{GreekCharSet}|#{FullWidthLatin}|[0-9]|#{FullWidthNumber})+\-?/
+
+      NotAllowedAtStartSet = /[\)\]\}>\.,\!?;:\-~"\'%]/
+      NotAllowedAtStartFullWidth = /[’”…›、。〉》」』】〕〗﹞！），－：；＞？］～]/
+      NotAllowedAtStart = /(?:#{NotAllowedAtStartSet}|#{NotAllowedAtStartFullWidth})/
+
+      NotAllowedAtEndSet = /[\(\[\{<\$@]/
+      NotAllowedAtEndFullWidth = /[‘“‹〈《「『【〔〖﹝﹤（＜]/
+      NotAllowedAtEnd = /(?:#{NotAllowedAtEndSet}|#{NotAllowedAtEndFullWidth})/
+
+      WordRegexp = /#{NotAllowedAtEnd}*(#{HanZi}|#{Kana}|#{Hangul}|#{WesternLatinWord}|\S)#{NotAllowedAtStart}*/
+    end
+  RUBY
+
+  # Se sustituye SOLO el modulo, no la seccion entera: lo que hay alrededor
+  # -la tabla RecommendedFonts, getFont y requireCJKFont?- es del juego y
+  # funciona. El bloque va de la linea "  module WordRegexp" al primer "  end"
+  # con esa misma sangria.
+  def self.parche_cjk(codigo)
+    # El fuente llega del motor en UTF-8, pero de un Marshal.load directo de
+    # Scripts.rxdata sale en ASCII-8BIT -esos .rxdata los escribio RPG Maker XP
+    # con Ruby 1.8 y no llevan etiqueta de codificacion-. Sin esto, unir sus
+    # lineas con las del bloque nuevo da Encoding::CompatibilityError.
+    src = codigo.to_s.dup.force_encoding("UTF-8")
+    src = src.scrub("?") unless src.valid_encoding?
+    lineas = src.lines
+    ini = lineas.index { |l| l =~ /\A\s*module\s+WordRegexp\s*\z/ }
+    return nil if ini.nil?
+    sangria = lineas[ini][/\A\s*/]
+    fin = nil
+    ((ini + 1)...lineas.size).each do |i|
+      if lineas[i] == "#{sangria}end\n" || lineas[i].rstrip == "#{sangria}end"
+        fin = i
+        break
+      end
+    end
+    return nil if fin.nil?
+    nuevo = CJK_WORDREGEXP.lines.map { |l| l.strip.empty? ? l : sangria + l }
+    (lineas[0...ini] + nuevo + lineas[(fin + 1)..-1].to_a).join
+  end
+
   # Se compara por nombre NORMALIZADO —minusculas y sin nada que no sea letra o
   # numero— porque el nombre llega tal cual lo escribio RPG Maker XP dentro de
   # Scripts.rxdata: "RGSS Linker" y "F-mod main script" hoy, pero un espacio de
@@ -350,6 +445,16 @@ module NXUranioSecciones
 
   def self.sustituto(nombre)
     TABLA[normaliza(nombre)]
+  end
+
+  # Los que no se sustituyen enteros: se les cambia un trozo y siguen su camino
+  # normal por NXFuente.
+  PARCHES = { "cjkutilities" => :parche_cjk }.freeze
+
+  def self.parche(nombre, codigo)
+    m = PARCHES[normaliza(nombre)]
+    return nil unless m
+    send(m, codigo)
   end
 end
 
@@ -376,7 +481,18 @@ if defined?(NXFuente) && NXFuente.respond_to?(:transforma)
         if sust
           NX.log("[uranio] seccion #{nombre.inspect} SUSTITUIDA " \
                  "(#{codigo.to_s.lines.size} lineas de FmodEx -> #{sust.lines.size} de la capa nativa)")
+          # El repaso tardio de nx-ruby18.rb corre DENTRO de transforma, y estas
+          # dos secciones se saltan el original: hay que llamarlo igual o entre
+          # la 248 y la 251 no se repondria el Input del motor, que el juego
+          # pisa en cada reapertura de `module Input`.
+          NX18Tarde.revisar if defined?(NX18Tarde)
           return sust
+        end
+
+        parcheado = NXUranioSecciones.parche(nombre, codigo.to_s)
+        if parcheado
+          NX.log("[uranio] seccion #{nombre.inspect} PARCHEADA (module WordRegexp reescrito en UTF-8)")
+          codigo = parcheado
         end
         nx_transforma_sin_uranio(nombre, codigo)
       end
