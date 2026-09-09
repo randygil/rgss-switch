@@ -223,7 +223,13 @@ NX.log("[nx] raiz sin dispositivo: #{NX::RAIZ.inspect}")
 # omision, que en homebrew es la tarjeta, y para Ruby empieza por "/" y por eso
 # es absoluta. El valor se calcula una vez porque el motor hace su chdir antes
 # de arrancar el interprete y despues nadie mueve el directorio de trabajo.
-module Dir
+#
+# `class Dir` y no `module Dir`: Dir es una CLASE, y reabrirla con `module`
+# levanta un TypeError que se lleva por delante el resto de este fichero -y con
+# el, $LOAD_PATH, Marshal.neverload y el reportero de mapa- sin mas rastro que
+# un mkxp-ruby.log que se corta a la mitad. Medido en el primer arranque de
+# Reborn: el registro acababa en "[nx] raiz sin dispositivo" y no seguia.
+class Dir
   class << self
     alias_method :nx_pwd_con_dispositivo, :pwd
     def pwd

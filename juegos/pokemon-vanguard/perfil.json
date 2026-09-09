@@ -11,7 +11,7 @@
     ]
   },
   "motor": "ruby31",
-  "estado": "sin-probar",
+  "estado": "jugable",
   "mkxp": {},
   "preload": [],
   "sueltos": [
@@ -27,5 +27,5 @@
     "DataExport"
   ],
   "rubyLoadpath": [],
-  "notas": "Sin probar en la consola (2026-09-09). El caso mas limpio del censo: Essentials v20.1 sobre mkxp-z con Ruby 3.1 (x64-msvcrt-ruby310.dll), 432 scripts y 176.701 lineas que compilan TODAS con 3.1, cero Win32API, cero require. Data/Scripts TIENE que ir suelta: su Data/Scripts.rxdata son 583 bytes y no son los scripts, es el cargador de v20+ que hace Dir.foreach + File.open sobre esa carpeta, y Ruby no ve dentro de PhysFS; los scripts de verdad son 304 ficheros sueltos ahi. Igual Plugins/ (162 ficheros, 33 plugins) y Mods/. Data/PluginScripts.rxdata SI se queda dentro del contenedor: 005_PluginManager.rb:616 lo reescribe con File.open(..., 'wb') si cree que Plugins/ cambio, pero fuera del modo depuracion no recompila mientras el fichero exista y FileTest.exist? si ve dentro del zip. SI EN EL REGISTRO SALE UN FALLO AL ESCRIBIR Data/PluginScripts.rxdata, la solucion es sacarlo suelto junto a Data/Scripts. Su Title= lleva DOS espacios y por eso la deteccion usa un mas. Declara midiSoundFont soundfont.sf2 y ese fichero NO existe en el juego -ni hay un solo .mid entre sus 5.006 ficheros de audio-, asi que el empaquetador no copia esa clave y lo dice. dist/, PBS/, DataBackup/, DataExport/ y Credits/ se excluyen: 261 MB de material de desarrollo. 1,5 GB utiles."
+  "notas": "Probado en el emulador el 2026-09-09 y JUGABLE: titulo, partida nueva, la introduccion entera, el nombre en la rejilla, el primer mapa (81 Destiny's House) con el jugador andando, el menu de pausa y partida guardada (File A.rxdata en la carpeta del juego). El motor esta listo en 4,8 s; el titulo sale a los ~60 s de reloj y el primer mapa a los ~337 s pasando la introduccion a botonazos. Tres cosas se arreglaron por su culpa y valen para todos: nx-teclado.rb (el ajuste textinput significa lo contrario en v20.1 que en v21.1, asi que ya no se elige la rama: PokemonEntryScene pasa a ser la rejilla), Dir.pwd sin dispositivo en nx-compat.rb (022_Main/999_Main.rb:37 hace File.expand_path('Mods', Dir.pwd) y salia la ruta duplicada) y File.file? en nx_ficheros.cpp (un plugin comprueba asi un grafico que esta dentro de datos.zip). Data/PluginScripts.rxdata se quedo DENTRO del contenedor y no dio ningun fallo de escritura: la sospecha de estas notas no se cumplio. El menu de pausa se abre con Input::ACTION (tecla C en el emulador), es una fila horizontal y Save esta a una DERECHA. Queda por probar un combate. Detalle: docs/pruebas/pokemon-vanguard.md."
 }

@@ -109,6 +109,9 @@
 !/docs/test-results-ryujinx.txt
 !/docs/test-results-hardware-real.txt
 !/docs/censo-juegos.md
+# Un fichero por juego encendido: que se empaqueto, cada vuelta (sintoma ->
+# linea del registro -> causa -> arreglo), tiempos y lo que queda.
+!/docs/pruebas/
 # Los h4-*.log son el diario de las 40 iteraciones de depuracion: utiles en
 # local, ruido en un repo. docs/consola/ trae partidas .rxdata del juego.
 !/docs/capturas/
@@ -117,6 +120,13 @@
 !/docs/capturas/cargar-b06.png
 !/docs/capturas/nom2-b-letras.png
 !/docs/capturas/pokemon-anil-regresion-motor-generico.png
+# Los hitos de las primeras partidas de Vanguard y Reborn en el emulador. Solo
+# los hitos: las capturas de las vueltas fallidas se quedan en el disco.
+!/docs/capturas/pokemon-vanguard-hito-*.png
+!/docs/capturas/pokemon-reborn-hito-*.png
+# Y la prueba del fallo que motivo el cambio de nx-teclado.rb: la pantalla que
+# pide un teclado que no hay.
+!/docs/capturas/pokemon-vanguard-nombre-teclado.png
 # Las otras 168 capturas son 236 MB de fotogramas de depuracion.
 
 #--- Los simbolos de cada compilacion -----------------------------------------

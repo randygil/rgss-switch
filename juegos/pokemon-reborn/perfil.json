@@ -10,9 +10,11 @@
     ]
   },
   "motor": "ruby31",
-  "estado": "sin-probar",
+  "estado": "jugable",
   "mkxp": {},
-  "preload": [],
+  "preload": [
+    "nx-reborn.rb"
+  ],
   "sueltos": [
     "Scripts",
     "patch",
@@ -24,5 +26,5 @@
     "stdlib",
     "gems"
   ],
-  "notas": "Sin probar en la consola (2026-09-09). Ruby 3.1 (x64-msvcrt-ruby310.dll), pero su Game.exe no es mkxp-z 2.4.2 de serie: lleva dentro las modificaciones de Splendide Imaginarius. 193 scripts y 317.428 lineas -el corpus mas grande del censo- y compilan todos. Su Data/Scripts.rxdata son 107 bytes: eval(File.read('Scripts/Reborn/Bootstrap.rb')) y eval(File.read('Scripts/ScriptLoader.rb')). Asi que Scripts/ va suelta o el juego no arranca. stdlib/ (1.010 ficheros, la biblioteca estandar de Ruby 3.1 en fuente) y gems/ son suyas y van sueltas Y en rubyLoadpath, o el require no las encuentra. patch/ es lo que su mkxp.json declara en 'patches', una clave que mkxp-z 2.4.2 no tiene; hoy la carpeta viene vacia y no molesta, pero los mods del jugador no funcionaran. Cuatro require: zlib y socket (runtime/lib/socket.rb ya lo cubre) y discord y poke-api-v2, que salen de gems/. gems/ trae discord.so, una EXTENSION NATIVA DE WINDOWS que en Horizon no se puede cargar: 'require discord' y 'require poke-api-v2' van a tener que caer en un postizo, como socket.rb. Su mkxp.json es JSON5 de verdad: comas finales y bindingNames con once botones (d/e/f ademas de los ocho). Trae libTolk.dll y nvdaControllerClient.dll (lector de pantalla, 14 Win32API en 4 ficheros) y discord_game_sdk.dll: no viajan, son .dll. Audio entero en ogg, 2.637 ficheros. 0,68 GB."
+  "notas": "Probado en el emulador el 2026-09-09 y JUGABLE: titulo, introduccion, el nombre en la rejilla, el viaje en tren, Lower Peridot Ward con el jugador andando, el menu de pausa y partida guardada (Game.rxdata, 377 KB). El motor esta listo en 4,7 s, los 193 scripts tardan 85 s mas y el primer mapa jugable llega a los 8,6 minutos de introduccion. HIZO FALTA UN POSTIZO POR CADA COSA QUE SU mkxp-z -el de Splendide Imaginarius- tiene y el de serie no: System.file_exist? (lo usa RTP para resolver CADA imagen), Input::D/E/F (once botones en bindingNames; se definen fuera del mapa de botones para que contesten false siempre), TilemapUtils.updateAutoTiles (se llama en cada fotograma del mapa) y Audio.se_play_position (por ahi pasa TODO efecto de sonido). Mas discord.rb y poke-api-v2.rb, que el censo ya anticipaba, y un rubygems.rb postizo con solo Gem::Version: el RubyGems que trae en stdlib/ pide rbconfig -que solo esta en su carpeta de mingw32- y monitor.so, que es una extension nativa que este interprete no lleva. Su teclado NO lo arregla el shim generico: Essentials v19 tiene una sola clase de entrada de texto y decide dentro con $Settings.useKeyboard?, asi que se redefine el metodo. La clave patches SI la entiende este motor ([boot] 10a- parche montado: patch), aunque System.file_exist? postizo no mira la superposicion. Menu de pausa con la tecla X (Input::B) y Save a dos ABAJO. Queda un combate por probar. Detalle: docs/pruebas/pokemon-reborn.md."
 }
