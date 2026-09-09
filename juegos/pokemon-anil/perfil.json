@@ -1,0 +1,37 @@
+{
+  "slug": "pokemon-anil",
+  "nombre": "Pokémon Añil 4.0",
+  "autor": "Port a Nintendo Switch",
+  "titleid": "05414E494C000000",
+  "detectar": {
+    "titulo": "^Pokemon A[ñn]il"
+  },
+  "motor": "ruby31",
+  "estado": "jugable",
+  "mkxp": {
+    "windowTitle": "Pokémon Añil 4.0",
+    "defScreenW": 512,
+    "defScreenH": 384,
+    "SESourceCount": 12,
+    "BGMTrackCount": 1,
+    "bindingNames": {
+      "c": "Aceptar (A)",
+      "b": "Cancelar (B)",
+      "a": "Accion (Y)",
+      "x": "Correr (X)",
+      "y": "Menu (ZL)",
+      "z": "Especial (ZR)",
+      "l": "Anterior (L)",
+      "r": "Siguiente (R)"
+    }
+  },
+  "preload": [
+    "nx-tira.rb",
+    "nx-centro.rb",
+    "nx-bolas.rb"
+  ],
+  "sueltos": [],
+  "excluir": [],
+  "rubyLoadpath": [],
+  "notas": "El primer juego del port y el unico jugable de punta a punta hoy (2026-09-09). El slug se fija a mano -del Title= saldria igual, pero hay instalaciones en tarjetas ajenas que no se pueden mover- y el title id 05414E494C000000 (ANIL en hexadecimal) es el que ya llevan los NSP instalados. SESourceCount 12 porque con 6 los sonidos se cortaban en los combates con el Deluxe Battle Kit. Los tres shims de lib/ son optimizaciones de plugins suyos: comprueban que la clase exista antes de instalarse, asi que no estorbarian en otro juego, pero solo sirven en este. No declara midiSoundFont: el juego no usa ningun MIDI y asi fluidsynth no es una dependencia."
+}

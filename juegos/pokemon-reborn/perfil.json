@@ -1,0 +1,28 @@
+{
+  "slug": "pokemon-reborn",
+  "nombre": "Pokémon Reborn",
+  "autor": "Reborn Team",
+  "titleid": null,
+  "detectar": {
+    "titulo": "^Pokemon Reborn$",
+    "ficheros": [
+      "Scripts/ScriptLoader.rb"
+    ]
+  },
+  "motor": "ruby31",
+  "estado": "sin-probar",
+  "mkxp": {},
+  "preload": [],
+  "sueltos": [
+    "Scripts",
+    "patch",
+    "stdlib",
+    "gems"
+  ],
+  "excluir": [],
+  "rubyLoadpath": [
+    "stdlib",
+    "gems"
+  ],
+  "notas": "Sin probar en la consola (2026-09-09). Ruby 3.1 (x64-msvcrt-ruby310.dll), pero su Game.exe no es mkxp-z 2.4.2 de serie: lleva dentro las modificaciones de Splendide Imaginarius. 193 scripts y 317.428 lineas -el corpus mas grande del censo- y compilan todos. Su Data/Scripts.rxdata son 107 bytes: eval(File.read('Scripts/Reborn/Bootstrap.rb')) y eval(File.read('Scripts/ScriptLoader.rb')). Asi que Scripts/ va suelta o el juego no arranca. stdlib/ (1.010 ficheros, la biblioteca estandar de Ruby 3.1 en fuente) y gems/ son suyas y van sueltas Y en rubyLoadpath, o el require no las encuentra. patch/ es lo que su mkxp.json declara en 'patches', una clave que mkxp-z 2.4.2 no tiene; hoy la carpeta viene vacia y no molesta, pero los mods del jugador no funcionaran. Cuatro require: zlib y socket (runtime/lib/socket.rb ya lo cubre) y discord y poke-api-v2, que salen de gems/. gems/ trae discord.so, una EXTENSION NATIVA DE WINDOWS que en Horizon no se puede cargar: 'require discord' y 'require poke-api-v2' van a tener que caer en un postizo, como socket.rb. Su mkxp.json es JSON5 de verdad: comas finales y bindingNames con once botones (d/e/f ademas de los ocho). Trae libTolk.dll y nvdaControllerClient.dll (lector de pantalla, 14 Win32API en 4 ficheros) y discord_game_sdk.dll: no viajan, son .dll. Audio entero en ogg, 2.637 ficheros. 0,68 GB."
+}

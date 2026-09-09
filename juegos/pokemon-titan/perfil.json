@@ -1,0 +1,17 @@
+{
+  "slug": "pokemon-titan",
+  "nombre": "Pokémon Titán",
+  "autor": "Port a Nintendo Switch",
+  "titleid": null,
+  "detectar": {
+    "titulo": "^Pokemon Titan$"
+  },
+  "motor": "ruby18",
+  "estado": "sin-probar",
+  "mkxp": {},
+  "preload": [],
+  "sueltos": [],
+  "excluir": [],
+  "rubyLoadpath": [],
+  "notas": "Sin probar en la consola (2026-09-09). Mismo caso que Iberia hasta en el Editor.ini enganoso: mkxp-z con Ruby 1.8.7, sin mkxp.json, con Animations/ y animmaker.exe."
+}

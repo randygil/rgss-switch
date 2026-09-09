@@ -1,0 +1,17 @@
+{
+  "slug": "pokemon-z",
+  "nombre": "Pokémon Z",
+  "autor": "Port a Nintendo Switch",
+  "titleid": null,
+  "detectar": {
+    "titulo": "^Pokemon Z$"
+  },
+  "motor": "ruby18",
+  "estado": "sin-probar",
+  "mkxp": {},
+  "preload": [],
+  "sueltos": [],
+  "excluir": [],
+  "rubyLoadpath": [],
+  "notas": "Sin probar en la consola (2026-09-09). mkxp-z con Ruby 1.8.7: scripts de 1.8 contra un motor de 3.1.7. Su preload.rb redefine Zlib::Inflate.inflate y Zlib::Deflate.deflate para llamar a MKXP.zinflate/zdeflate, que es la API de JoiPlay; nx-compat.rb las define delegando en el zlib de verdad de Ruby, y va delante suyo en preloadScript para que la cadena no se corte. Su mkxp.json trae subImageFix false y enableBlitting true, que pisan la base a proposito. En la raiz hay un Scripts.rxdata suelto que es un resto: el que carga el juego es Data/Scripts.rxdata."
+}

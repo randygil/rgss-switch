@@ -1,0 +1,20 @@
+{
+  "slug": "pokemon-uranium",
+  "nombre": "Pokémon Uranium",
+  "autor": "Port a Nintendo Switch",
+  "titleid": null,
+  "detectar": {
+    "titulo": "^Pokemon Uranium$",
+    "ficheros": [
+      "Uranium.rgssad"
+    ]
+  },
+  "motor": "rgss1",
+  "estado": "sin-probar",
+  "mkxp": {},
+  "preload": [],
+  "sueltos": [],
+  "excluir": [],
+  "rubyLoadpath": [],
+  "notas": "Sin probar en la consola (2026-09-09). El unico que no es mkxp-z: Uranium.exe son 110 KB con 'RGSS Player' dentro y RGSS102E.dll al lado, o sea Ruby 1.8.1. Sus datos van cifrados en Uranium.rgssad (33,9 MB): 254 entradas y TODAS son Data/, mientras que Graphics/, Audio/ y Fonts/ van sueltos; por eso en modo contenedor datos.zip lleva solo esos tres. NO se le pone la llave de ocho bytes: ya trae un RGSSAD de verdad, y ponerla encima seria sustituir un archivo con datos por uno vacio. mkxp-z busca sus ficheros por execName (config.cpp abre execName + '.ini', sharedstate.cpp monta execName + '.rgssad', ambos 'Game' por omision), asi que el empaquetador copia Uranium.ini tambien como Game.ini y Uranium.rgssad como Game.rgssad -una sola copia, con el nombre bueno-. Lo que de verdad lo aleja no es nada de esto: es que su clase Audio entera pasa por FmodEx a traves de 'RGSS Linker.dll' y 'RGSS FmodEx.dll', DLL nativas que en Horizon no existen, y eso hay que reescribirlo contra el Audio de mkxp-z, no taparlo con un Win32API mudo. 166 Win32API en 29 ficheros; solo 2 lineas de sintaxis de 1.8 en 260 scripts."
+}

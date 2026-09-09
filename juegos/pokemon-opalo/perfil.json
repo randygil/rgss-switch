@@ -1,0 +1,17 @@
+{
+  "slug": "pokemon-opalo",
+  "nombre": "Pokémon Ópalo",
+  "autor": "Port a Nintendo Switch",
+  "titleid": null,
+  "detectar": {
+    "titulo": "^Pokemon Opalo$"
+  },
+  "motor": "ruby18",
+  "estado": "sin-probar",
+  "mkxp": {},
+  "preload": [],
+  "sueltos": [],
+  "excluir": [],
+  "rubyLoadpath": [],
+  "notas": "Sin probar en la consola (2026-09-09): es el juego con el que Randy descubrio que el empaquetador viejo exigia ficheros de Anil. Su Game.exe es un mkxp-z con Ruby 1.8.7 embebido, asi que sus scripts estan escritos para 1.8 y este motor lleva 3.1.7: puede no arrancar. Su mkxp.json es el de ejemplo de mkxp, con todo comentado, de modo que la capa 2 sale vacia. Los scripts van en Data/Scripts.rxdata, no sueltos, asi que no hace falta nada en sueltos."
+}

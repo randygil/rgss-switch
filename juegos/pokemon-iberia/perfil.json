@@ -1,0 +1,17 @@
+{
+  "slug": "pokemon-iberia",
+  "nombre": "Pokémon Iberia",
+  "autor": "Port a Nintendo Switch",
+  "titleid": null,
+  "detectar": {
+    "titulo": "^Pokemon Iberia$"
+  },
+  "motor": "ruby18",
+  "estado": "sin-probar",
+  "mkxp": {},
+  "preload": [],
+  "sueltos": [],
+  "excluir": [],
+  "rubyLoadpath": [],
+  "notas": "Sin probar en la consola (2026-09-09). Mismo Game.exe que Opalo y Titan: mkxp-z con Ruby 1.8.7, scripts de 1.8 contra un motor de 3.1.7. No trae mkxp.json. Trae Animations/ -que se copia suelta, no es una de las cinco de recursos- y animmaker.exe, que no viaja: los .exe se descartan. OJO con la deteccion: su Editor.ini tambien tiene seccion [Game] y dice Title=Pokemon Essentials; el bueno es Game.ini."
+}

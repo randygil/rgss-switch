@@ -1,0 +1,15 @@
+{
+  "slug": null,
+  "nombre": null,
+  "autor": "Port a Nintendo Switch",
+  "titleid": null,
+  "detectar": {},
+  "motor": null,
+  "estado": "sin-probar",
+  "mkxp": {},
+  "preload": [],
+  "sueltos": [],
+  "excluir": [],
+  "rubyLoadpath": [],
+  "notas": "Perfil de reserva: lo que se usa cuando ningun perfil reconoce el juego. No fija nada. El slug, el nombre y el titulo de la ventana salen del Title= de su .ini, y la familia de motor de sus DLL y de las cadenas de su .exe. Empaqueta igual; que arranque o no es lo que hay que ir a comprobar."
+}
