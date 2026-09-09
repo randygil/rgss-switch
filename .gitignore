@@ -34,6 +34,9 @@
 !/PUBLICAR.md
 !/VERSION
 !/GUIA.md
+!/CONVENCIONES.md
+!/juegos/
+!/empaquetar.sh
 !/Empaquetar.ps1
 !/Empaquetar.cmd
 !/.github/
