@@ -47,10 +47,37 @@ if [ "$COMPILAR" = "1" ]; then
     echo "compilado: $(ls -l "$MK/rgss-switch.nro" | awk '{print $5}') bytes"
 fi
 
-# El .nro del juego es una copia del motor: en la entrega el empaquetador le
-# rehace la seccion ASET con el icono y el nombre del juego, y aqui no hace
-# falta porque lo que se esta probando es el cuerpo del binario.
-cp "$MK/rgss-switch.nro" "$SD/$SLUG.nro" || exit 1
+# El .nro del juego NO puede ser una copia del motor, y esto costo una tarde.
+#
+# El rgss-switch.nro que sale de make lleva un romfs VACIO: tiene que llevarlo,
+# porque pedir un romfs que el binario no tiene mata a Ryujinx en
+# VirtualFileSystem.GetRomFs (6128ea3). Pero vacio quiere decir SIN juego.txt, y
+# en el emulador ese fichero es la unica pista que le queda al motor para
+# encontrar su juego: Ryujinx lanza los .nro con argc = 0 -medido-, asi que el
+# paso (a) de CONVENCIONES 3, el directorio de argv[0], no contesta nada.
+# Copiando el .nro tal cual, lo unico que se probaba una y otra vez era la
+# pantalla de aviso de nx_aviso.c.
+#
+# Asi que el .nro del slug se rehace aqui con un romfs de un solo fichero, que
+# es lo mismo que el empaquetador mete en el romfs del NSP: una linea
+# "sdmc:/switch/<slug>" en UTF-8 SIN BOM y con salto de linea al final. El motor
+# se salta el BOM desde b11, pero el acuerdo dice sin el y no hay por que
+# gastarle esa tolerancia.
+#
+# Las rutas van relativas y con un cd delante a proposito: elf2nro es un
+# programa de Windows y las rutas /c/... de esta shell no significan nada para
+# el. $SD ya es "C:/...", que si entiende.
+ROMFS="romfs-$SLUG"
+(
+    cd "$MK" || exit 1
+    rm -rf "$ROMFS" && mkdir -p "$ROMFS" || exit 1
+    printf 'sdmc:/switch/%s\n' "$SLUG" > "$ROMFS/juego.txt"
+    C:/devkitPro/tools/bin/elf2nro.exe rgss-switch.elf "$SD/$SLUG.nro" \
+        --icon=../nsp/icono.jpg --nacp=rgss-switch.nacp --romfsdir="$ROMFS" \
+        > /dev/null || exit 1
+    rm -rf "$ROMFS"
+) || { echo "FALLO al construir $SD/$SLUG.nro con elf2nro"; exit 1; }
+echo "romfs:/juego.txt dice sdmc:/switch/$SLUG"
 rm -f "$SD/mkxp-boot.log" "$SD/mkxp-debug.log" "$SD/mkxp-ruby.log" "$SD/errorlog.txt"
 echo "desplegado en $SD"
 
