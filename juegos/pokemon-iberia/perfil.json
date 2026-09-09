@@ -7,11 +7,11 @@
     "titulo": "^Pokemon Iberia$"
   },
   "motor": "ruby18",
-  "estado": "sin-probar",
+  "estado": "arranca",
   "mkxp": {},
   "preload": [],
   "sueltos": [],
   "excluir": [],
   "rubyLoadpath": [],
-  "notas": "Sin probar en la consola (2026-09-09). Mismo Game.exe que Opalo y Titan: mkxp-z con Ruby 1.8.7, scripts de 1.8 contra un motor de 3.1.7. No trae mkxp.json. Trae Animations/ -que se copia suelta, no es una de las cinco de recursos- y animmaker.exe, que no viaja: los .exe se descartan. OJO con la deteccion: su Editor.ini tambien tiene seccion [Game] y dice Title=Pokemon Essentials; el bueno es Game.ini."
+  "notas": "Probado en el emulador el 2026-09-09 y ARRANCA A LA PRIMERA, sin una sola vuelta de arreglo: los nueve arreglos que salieron de Opalo y de Z valen tal cual. Titulo, menu de carga, partida nueva, introduccion y la rejilla del nombre, con errorlog.txt sin crearse. Motor listo en 5,0 s y el juego dibujando a los 9,5 s. NXFuente: 168 secciones, 4 tocadas, 28 arreglos -las 28 lineas exactas del censo, con los tres break en cuerpo de metodo-. Animations/ suelta y PBS excluida, como decia el perfil, y el Editor.ini enganoso no engano a nadie. 38 Win32API pedidas, ninguna sin semantica, y una que SI se llama: kleinbitmap!version, o sea que pregunta de verdad por KleinBitmap.dll y sus efectos de bitmap salen sin aplicar. Los cuatro .mid no suenan (no hay soundfont). Detalle: docs/pruebas/pokemon-iberia.md."
 }

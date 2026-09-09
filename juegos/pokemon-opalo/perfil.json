@@ -7,11 +7,11 @@
     "titulo": "^Pokemon Opalo$"
   },
   "motor": "ruby18",
-  "estado": "sin-probar",
+  "estado": "no-arranca",
   "mkxp": {},
   "preload": [],
   "sueltos": [],
   "excluir": [],
   "rubyLoadpath": [],
-  "notas": "Sin probar en la consola (2026-09-09): es el juego con el que Randy descubrio que el empaquetador viejo exigia ficheros de Anil. Su Game.exe es un mkxp-z con Ruby 1.8.7 embebido, asi que sus scripts estan escritos para 1.8 y este motor lleva 3.1.7: puede no arrancar. Su mkxp.json es el de ejemplo de mkxp, con todo comentado, de modo que la capa 2 sale vacia. Los scripts van en Data/Scripts.rxdata, no sueltos, asi que no hace falta nada en sueltos."
+  "notas": "Probado en el emulador el 2026-09-09 y NO ARRANCA, aunque por poco: carga sus 214 secciones y muere en la 212, 'Meson Batalla', que construye 679 Pokemon EN EL NIVEL SUPERIOR para armar la plantilla del meson. Ahi se muere el PROCESO DEL EMULADOR entero -sin excepcion de Ruby, sin errorlog.txt, sin traza de invitado- siempre en la creacion numero 155, y se comprobo que no es la especie (esa misma creada la segunda sale bien), ni la memoria de Ruby (el monton esta plano), ni el tiempo, ni la cuenta de Pokemon (800 extra salen bien): puede ser cosa de Ryujinx y no del motor. De este juego salieron SEIS de los nueve arreglos de la familia, que son los que despues hicieron arrancar a Z, Iberia y Titan: la percha del recolector en binding-mri.cpp, StringInput#each_byte, String#getbyte/setbyte/bytesize repuestos tras el alias de Map - Klein.rb, el modulo Input devuelto al motor, LargePlane y el memorizador de los Data/*.dat. NXFuente hizo justo lo que el censo predijo: 3 secciones tocadas, 25 arreglos, 2,0 s. 34 Win32API pedidas, ninguna sin semantica. Detalle: docs/pruebas/pokemon-opalo.md."
 }

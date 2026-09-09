@@ -7,11 +7,11 @@
     "titulo": "^Pokemon Titan$"
   },
   "motor": "ruby18",
-  "estado": "sin-probar",
+  "estado": "arranca",
   "mkxp": {},
   "preload": [],
   "sueltos": [],
   "excluir": [],
   "rubyLoadpath": [],
-  "notas": "Sin probar en la consola (2026-09-09). Mismo caso que Iberia hasta en el Editor.ini enganoso: mkxp-z con Ruby 1.8.7, sin mkxp.json, con Animations/ y animmaker.exe."
+  "notas": "Probado en el emulador el 2026-09-09 y ARRANCA A LA PRIMERA, igual que Iberia y un poco mas lejos: titulo, menu de carga, partida nueva y la introduccion con la profesora hablando, sin una excepcion. Motor listo en 5,2 s, dibujando a los 9,7 s, NXFuente 167 secciones / 4 tocadas / 28 arreglos. Aqui se ve por primera vez EN PANTALLA lo que RtlMoveMemory se lleva por delante: junto a la profesora hay un sprite hecho de ruido, porque el juego lo construye escribiendo memoria a mano con bitmap.__id__*2+16 y el postizo no toca memoria (docs/capturas/pokemon-titan-intro-profesora.png). En esta familia, un grafico roto y aislado en una escena por lo demas correcta es casi seguro eso y no un recurso que falte. 28 Win32API pedidas, ninguna sin semantica. Detalle: docs/pruebas/pokemon-titan.md."
 }

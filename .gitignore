@@ -124,6 +124,18 @@
 # los hitos: las capturas de las vueltas fallidas se quedan en el disco.
 !/docs/capturas/pokemon-vanguard-hito-*.png
 !/docs/capturas/pokemon-reborn-hito-*.png
+# Los hitos de la familia ruby18 (Z, Iberia, Titan) el 9 de septiembre de 2026,
+# mas las dos que explican como se escribe un nombre con el mando y la unica
+# foto de Titan con el dialogo de la introduccion, que ademas ensena el sprite
+# roto que deja el RtlMoveMemory postizo.
+!/docs/capturas/pokemon-z-hito-*.png
+!/docs/capturas/pokemon-z-rejilla-fin.png
+!/docs/capturas/pokemon-z-intro-texto.png
+!/docs/capturas/pokemon-iberia-hito-*.png
+!/docs/capturas/pokemon-titan-hito-*.png
+!/docs/capturas/pokemon-titan-intro-profesora.png
+# Y el .nro del empaquetador arrancando en el emulador por primera vez.
+!/docs/capturas/pokemon-reborn-empaquetador-titulo.png
 # Y la prueba del fallo que motivo el cambio de nx-teclado.rb: la pantalla que
 # pide un teclado que no hay.
 !/docs/capturas/pokemon-vanguard-nombre-teclado.png

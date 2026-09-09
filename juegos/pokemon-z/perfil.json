@@ -7,11 +7,11 @@
     "titulo": "^Pokemon Z$"
   },
   "motor": "ruby18",
-  "estado": "sin-probar",
+  "estado": "arranca",
   "mkxp": {},
   "preload": [],
   "sueltos": [],
   "excluir": [],
   "rubyLoadpath": [],
-  "notas": "Sin probar en la consola (2026-09-09). mkxp-z con Ruby 1.8.7: scripts de 1.8 contra un motor de 3.1.7. Su preload.rb redefine Zlib::Inflate.inflate y Zlib::Deflate.deflate para llamar a MKXP.zinflate/zdeflate, que es la API de JoiPlay; nx-compat.rb las define delegando en el zlib de verdad de Ruby, y va delante suyo en preloadScript para que la cadena no se corte. Su mkxp.json trae subImageFix false y enableBlitting true, que pisan la base a proposito. En la raiz hay un Scripts.rxdata suelto que es un resto: el que carga el juego es Data/Scripts.rxdata."
+  "notas": "Probado en el emulador el 2026-09-09: ARRANCA y llega hasta la introduccion. Titulo, menu de carga en espanol, partida nueva, la rejilla del nombre y dos mapas (1 Intro y 168 Auxiliary Intro) sin una sola excepcion. No se llego a guardar: se acabo el tiempo de la sesion, no el juego. El motor esta listo en 4,6 s y LOS 235 SCRIPTS CARGAN EN CUATRO SEGUNDOS MAS -este juego entero arranca en diez segundos, contra los 102 s de Vanguard-. Destapo tres cosas de 1.8 que los demas no: getOggPage/oggfiletime leen la cabecera Ogg con file.read(1)[0] y de eso cuelga la pantalla de titulo animada; LargePlane hereda de Plane sin llamar a super y su dispose reventaba al cerrar el titulo; y StringInput no tenia getbyte, que es lo que marshal.c de 3.1 mira para aceptar un puerto que no sea cadena. La sospecha del censo sobre su preload.rb NO se cumplio: nx-compat.rb va delante y MKXP.zinflate no rompe nada. El idioma se pregunta ANTES del titulo (una ABAJO y una Z para espanol). Detalle: docs/pruebas/pokemon-z.md."
 }
