@@ -418,27 +418,32 @@ otro, y esto es lo que sólo se ve corriendo:
 
 **Qué queda por hacer**, sin adornos:
 
-- **Z, Iberia y Titán se quedan en `arranca`**: llegan a partida nueva y a la
-  introducción (Iberia al primer mapa y al menú), y ninguno ha guardado todavía.
-  Es tiempo de emulador, no un fallo conocido: los `.rxdata` de las partidas son
-  el siguiente hito.
-- **Ópalo muere en la sección 212 de 214** construyendo el `Mesón Batalla`, y lo
-  que desaparece es el proceso de Ryujinx, sin excepción de Ruby ni línea de
-  registro del invitado. Se descartó la especie, la memoria del montón de Ruby
-  y la cuenta de Pokémon (800 de más salen bien). Apunta al emulador antes que
-  al motor, y es lo primero que hay que probar en una consola de verdad.
-- **Uranium** (`pokemon-uranium`): su clase `Audio` entera es FmodEx cargado por
-  `Win32API`, y `0249_RGSS Linker.rb` hace `raise LoadError` si la DLL no
-  carga. La capa que sustituye esas dos secciones por una `Audio` sobre la
-  nativa de mkxp-z está escrita y probada en el PC (`d7353f6`); su estado en el
-  emulador está en la tabla de §3.
+- **El primer combate no se ha probado en ninguno de los seis jugables.** Todos
+  llegan a guardar partida; el combate es el código más denso de Essentials y el
+  siguiente hito, sobre todo en los cuatro de Ruby 1.8.
+- **Ópalo y Uranium mueren por el anfitrión, no por el motor.** Los dos cierres
+  mudos son el mismo: una violación de acceso `0xC0000005` dentro de
+  `Ryujinx.exe` 1.3.3, a 780 bytes una de otra (visor de sucesos de Windows; los
+  `Logs/` de Ryujinx no dicen nada), igual con `HostMappedUnsafe` que con
+  `SoftwarePageTable`, y la pila del hilo RGSS aguanta 11.910 marcos, así que no
+  es desbordamiento. En Ópalo el trabajo que la dispara crece con lo que cuesta
+  cada construcción del `Mesón Batalla` (679 Pokémon al cargar); en Uranium es
+  el fundido al primer mapa. **Lo que toca es la consola real**: si allí pasan,
+  es un fallo del emulador; si mueren, habrá informe de Atmosphère, que es justo
+  lo que aquí falta. Para Uranium quedan además `-Diagnostico` con
+  `nx-metodos.rb` y leer el evento 2 del mapa 51 (`leer-mapa.rb` +
+  `dump-rgssad.py`).
+- **Lo que `Win32API` no puede devolver**: `KleinBitmap.dll` (agua y cascadas
+  sin efecto en Iberia y Titán), `RtlMoveMemory` (un sprite hecho de ruido junto
+  a la profesora de Titán, porque `__id__` ya no es un puntero), y los `.mid` de
+  Iberia, Titán y Uranium, que suenan a nada sin un `midiSoundFont`.
 - **La vía `argv[0]` no se ha probado en hardware.** Se ha probado en Ryujinx,
   que lanza sin `argv` y por tanto sólo ejercita la vía del `romfs`. En la
   consola, desde hbmenu, es la que debería usarse.
 - **`KleinBitmap.dll`** (Ópalo, Iberia, Titán, Z, Uranium) y qué le pasa al mapa
   cuando esas llamadas devuelven 0. Sin verlo en pantalla no se puede decir más.
-- **La clave `patches` de Reborn** existe ya en el motor, pero `gems/` con
-  `discord.so` sigue necesitando postizos.
+- **Los mods de Reborn en `patch/`**: la clave `patches` existe en el motor y la
+  carpeta se monta, pero viene vacía y nadie ha probado un mod dentro.
 - **La coroutine arm64** del hito H6, que sigue pendiente desde el porteo.
 
 ---
