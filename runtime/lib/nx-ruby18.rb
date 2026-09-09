@@ -158,7 +158,10 @@ module NXFuente
     literal = texto[/(?:escape|character|char):\s*(\/.*\/)\s*\z/, 1]
     if literal && (pos = linea.index(literal))
       fin = pos + literal.length
-      fin += 1 while fin < linea.length && linea[fin] =~ /[imxounse]/
+      # linea[fin, 1] y no linea[fin]: da lo mismo con el `[]` de 3.1, pero deja
+      # claro que aqui se quiere UN CARACTER y no un byte, sea cual sea la
+      # codificacion con la que llego la seccion.
+      fin += 1 while fin < linea.length && linea[fin, 1] =~ /[imxounse]/
       return linea[0...fin] + "n" + linea[fin..-1].to_s
     end
     # Reserva sin el mensaje: el primer literal de la linea que lleve un \xNN.
@@ -201,6 +204,9 @@ module NXFuente
     @ms += (reloj - t0) * 1000.0
     @tocadas += 1 if hechos > 0
     @arreglos += hechos
+    # Entre seccion y seccion es el unico momento en que se puede arreglar lo
+    # que depende de clases que el juego acaba de definir; ver NX18Tarde.
+    NX18Tarde.revisar if defined?(NX18Tarde)
     resumen if nombre.to_s == "Main"
     src
   end
@@ -779,6 +785,34 @@ class Object
   end
 end
 
+# Object#id — el object_id que 1.8 tenia con nombre corto y que 1.9 retiro. El
+# censo lo descarto por no ser grepeable (689 `.id` en Anil, que corre, porque
+# en un juego de Pokemon `.id` es `species.id`), y aparecio en ejecucion en el
+# unico sitio donde no hay una clase del juego que lo tape: sobre nil.
+#
+# Medido en Pokemon Z al entrar en el primer mapa, dibujando las sombras de los
+# eventos (Sombras.rb, linea 75):
+#
+#     @sprite.visible = !(@event.bush_depth>0 or !(@map.id==$game_map.id) or ...)
+#     Section163:75:in `update': undefined method `id' for nil:NilClass
+#
+# `@map` llega nil, y en 1.8 `nil.id` valia 4 -el object_id de nil-, con lo que
+# la comparacion fallaba, la sombra se quedaba invisible y nadie se enteraba.
+# Definirlo devuelve ESE comportamiento, no otro. Las clases que definen su
+# propio `id` lo pisan, igual que en 1.8.
+class Object
+  unless method_defined?(:id)
+    $nx_id_avisos = 0
+    def id
+      if $nx_id_avisos.to_i < 10
+        $nx_id_avisos = $nx_id_avisos.to_i + 1
+        NX.log("[1.8] Object#id sobre #{self.class} desde #{caller(1, 1).to_a.first}")
+      end
+      object_id
+    end
+  end
+end
+
 # Lo que se busco y NO se encontro en ninguno de los cinco juegos, y por eso no
 # esta definido: Array#indexes / Array#indices (0), Array#choice (0),
 # Hash#index (0), Hash#indexes (0), Object#to_a (los 9 `.to_a` del corpus son
@@ -890,4 +924,606 @@ end
 #   guarda el mapa entero a PNG); es una herramienta de desarrollo atada a un
 #   atajo de teclado que en la consola no se puede pulsar, no el dibujado del
 #   mapa. Quien pruebe Iberia debe mirar el agua y las cascadas, no el mapa.
-NX.log("[nx] nx-ruby18.rb cargado: Array#nitems, Thread.critical, Object#type")
+NX.log("[nx] nx-ruby18.rb cargado: Array#nitems, Thread.critical, Object#type, Object#id")
+# ---------------------------------------------------------------------------
+# ENV["TEMP"]: en Horizon el entorno esta vacio
+# ---------------------------------------------------------------------------
+#
+# Essentials clasico se va a la carpeta temporal para convertir los GIF a PNG,
+# "since game might be on a CD-ROM":
+#
+#     Dir.chdir(ENV["TEMP"]){ ... GifLibrary::GifToPngFilesInMemory ... }
+#
+# En una consola no hay entorno que heredar, asi que ENV["TEMP"] es nil y eso
+# sale como un TypeError en un sitio que no tiene nada que ver con los GIF.
+# Medido en Pokemon Z al cargar el PRIMER MAPA, dentro de pbGetAutotile:
+#
+#   Section043:811:in `chdir': no implicit conversion of nil into String
+#     ... BitmapWrapper#initialize -> pbGetAutotile -> Spriteset_Map
+#
+# Se apunta a la carpeta del juego, que es la unica que seguro existe y en la
+# que seguro se puede escribir -ahi van las partidas-. Dentro de ese bloque no
+# se escribe nada de todas formas: gif.dll no viaja a la tarjeta, asi que
+# GifLibrary::PngDll es nil y el bloque no hace mas que entrar y salir.
+%w[TEMP TMP TMPDIR].each do |var|
+  next if ENV[var] && !ENV[var].to_s.empty?
+  begin
+    ENV[var] = NX::RAIZ
+  rescue StandardError => e
+    NX.log("[1.8] no se pudo poner ENV[#{var.inspect}]: #{e.class}")
+  end
+end
+NX.log("[1.8] ENV[\"TEMP\"] = #{ENV["TEMP"].inspect} (Horizon no trae entorno)")
+
+
+# ---------------------------------------------------------------------------
+# 4. Lo que solo se puede arreglar CUANDO EL JUEGO YA HA DEFINIDO SUS CLASES
+# ---------------------------------------------------------------------------
+#
+# El preload corre antes que el primer script del juego, asi que aqui todavia no
+# existen ni StringInput ni el modulo Input reescrito. Y esperar a la primera
+# Graphics.update -que es lo que hacen nx-teclado.rb y nx-rutas.rb- llega TARDE:
+# el ultimo script de Opalo (Meson Batalla) construye Pokemon EN EL NIVEL
+# SUPERIOR, o sea que necesita los arreglos mientras las secciones se estan
+# cargando todavia.
+#
+# El unico sitio que corre entre seccion y seccion es NXFuente.transforma, y por
+# eso el repaso se engancha ahi: cuesta un `const_defined?` por seccion -214 en
+# Opalo- y no cuesta nada en regimen.
+module NX18Tarde
+  @hecho = {}
+  @avisado = {}
+
+  def self.revisar
+    cadena_bytes                # antes que nada: de esto depende byte()
+    stringinput unless @hecho[:stringinput]
+    cadena_each unless @hecho[:cadena_each]
+    datos unless @hecho[:datos]
+    plano unless @hecho[:plano]
+    audio unless @hecho[:audio]
+    entrada                     # los juegos reabren Input en 4 o 5 secciones
+    graficos
+  rescue Exception => e
+    NX.log("[1.8] FALLO del repaso tardio #{e.class}: #{e.message}")
+    @hecho[:stringinput] = true
+    @hecho[:cadena_each] = true
+  end
+
+  def self.aviso(clave, texto)
+    return if @avisado[clave]
+    @avisado[clave] = true
+    NX.log(texto)
+  end
+
+  # --- StringInput#getc devolvia un BYTE ------------------------------------
+  #
+  # Esta es la semantica de 1.8 que de verdad aparecio, y no en un rincon: en el
+  # camino por el que el juego lee TODOS sus datos.
+  #
+  #   class StringInput            (SpriteWindow, linea 1687)
+  #     def getc
+  #       ch = @string[@pos]       # 1.8: el codigo del caracter. 3.1: "A"
+  #
+  #   class StringInput            (File_Mixins, linea 149)
+  #     def each_byte
+  #       while !eof?; yield getc; end
+  #
+  #   def fgetb                    (File_Mixins, linea 2)
+  #     each_byte {|i| ret = i || 0; break }
+  #
+  # o sea que `fgetb` -"leeme un byte"- devolvia una cadena de un caracter, y
+  # eso sale por `Pokemon#growthrate`, que lee el byte 20 de dexdata.dat. Medido
+  # en el emulador, con el juego muriendose antes de dibujar un pixel:
+  #
+  #   Section068:136:in `>=': comparison of String with 6 failed (ArgumentError)
+  #     from Section068:136:in `pbGetStartExperience'
+  #     from Section122:133:in `level='
+  #     ... from Section211:41:in `<main>'
+  #
+  # Se arregla en getc y no en fgetb porque getc es donde esta el cambio de
+  # significado: en 1.8 tanto IO#getc como este devolvian un Integer, y todo lo
+  # que hay encima -fgetb, fgetw, fgetdw, fgetsb, pbGetFileChar- cuenta con eso.
+  # Se envuelve el metodo del juego en vez de reescribirlo para no depender de
+  # como se llamen sus variables de instancia.
+  def self.stringinput
+    return unless Object.const_defined?(:StringInput)
+    clase = Object.const_get(:StringInput)
+    return unless clase.method_defined?(:getc)
+    @hecho[:stringinput] = true
+    return if clase.method_defined?(:nx_each_byte_de_18)
+    # Y SOLO each_byte, no getc, aunque en 1.8 los dos devolvieran un numero.
+    #
+    # La primera version tambien envolvia `getc`, que es lo que parecia mas
+    # limpio -es ahi donde esta el `@string[@pos]` con la semantica vieja-, y
+    # rompia el Marshal de Ruby 3.1: cuando el juego hace `Marshal.load(f)`
+    # sobre un StringInput, marshal.c lee byte a byte con `getc` y espera una
+    # cadena de un caracter. Con un Integer, la carga falla, y el juego la
+    # rescata devolviendo el propio StringInput, que es lo que se veia:
+    #
+    #   Section100:119:in `block in gender': undefined method `[]' for
+    #     #<StringInput:closed,src="[...POKEMONTRAINER_Chic">
+    #     ... isMale? -> pbMessageDisplay   (Pokemon Z, primer dialogo)
+    #
+    # `each_byte` promete bytes por su nombre y no lo lee nadie mas que fgetb;
+    # `getc` lo lee marshal. Se toca solo el primero.
+    clase.class_eval do
+      next unless method_defined?(:each_byte)
+      alias_method :nx_each_byte_de_18, :each_byte
+      define_method(:each_byte) do |&bloque|
+        nx_each_byte_de_18 { |c| bloque.call(NX18Tarde.byte(c)) }
+      end
+
+      # Y UN getbyte, QUE ES LO QUE MARSHAL MIRA PARA ACEPTAR UN PUERTO.
+      #
+      # En 1.8, `Marshal.load(port)` se conformaba con que el objeto supiera
+      # dar caracteres, y todo Essentials clasico lee sus .dat asi:
+      #
+      #     pbRgssOpen("Data/trainertypes.dat","rb"){|f|
+      #        trainertypes = Marshal.load(f)      # f es un StringInput
+      #
+      # marshal.c de 3.1 acepta una cadena, o un objeto que responda a `read`
+      # Y a `getbyte`; si no, `rb_io_check_io` y `TypeError: instance of IO
+      # needed`. StringInput tiene `read` y no tiene `getbyte`, asi que caia
+      # por el segundo camino... y el Marshal.load que el propio juego
+      # redefine RESCATA la excepcion y devuelve el puerto, con lo que el
+      # error sale mucho despues y sin relacion aparente:
+      #
+      #   Exception: NoMethodError
+      #   Message: undefined method `[]' for #<StringInput:closed,
+      #            src="[...POKEMONTRAINER_Chic">
+      #   PSystem_Utilities NUEVO:547:in `block in pbGetTrainerTypeGender'
+      #   ... pbTrainerName    (Pokemon Z, al confirmar el nombre)
+      #
+      # Un metodo de dos lineas devuelve a marshal el camino de pato que tenia
+      # en 1.8. Se comprobo con `Marshal.oldload` sobre una copia del mismo
+      # puerto: "TypeError: instance of IO needed".
+      unless method_defined?(:getbyte)
+        define_method(:getbyte) { NX18Tarde.byte(getc) }
+      end
+    end
+    NX.log("[1.8] StringInput: each_byte entrega bytes y getbyte existe "            "(fgetb/dexdata, y Marshal.load acepta el puerto)")
+  end
+
+  # --- String#each ----------------------------------------------------------
+  # Se retiro en 1.9 y el censo lo dio por no usado; lo usa StringInput#each,
+  # que delega en `@string.each(&block)`. Cuesta tres lineas y evita un
+  # NoMethodError en un sitio que no lo explicaria.
+  def self.cadena_each
+    @hecho[:cadena_each] = true
+    return if String.method_defined?(:each)
+    String.class_eval do
+      def each(*a, &b)
+        each_line(*a, &b)
+      end
+    end
+    NX.log("[1.8] String#each = String#each_line")
+  end
+
+  # --- pbRgssOpen: los .dat del juego se leian ENTEROS una y otra vez -------
+  #
+  # `PokeBattle_Pokemon#initialize` hace, por cada Pokemon que se crea:
+  #
+  #     atkdata = pbRgssOpen("Data/attacksRS.dat", "rb")
+  #     offset  = atkdata.getOffset(species-1)
+  #     ...
+  #     atkdata.close
+  #
+  # y con el contenedor puesto `pbRgssOpen` es `load_data(file)`, o sea LEER LOS
+  # 63 KB ENTEROS para quedarse con veintiocho bytes. En un PC eso es una
+  # lectura de disco cacheada por el sistema y nadie lo nota; aqui es abrir el
+  # zip, buscar la entrada y copiarla, y ademas pasa por el Marshal.load
+  # postizo del juego.
+  #
+  # Normalmente daria igual, porque se crean Pokemon de uno en uno. Pero Opalo
+  # trae un script -"Meson Batalla"- que construye 679 Pokemon EN EL NIVEL
+  # SUPERIOR, al cargar, para armar la plantilla de entrenadores del meson.
+  # Medido en el emulador: a la creacion numero 155 el proceso entero muere sin
+  # excepcion de Ruby y sin traza de invitado -el monton de Ruby estaba plano,
+  # 121.000 ranuras y 299 paginas, o sea que lo que se agotaba no era Ruby-, y
+  # muere en la misma creacion vuelta tras vuelta. Con la misma especie puesta
+  # la SEGUNDA de la lista, se crea sin problema: no es el dato, es la cuenta.
+  #
+  # Los .dat de Data/ no cambian mientras el juego corre -se instalan con el
+  # juego y nadie escribe en ellos-, asi que se memoriza el contenido y se
+  # entrega un StringInput nuevo por llamada, que es lo unico que el juego
+  # necesita (cada uno tiene su propia posicion). El limite de 8 MB deja fuera
+  # cualquier cosa que no sea una tabla de datos.
+  CACHE_DAT = {}
+  TOPE_DAT = 8 * 1024 * 1024
+
+  def self.datos
+    return unless Object.private_method_defined?(:pbRgssOpen) ||
+                  Object.method_defined?(:pbRgssOpen)
+    return unless Object.const_defined?(:StringInput)
+    @hecho[:datos] = true
+    return if Object.private_method_defined?(:nx_pbRgssOpen_sin_cache)
+
+    Object.class_eval do
+      alias_method :nx_pbRgssOpen_sin_cache, :pbRgssOpen
+
+      def pbRgssOpen(file, mode = nil, &bloque)
+        # CON BLOQUE NO SE TOCA NADA, y esto costo dos arranques.
+        #
+        # El pbRgssOpen del juego no solo abre: alrededor del load_data pone
+        # `Marshal.neverload = true` y lo vuelve a false en un ensure, y el
+        # Marshal.load que el propio juego redefine mira ese indicador para
+        # decidir si deserializa o devuelve la cadena en bruto. Saltarse ese
+        # camino deja el indicador en un estado que el bloque del juego no
+        # espera, y entonces `Marshal.load(f)` DEVUELVE EL PROPIO StringInput:
+        #
+        #   Exception: NoMethodError
+        #   Message: undefined method `[]' for #<StringInput:closed,
+        #            src="[...POKEMONTRAINER_Chic">
+        #   PSystem_Utilities NUEVO:547:in `block in pbGetTrainerTypeGender'
+        #   ... pbTrainerName   (Pokemon Z, al confirmar el nombre)
+        #
+        # Y no hace falta: lo que habia que arreglar era la forma SIN bloque,
+        # que es la que usa PokeBattle_Pokemon#initialize para attacksRS.dat.
+        return nx_pbRgssOpen_sin_cache(file, mode, &bloque) if bloque
+        cad = NX18Tarde.dat(file, mode) { nx_pbRgssOpen_sin_cache(file, mode) }
+        return nx_pbRgssOpen_sin_cache(file, mode) if cad.nil?
+        StringInput.open(cad)
+      end
+      private :pbRgssOpen
+    end
+    NX.log("[1.8] pbRgssOpen memoriza los Data/*.dat (attacksRS se leia entero por Pokemon)")
+  end
+
+  # Devuelve el contenido memorizado, o nil si este fichero no es de los que se
+  # memorizan y hay que dejar pasar la llamada original.
+  def self.dat(file, mode)
+    nombre = file.to_s
+    return nil unless nombre =~ %r{\AData[/\\][^/\\]+\.dat\z}i
+    return nil unless mode.nil? || mode.to_s.start_with?("r")
+    clave = nombre.tr("\\", "/").downcase
+    return CACHE_DAT[clave] if CACHE_DAT.key?(clave)
+    f = yield
+    return (CACHE_DAT[clave] = nil) unless f.respond_to?(:read)
+    cad = f.read
+    f.close rescue nil
+    cad = nil if cad.nil? || cad.bytesize > TOPE_DAT
+    CACHE_DAT[clave] = cad
+  rescue StandardError => e
+    NX.log("[1.8] no se pudo memorizar #{file}: #{e.class}: #{e.message}")
+    nil
+  end
+
+  # --- String#[] con un entero: por que NO se emula, medido -----------------
+  #
+  # En 1.8 `"abc"[0]` valia 97 y desde 1.9 vale "a". Se probo a emularlo
+  # acotandolo a lo unico que parecia seguro -devolver el byte solo si la cadena
+  # es ASCII-8BIT, o sea si viene de leer un fichero en binario, y dejar el `[]`
+  # de 3.1 para el texto UTF-8-. Arreglaba lo que tenia que arreglar: el lector
+  # de cabeceras Ogg de Essentials clasico (`file.read(1)[0]` seguido de
+  # `.times`) dejaba de matar la pantalla de titulo de Pokemon Z.
+  #
+  # Y ROMPIA `$~`, que es peor. Cualquier envoltorio de `[]` escrito en Ruby
+  # tiene su propio marco, y el `$~` que deja una expresion regular se guarda EN
+  # EL MARCO DEL QUE LLAMA. Con `[]` nativo, `text[REGEXP]` deja el resultado a
+  # mano de quien escribio la linea; con un `[]` de Ruby por medio, el resultado
+  # se queda en el marco del envoltorio y desaparece al volver. No hay forma de
+  # arreglarlo desde Ruby: `$~ = m` dentro del envoltorio tampoco sale de ahi.
+  #
+  # Medido en Pokemon Z, en el primer cuadro de dialogo de la introduccion, que
+  # es por donde pasa TODO el texto del juego:
+  #
+  #     while text[FORMATREGEXP]
+  #       textchunks.push($~.pre_match)     # DrawText.rb:498
+  #     Section044:498:in `getFormattedText': undefined method `pre_match'
+  #                                            for nil:NilClass
+  #
+  # Asi que se queda como estaba escrito arriba: no se emula globalmente. Lo que
+  # de verdad hacia falta se arregla en su sitio -StringInput#getc y #each_byte
+  # para los datos, y los dos lectores de audio de aqui abajo-.
+
+  # --- String#getbyte, que el juego convierte en String#[] ------------------
+  #
+  # `Map - Klein.rb` -Opalo 195, Z 161, Iberia 161- trae estas tres lineas:
+  #
+  #     class String
+  #       alias getbyte  []
+  #       alias setbyte  []=
+  #       alias bytesize size
+  #
+  # En Ruby 1.8 eso era ANADIR: `getbyte` no existia y `"abc"[0]` valia 97, o
+  # sea el byte. En 3.1 los tres metodos existen ya y hacen lo correcto, asi
+  # que el alias los DESTRUYE: a partir de esa seccion `"\x03".getbyte(0)`
+  # devuelve `"\x03"` en vez de 3, y `bytesize` cuenta caracteres en vez de
+  # bytes. No es un detalle de ese script: es la API de bytes de Ruby entera,
+  # rota para todo lo que se cargue despues -Zlib, Marshal, el postizo de
+  # Win32API que rellena buferes, y este mismo fichero-.
+  #
+  # Costo cinco arranques encontrarlo, y la pista fue que el mismo `fgetb`
+  # daba 65 en la seccion 69 y "A" en la 211. Se guardan los tres metodos de
+  # verdad al cargar el preload y se reponen en cuanto alguien los pisa.
+  #
+  # Lo que se pierde: el exportador de mapas a PNG de KleinStudio (Control+P),
+  # que es una herramienta de escritorio atada a un atajo de teclado que en un
+  # mando no se puede pulsar.
+  ORIGINALES_STRING = {}
+  [:getbyte, :setbyte, :bytesize].each do |m|
+    begin
+      ORIGINALES_STRING[m] = String.instance_method(m)
+    rescue NameError
+    end
+  end
+
+  # El unico sitio de este fichero que convierte caracter a byte. Usa el metodo
+  # guardado y no `c.getbyte`, porque entre que el juego pisa el alias y el
+  # repaso lo repone hay una seccion entera de margen.
+  def self.byte(c)
+    return c unless c.is_a?(String)
+    return nil if c.empty?
+    m = ORIGINALES_STRING[:getbyte]
+    m ? m.bind(c).call(0) : c.unpack1("C")
+  end
+
+  def self.cadena_bytes
+    return if ORIGINALES_STRING.empty?
+    return if "A".getbyte(0) == 65 && "A".bytesize == 1
+    ORIGINALES_STRING.each do |nombre, metodo|
+      String.send(:define_method, nombre, metodo)
+    end
+    aviso(:cadena_bytes,
+          "[1.8] String#getbyte/setbyte/bytesize repuestos " \
+          "(el juego los habia aliasado a []/[]=/size, que en 1.8 daban bytes)")
+  end
+
+  # --- Graphics.snap_to_bitmap ----------------------------------------------
+  #
+  # Los cuatro juegos lo reescriben, y de dos maneras distintas: Klein lo hace
+  # con BitBlt y GetDIBits de gdi32 sobre la ventana de Windows, y
+  # PSystem_System/PokemonSystem lo dejan en `return nil`. Con el Win32API
+  # postizo lo primero devuelve un bitmap en negro y lo segundo un nil, y por
+  # ahi pasan las transiciones y los fundidos de Essentials: pantallas negras o
+  # un NoMethodError sobre nil en mitad de un menu.
+  #
+  # El motor tiene el suyo, que funciona. Se repone igual que Input.
+  def self.graficos
+    return unless NATIVO_GFX[:snap_to_bitmap]
+    return unless defined?(Graphics)
+    return if Graphics.method(:snap_to_bitmap) == NATIVO_GFX[:snap_to_bitmap]
+    Graphics.singleton_class.send(:define_method, :snap_to_bitmap,
+                                  NATIVO_GFX[:snap_to_bitmap].unbind)
+    aviso(:graficos, "[1.8] Graphics.snap_to_bitmap vuelve a ser el del motor")
+  end
+
+  NATIVO_GFX = {}
+
+  def self.guarda_graficos
+    return unless defined?(Graphics)
+    begin
+      NATIVO_GFX[:snap_to_bitmap] = Graphics.method(:snap_to_bitmap)
+    rescue NameError
+    end
+  end
+
+  # --- Los dos lectores de Ogg de Essentials clasico ------------------------
+  #
+  # `getPlayTime(fichero)` mide cuanto dura una musica, y de eso depende la
+  # pantalla de titulo animada (`@totalFrames = getPlayTime(str).to_i *
+  # Graphics.frame_rate`, siete veces en el Titulo.rb de Z) y el grito de los
+  # Pokemon. Por dentro son dos metodos que leen la cabecera Ogg byte a byte con
+  # la semantica de 1.8:
+  #
+  #     hdrbodysize = (file.read(1)[0] rescue 0)
+  #     hdrbodysize.times do ... end          # AudioUtilities.rb:1019
+  #
+  # que en 3.1 es una cadena de un caracter y no un numero:
+  #
+  #     Section040:1020:in `getOggPage': undefined method `times' for "\x01":String
+  #       ... oggfiletime -> getPlayTime2 -> getPlayTime -> Titulo#initialize
+  #
+  # Se sustituyen los dos por la misma cuenta con `getbyte`. No es un apano: es
+  # el mismo algoritmo -misma cabecera, mismos campos, mismo resultado-, escrito
+  # con el metodo que en 3.1 significa lo que `[0]` significaba en 1.8. Van
+  # juntos porque `oggfiletime` vuelve a leer bytes sueltos para el tipo de
+  # paquete y los canales, y con la semantica nueva daba -1 ("no se sabe") en
+  # silencio, que es una pantalla de titulo con la animacion descuadrada.
+  def self.audio
+    return unless Object.private_method_defined?(:getOggPage) ||
+                  Object.method_defined?(:getOggPage)
+    @hecho[:audio] = true
+    return if Object.private_method_defined?(:nx_getOggPage_de_18)
+
+    Object.class_eval do
+      alias_method :nx_getOggPage_de_18, :getOggPage
+
+      def getOggPage(file)
+        return nil if file.eof?
+        dw = file.read(4).to_s.unpack("V")[0] || 0
+        return nil if dw != 0x5367674F
+        header = file.read(22)
+        cuantos = NX18Tarde.byte(file.read(1)) || 0
+        bodysize = 0
+        cuantos.times { bodysize += (NX18Tarde.byte(file.read(1)) || 0) }
+        [header, file.pos, bodysize, file.pos + bodysize]
+      rescue StandardError
+        nil
+      end
+      private :getOggPage
+
+      alias_method :nx_oggfiletime_de_18, :oggfiletime
+
+      def oggfiletime(file)
+        paginas = []
+        while (pagina = getOggPage(file))
+          paginas.push(pagina)
+          file.pos = pagina[3]
+        end
+        return -1 if paginas.length == 0
+        serie = nil
+        i = -1
+        pcm = []
+        ritmos = []
+        paginas.each do |pagina|
+          cabecera = pagina[0].to_s
+          serial = cabecera[10, 4].to_s.unpack("V")
+          marco = cabecera[2, 8].to_s.unpack("C*")
+          n = 0
+          7.downto(0) { |k| n = (n << 8) | (marco[k] || 0) }
+          if serial != serie
+            serie = serial
+            file.pos = pagina[1]
+            tipo = NX18Tarde.byte(file.read(1)) || 0
+            return -1 if file.read(6) != "vorbis"
+            return -1 if tipo != 1
+            i += 1
+            return -1 if (file.read(4).to_s.unpack("V")[0] || 0) != 0
+            file.read(1)                       # canales, no se usa
+            ritmos[i] = file.read(4).to_s.unpack("V")[0] || 0
+          end
+          pcm[i] = n if i >= 0
+        end
+        total = 0.0
+        pcm.each_index do |k|
+          r = ritmos[k]
+          total += pcm[k] * 1.0 / r if r && r > 0 && pcm[k]
+        end
+        total
+      rescue StandardError
+        -1
+      end
+      private :oggfiletime
+    end
+    NX.log("[1.8] getOggPage y oggfiletime leen bytes con getbyte (duraban 0 y mataban el titulo)")
+  end
+
+  # --- LargePlane: una clase que hereda de Plane y nunca llama a super ------
+  #
+  # `SpriteWindow.rb` -linea 4345 en Opalo y Z, 4726 en Iberia y Titan- define
+  #
+  #     class LargePlane < Plane
+  #       def initialize(viewport=nil)
+  #         @__sprite = Sprite.new(viewport)      # y nada de super
+  #
+  # o sea que el Plane nativo NUNCA se construye: la clase dice que es un Plane
+  # y por dentro dibuja con un Sprite propio. Todo lo que LargePlane
+  # reimplementa en Ruby funciona; lo unico que se le escapa al llegar a la
+  # clase de arriba es `dispose`, que si hace `super`. Medido en Pokemon Z al
+  # cerrar la pantalla de titulo para empezar la partida:
+  #
+  #   Section043:4373:in `dispose': No instance data for variable
+  #                                 (missing call to super?) (MKXPError)
+  #     ... AnimatedPlane#dispose -> pbDisposeSpriteHash -> disposeTitle
+  #
+  # Se arregla por donde lo dice el propio mensaje: se construye el Plane que
+  # falta. Queda un Plane de verdad sin bitmap -invisible, porque el dibujo lo
+  # hace el Sprite interno-, y `dispose` encuentra sus datos y lo libera. La
+  # alternativa era quitarle el `super` al dispose del juego, que dejaria ese
+  # Plane sin liberar en cada cambio de pantalla.
+  def self.plano
+    return unless Object.const_defined?(:LargePlane)
+    clase = Object.const_get(:LargePlane)
+    return unless clase.method_defined?(:dispose)
+    @hecho[:plano] = true
+    return if clase.private_method_defined?(:nx_initialize_sin_plane)
+    clase.class_eval do
+      alias_method :nx_initialize_sin_plane, :initialize
+      def initialize(viewport = nil)
+        viewport ? super(viewport) : super()
+        nx_initialize_sin_plane(viewport)
+      end
+    end
+    NX.log("[1.8] LargePlane construye el Plane nativo que su initialize se saltaba")
+  end
+
+  # --- El modulo Input, que estos cuatro juegos REESCRIBEN ENTERO -----------
+  #
+  # Y esto es lo que habria dejado el juego mudo con la pantalla de titulo
+  # puesta. PSystem_Controls (Opalo 169, Z 151, Iberia y Titan 134) hace
+  # `module Input` y vuelve a definir update, press?, trigger?, repeat?,
+  # release?, count, dir4 y dir8 EN RUBY, leyendo el teclado de Windows:
+  #
+  #     @GetKeyState = Win32API.new("user32", "GetAsyncKeyState", "i", "i")
+  #     def self.getstate(key)
+  #       return (@GetKeyState.call(key)&0x8000)>0
+  #
+  # Con el Win32API postizo eso contesta 0 siempre, o sea que NINGUN boton se
+  # pulsa nunca: el juego arranca, dibuja y no responde. Y no es un script raro
+  # de un juego raro: los cuatro lo traen, y encima lo reabren tres o cuatro
+  # secciones mas (el KGC de la captura de pantalla, la pantalla de "configura
+  # los controles", la tarjeta de entrenador, el turbo).
+  #
+  # Se devuelven los metodos del motor, que son los que leen el mando de la
+  # consola y los que ya funcionan en Anil, Vanguard y Reborn. Se guardan al
+  # cargar este fichero -cuando todavia son los del motor- y se reponen entre
+  # seccion y seccion, porque cada reapertura los vuelve a pisar.
+  #
+  # LO QUE SE PIERDE, dicho para que nadie lo busque: la pantalla de "configura
+  # los controles" queda decorativa (no hay teclado que remapear), el turbo con
+  # ALT y las teclas de depuracion (F7, F8, K) no se pueden pulsar en un mando,
+  # y la tarjeta de entrenador de Opalo, que se hojea con Q W E R T Y U I, se
+  # queda sin esas paginas.
+  NATIVO = {}
+
+  def self.guarda_nativos
+    return unless defined?(Input)
+    [:update, :press?, :trigger?, :repeat?, :release?, :count, :dir4, :dir8,
+     :pressex?, :triggerex?, :repeatex?, :releaseex?, :repeatcount].each do |m|
+      begin
+        NATIVO[m] = Input.method(m)
+      rescue NameError
+        # Un motor sin ese metodo: no es motivo para parar nada.
+      end
+    end
+  end
+
+  # Los que se reponen tal cual y los que hay que traducir.
+  DIRECTOS = [:update, :press?, :trigger?, :repeat?, :release?, :count, :dir4, :dir8]
+
+  # La traduccion de codigo de tecla de Windows a boton de RGSS. Sale de las
+  # tablas `buttonToKey` de los propios juegos (Opalo 0169 y 0191, Z 0151,
+  # Iberia y Titan 0134), leidas al reves. Hace falta porque los juegos llaman
+  # a triggerex?/pressex? CON CODIGOS DE WINDOWS -Input.any? de Z recorre
+  # 0x30..0x5A- y los del motor esperan codigos de tecla de SDL.
+  VK = {
+    0x25 => 4,  0x26 => 8,  0x27 => 6,  0x28 => 2,       # flechas
+    0x5A => 11, 0x10 => 11,                              # Z, Shift -> A
+    0x58 => 12, 0x1B => 12,                              # X, Esc   -> B
+    0x43 => 13, 0x0D => 13, 0x20 => 13,                  # C, Enter, Espacio -> C
+    0x41 => 14,                                          # A -> X
+    0x53 => 15,                                          # S -> Y
+    0x44 => 16,                                          # D -> Z
+    0x51 => 17, 0x21 => 17,                              # Q, RePag -> L
+    0x57 => 18, 0x22 => 18,                              # W, AvPag -> R
+    0x11 => 22, 0x12 => 23,                              # Ctrl, Alt
+    0x74 => 25, 0x75 => 26, 0x76 => 27, 0x77 => 28, 0x78 => 29
+  }
+
+  def self.entrada
+    return if NATIVO.empty?
+    return unless defined?(Input)
+    return if Input.method(:press?) == NATIVO[:press?]
+
+    NATIVO.each do |nombre, metodo|
+      next unless DIRECTOS.include?(nombre)
+      Input.singleton_class.send(:define_method, nombre, metodo.unbind)
+    end
+
+    # Los *ex? del juego reciben codigos de Windows. Se traducen; lo que no
+    # este en la tabla -las letras sueltas de Input.any?- contesta que no,
+    # que es lo que ya contestaba el postizo mudo.
+    Input.singleton_class.send(:define_method, :pressex?) do |k|
+      b = NX18Tarde::VK[k]; b ? Input.press?(b) : false
+    end
+    Input.singleton_class.send(:define_method, :triggerex?) do |k|
+      b = NX18Tarde::VK[k]; b ? Input.trigger?(b) : false
+    end
+    Input.singleton_class.send(:define_method, :repeatex?) do |k|
+      b = NX18Tarde::VK[k]; b ? Input.repeat?(b) : false
+    end
+    Input.singleton_class.send(:define_method, :releaseex?) do |k|
+      b = NX18Tarde::VK[k]; b ? Input.release?(b) : false
+    end
+    Input.singleton_class.send(:define_method, :repeatcount) do |k|
+      b = NX18Tarde::VK[k]; b ? Input.count(b) : 0
+    end
+
+    aviso(:entrada, "[1.8] Input vuelve a ser el del motor " \
+                    "(el juego lo habia reescrito sobre Win32API/GetAsyncKeyState)")
+  end
+end
+NX18Tarde.guarda_nativos
+NX18Tarde.guarda_graficos
+

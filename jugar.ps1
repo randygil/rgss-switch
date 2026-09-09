@@ -34,6 +34,10 @@ Add-Type -Name Nativo -Namespace Win32 -MemberDefinition @"
 [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
 [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, System.UIntPtr extra);
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h);
+[DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
+[DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(System.IntPtr h, out int pid);
+[DllImport("user32.dll")] public static extern bool GetWindowRect(System.IntPtr h, out RECT r);
+public struct RECT { public int Left, Top, Right, Bottom; }
 "@
 [Win32.Nativo]::SetProcessDPIAware() | Out-Null
 
@@ -63,12 +67,49 @@ function Enfocar {
     Start-Sleep -Milliseconds 250
 }
 
+# La foto solo se guarda SI EL EMULADOR ESTA DELANTE.
+#
+# Copiar la pantalla entera parecia inofensivo y no lo es: esta maquina la usa
+# alguien mientras la prueba corre, asi que en cuanto otra ventana se pone
+# encima -o el emulador se muere a mitad de guion- lo que queda guardado en
+# docs/capturas es el escritorio con lo que hubiera abierto. Paso de verdad: una
+# tanda entera de capturas de Opalo y de Z eran WhatsApp y el editor, y hubo que
+# borrarlas.
+#
+# Se probo antes PrintWindow sobre la ventana del emulador, que tendria la
+# ventaja de no necesitar el foco; no vale: en pantalla completa lo que dibuja
+# OpenGL no esta en el cliente de la ventana principal y lo unico que sale es la
+# barra de menu. Asi que se comprueba de quien es la ventana de primer plano y,
+# si no es del emulador, no se guarda nada: "no hay foto" es mejor dato que una
+# foto de otra cosa.
 function Foto([string]$nombre) {
-    $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-    $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
-    $g = [System.Drawing.Graphics]::FromImage($bmp)
-    $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
     $ruta = Join-Path $dir "$Juego-$Etiqueta-$nombre.png"
+    $p.Refresh()
+    if ($p.HasExited) {
+        Write-Output "  foto $nombre OMITIDA: el emulador ya habia terminado"
+        return
+    }
+    Enfocar
+    $h = $p.MainWindowHandle
+    $pid_frente = 0
+    [Win32.Nativo]::GetWindowThreadProcessId([Win32.Nativo]::GetForegroundWindow(), [ref]$pid_frente) | Out-Null
+    if ($pid_frente -ne $p.Id) {
+        Write-Output "  foto $nombre OMITIDA: delante hay otra ventana (pid $pid_frente)"
+        return
+    }
+    # Y solo el rectangulo de SU ventana, no la pantalla: en ventana -no en
+    # pantalla completa- detras esta el escritorio de quien usa la maquina.
+    $w = New-Object Win32.Nativo+RECT
+    [Win32.Nativo]::GetWindowRect($h, [ref]$w) | Out-Null
+    $ancho = $w.Right - $w.Left
+    $alto  = $w.Bottom - $w.Top
+    if ($ancho -le 0 -or $alto -le 0) {
+        Write-Output "  foto $nombre OMITIDA: la ventana mide ${ancho}x${alto}"
+        return
+    }
+    $bmp = New-Object System.Drawing.Bitmap $ancho, $alto
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.CopyFromScreen((New-Object System.Drawing.Point $w.Left, $w.Top), [System.Drawing.Point]::Empty, (New-Object System.Drawing.Size $ancho, $alto))
     $bmp.Save($ruta, [System.Drawing.Imaging.ImageFormat]::Png)
     $g.Dispose(); $bmp.Dispose()
     Write-Output "  foto -> $ruta"

@@ -23,8 +23,18 @@ barato que portar Ruby 1.8 y menos invasivo que reescribir los .rxdata en el
 empaquetador. Si el modulo no esta, no cuesta nada: se pregunta una vez, no
 una por seccion. Si transforma revienta, se registra y se evalua el original.
 
---- a/binding/binding-mri.cpp
-+++ b/binding/binding-mri.cpp
+Y con el gancho, la percha del recolector. El fuente y el nombre de cada
+seccion son dos objetos de Ruby que solo viven en variables locales de C.
+Mientras entre crearlos y evaluarlos no corria ni una linea de Ruby eso daba
+igual, porque el recolector no llegaba a correr; NXFuente.transforma COMPILA la
+seccion entera desde Ruby y por tanto reserva. Medido en Opalo: el juego moria
+con un acceso a la direccion 0 dentro del StringValue(vfile) de rb_f_eval, y en
+una seccion distinta cada vez -la 47 la primera vuelta, la 25 la segunda-. Los
+dos objetos se guardan ahora en un array registrado con rb_gc_register_address
+hasta que la seccion se ha evaluado.
+
+--- a/binding/binding-mri.cpp	2026-09-09 11:53:31.320375900 -0400
++++ b/binding/binding-mri.cpp	2026-09-09 11:53:31.320375900 -0400
 @@ -151,6 +151,12 @@
  VALUE json2rb(json5pp::value const &v);
  json5pp::value rb2json(VALUE v);
@@ -152,24 +162,36 @@ una por seccion. Si transforma revienta, se registra y se evalua el original.
  static void runRMXPScripts(BacktraceData &btData) {
      const Config &conf = shState->rtData().config;
      const std::string &scriptPack = conf.game.scripts;
-@@ -955,6 +1051,11 @@
+@@ -955,6 +1051,18 @@
      if (exc != Qnil)
          return;
      
 +#ifdef __SWITCH__
 +    /* Aqui y no antes: el modulo lo define un preload. */
 +    VALUE nxFuente = nxFuenteModulo();
++    /* La percha del recolector para el fuente y el nombre de cada seccion
++     * mientras NXFuente.transforma corre; ver la nota de mas abajo. */
++    static VALUE nxVivos = Qnil;
++    if (nxFuente != Qnil && nxVivos == Qnil) {
++        nxVivos = rb_ary_new2(3);
++        rb_gc_register_address(&nxVivos);
++    }
 +#endif
 +    
      while (true) {
          for (long i = 0; i < scriptCount; ++i) {
              VALUE script = rb_ary_entry(scriptArray, i);
-@@ -1002,6 +1103,35 @@
+@@ -1002,6 +1110,64 @@
              
              int state;
              
 +#ifdef __SWITCH__
 +            if (nxFuente != Qnil) {
++                /* Antes de llamar, no despues: la basura se recoge DENTRO de
++                 * transforma (ver la nota del final del bloque). */
++                rb_ary_store(nxVivos, 0, string);
++                rb_ary_store(nxVivos, 1, fname);
++
 +                NXFuenteLlamada llamada = { nxFuente, rb_ary_entry(script, 1),
 +                                            string };
 +                int fallo = 0;
@@ -192,8 +214,32 @@ una por seccion. Si transforma revienta, se registra y se evalua el original.
 +                     * de verdad importa aqui: una seccion que vuelva en
 +                     * ASCII-8BIT rompe el parser en la primera vocal con
 +                     * acento, y los scripts de estos juegos van llenos. */
++                    rb_ary_store(nxVivos, 2, nuevo);   /* copiar tambien reserva */
 +                    string = newStringUTF8(RSTRING_PTR(nuevo), RSTRING_LEN(nuevo));
 +                }
++
++                /* Y AQUI EL RECOLECTOR SE LLEVABA EL NOMBRE DE LA SECCION.
++                 *
++                 * `string` y `fname` son dos objetos de Ruby que solo viven en
++                 * sendas variables locales de C. Sin este gancho eso no daba
++                 * problema, porque entre crearlos y evaluarlos no se ejecuta ni
++                 * una linea de Ruby y por tanto no se reserva nada y el
++                 * recolector no corre. NXFuente.transforma COMPILA la seccion
++                 * entera desde Ruby -136.000 lineas repartidas en 214
++                 * secciones-, o sea que reserva, o sea que el recolector corre
++                 * justo en medio.
++                 *
++                 * Medido en Opalo: el juego se moria con un acceso a la
++                 * direccion 0 dentro de rb_f_eval, en el StringValue(vfile) de
++                 * su tercer argumento -el nombre del fichero-, y en una seccion
++                 * DISTINTA cada vez (la 47 la primera vez, la 25 la segunda).
++                 * Esa loteria es la firma de un objeto liberado y reutilizado.
++                 *
++                 * Se guardan los dos en un array que es raiz del recolector
++                 * hasta que la seccion se ha evaluado. No se confia en el
++                 * barrido conservador de la pila de C: esto corre en el hilo
++                 * RGSS y el sintoma dice que ahi no llega. */
++                rb_ary_store(nxVivos, 0, string);
 +            }
 +#endif
 +
