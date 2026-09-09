@@ -13,21 +13,32 @@ al lado de los [monton], los [fondo] y el [exc] de una caida. Existe porque de
 los diecisiete volcados de jugadores del 5 y 6 de septiembre de 2026 no se sabe
 en que mapa estaba ninguno. Ver nx/nx_donde.cpp y README 5.69.
 
+Y desde el censo de juegos, el gancho de NXFuente: si al terminar los preload
+existe un modulo NXFuente que responda a transforma, cada seccion de
+Scripts.rxdata pasa por NXFuente.transforma(nombre, codigo) antes de
+evaluarse. Cuatro de los siete juegos del censo son mkxp-z con Ruby 1.8.7 y
+traen lineas que Ruby 3.1 ni siquiera compila; transformarlas en la consola,
+desde un shim de Ruby que se puede leer y corregir sin recompilar, es mas
+barato que portar Ruby 1.8 y menos invasivo que reescribir los .rxdata en el
+empaquetador. Si el modulo no esta, no cuesta nada: se pregunta una vez, no
+una por seccion. Si transforma revienta, se registra y se evalua el original.
+
 --- a/binding/binding-mri.cpp
 +++ b/binding/binding-mri.cpp
-@@ -151,6 +151,11 @@
+@@ -151,6 +151,12 @@
  VALUE json2rb(json5pp::value const &v);
  json5pp::value rb2json(VALUE v);
  
 +#ifdef __SWITCH__
 +extern "C" void nx_ficheros_init(void);   /* nx/nx_ficheros.cpp */
 +extern "C" void nx_donde_init(void);      /* nx/nx_donde.cpp */
++extern "C" void nx_boot_trace(const char *msg);   /* nx/nx_boot.c */
 +#endif
 +
  static void mriBindingInit() {
      tableBindingInit();
      etcBindingInit();
-@@ -255,6 +260,22 @@
+@@ -255,6 +261,22 @@
      _rb_define_module_function(cmod, "[]=", mkxpSetJSONSetting);
      _rb_define_module_function(cmod, "to_hash", mkxpGetAllJSONSettings);
      
@@ -50,7 +61,7 @@ en que mapa estaba ninguno. Ver nx/nx_donde.cpp y README 5.69.
      /* Load global constants */
      rb_gv_set("MKXP", Qtrue);
      
-@@ -843,8 +864,22 @@
+@@ -843,8 +865,22 @@
          return;
      }
      
@@ -74,3 +85,118 @@ en que mapa estaba ninguno. Ver nx/nx_donde.cpp y README 5.69.
  }
  
  VALUE kernelLoadDataInt(const char *filename, bool rubyExc, bool raw);
+@@ -865,6 +901,66 @@
+ 
+ #define SCRIPT_SECTION_FMT (rgssVer >= 3 ? "{%04ld}" : "Section%03ld")
+ 
++#ifdef __SWITCH__
++/* Un gancho para transformar el fuente antes de evaluarlo.
++ *
++ * Cuatro de los siete juegos del censo (Opalo, Iberia, Titan, Z) son mkxp-z
++ * con Ruby 1.8.7, y sus scripts traen entre 25 y 28 lineas que Ruby 3.1 ni
++ * siquiera compila: "when x:" con dos puntos, "retry" fuera de un rescue,
++ * "break" en el cuerpo de un metodo, expresiones regulares con \\xNN. No es
++ * codigo que se porte fichero a fichero -viven dentro de Scripts.rxdata,
++ * comprimidos- ni tiene sentido reescribir los .rxdata en el empaquetador:
++ * eso convertiria cada juego en un ejemplar tocado a mano que nadie podria
++ * comparar con el original.
++ *
++ * Asi que se transforma EN LA CONSOLA, al cargar, y desde Ruby: si existe un
++ * modulo NXFuente que responda a transforma, cada seccion pasa por
++ * NXFuente.transforma(nombre, codigo) y se evalua lo que devuelva. Quien
++ * escribe las reglas es un shim de Ruby (runtime/lib/nx-ruby18.rb), que es
++ * donde se pueden leer, probar y corregir sin recompilar nada.
++ *
++ * Si el modulo no esta -los juegos de Ruby 3.1- esto no cuesta nada: la
++ * comprobacion se hace UNA vez antes del bucle, no una por seccion.
++ *
++ * Y si transforma revienta, se registra y se sigue con el codigo original. Un
++ * fallo en una regla de transformacion no puede ser peor que no transformar:
++ * sin esto, un error de dedo en el shim dejaria al juego sin arrancar y con
++ * una excepcion que apunta a un sitio que el jugador no tiene delante. */
++struct NXFuenteLlamada {
++	VALUE modulo, nombre, codigo;
++};
++
++static VALUE nxFuenteTransforma(VALUE datos)
++{
++	NXFuenteLlamada *l = reinterpret_cast<NXFuenteLlamada *>(datos);
++	return rb_funcall(l->modulo, rb_intern("transforma"), 2, l->nombre, l->codigo);
++}
++
++static VALUE nxFuenteTexto(VALUE excepcion)
++{
++	return rb_obj_as_string(excepcion);
++}
++
++/* Qnil si no hay gancho. Se resuelve una vez, DESPUES de los preload: el
++ * modulo lo define uno de ellos, asi que preguntarlo antes siempre daria que
++ * no. */
++static VALUE nxFuenteModulo(void)
++{
++	ID nombre = rb_intern("NXFuente");
++	VALUE modulo;
++
++	if (!rb_const_defined(rb_cObject, nombre))
++		return Qnil;
++
++	modulo = rb_const_get(rb_cObject, nombre);
++	if (!rb_respond_to(modulo, rb_intern("transforma")))
++		return Qnil;
++
++	nx_boot_trace("[boot] scripts pasan por NXFuente.transforma");
++	return modulo;
++}
++#endif
++
+ static void runRMXPScripts(BacktraceData &btData) {
+     const Config &conf = shState->rtData().config;
+     const std::string &scriptPack = conf.game.scripts;
+@@ -955,6 +1051,11 @@
+     if (exc != Qnil)
+         return;
+     
++#ifdef __SWITCH__
++    /* Aqui y no antes: el modulo lo define un preload. */
++    VALUE nxFuente = nxFuenteModulo();
++#endif
++    
+     while (true) {
+         for (long i = 0; i < scriptCount; ++i) {
+             VALUE script = rb_ary_entry(scriptArray, i);
+@@ -1002,6 +1103,35 @@
+             
+             int state;
+             
++#ifdef __SWITCH__
++            if (nxFuente != Qnil) {
++                NXFuenteLlamada llamada = { nxFuente, rb_ary_entry(script, 1),
++                                            string };
++                int fallo = 0;
++                VALUE nuevo = rb_protect(nxFuenteTransforma,
++                                         reinterpret_cast<VALUE>(&llamada), &fallo);
++
++                if (fallo) {
++                    /* Contar el fallo tampoco puede fallar: rb_obj_as_string
++                     * llama a to_s del objeto, que es codigo del juego. */
++                    VALUE e = rb_errinfo();
++                    int otro = 0;
++                    VALUE texto = rb_protect(nxFuenteTexto, e, &otro);
++                    Debug() << "[fuente] NXFuente.transforma fallo en" << buf << ":"
++                            << (!otro && RB_TYPE_P(texto, RUBY_T_STRING)
++                                ? RSTRING_PTR(texto) : "(sin mensaje)")
++                            << "- se evalua el original";
++                    rb_set_errinfo(Qnil);
++                } else if (RB_TYPE_P(nuevo, RUBY_T_STRING)) {
++                    /* newStringUTF8 marca la codificacion, que es lo unico que
++                     * de verdad importa aqui: una seccion que vuelva en
++                     * ASCII-8BIT rompe el parser en la primera vocal con
++                     * acento, y los scripts de estos juegos van llenos. */
++                    string = newStringUTF8(RSTRING_PTR(nuevo), RSTRING_LEN(nuevo));
++                }
++            }
++#endif
++
+             evalString(string, fname, &state);
+             if (state)
+                 break;
