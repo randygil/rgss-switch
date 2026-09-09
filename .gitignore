@@ -43,6 +43,7 @@
 
 #--- Utillaje de desarrollo y verificacion ------------------------------------
 !/dump-scripts.py
+!/dump-rgssad.py
 !/anilftp.py
 !/resolver-pila.py
 !/triaje.py
@@ -97,6 +98,7 @@
 !/docs/make-log.txt
 !/docs/test-results-ryujinx.txt
 !/docs/test-results-hardware-real.txt
+!/docs/censo-juegos.md
 # Los h4-*.log son el diario de las 40 iteraciones de depuracion: utiles en
 # local, ruido en un repo. docs/consola/ trae partidas .rxdata del juego.
 !/docs/capturas/
