@@ -194,3 +194,72 @@ guion, no el juego):
 - `winmm!mciSendString` y `winmm!mciGetErrorString` se piden pero no se llaman:
   el segundo sistema de audio (los tonos del teléfono) no ha hecho falta.
 - 36 funciones de `Win32API` pedidas, **ninguna sin semántica**.
+
+---
+
+## Segunda vuelta — 9 de septiembre de 2026, tarde: **jugable**
+
+**Estado: `jugable`.** Introducción entera, mapa jugable, cuatro pasos, menú y
+**partida guardada**: `Game.rxdata`, 85.701 bytes. Tres vueltas de emulador, y
+las dos primeras se perdieron en la misma trampa.
+
+### La trampa del mapa 168, y por qué contar teclas no vale
+
+`leer-mapa.rb` sacó del `Map168.rxdata` lo que ninguna captura enseñaba:
+
+```
+118 "advertencia"                       <- etiqueta
+101 "SI EL JUEGO TE VA MUY RÁPIDO, ..."
+101 "SI EL JUEGO TE VA LENTO EN JOIPLAY ..."
+101 "¿ENTENDIDO?"
+102 ["No", "Sí"], 2
+402 0, "No"  ->  119 "advertencia"      <- vuelve a empezar
+402 1, "Sí"  ->  sigue
+```
+
+Las dos opciones están **al revés** de lo que uno espera, y `No` salta a la
+etiqueta. La vuelta 1 usó bloques de cuatro teclas (`ABAJO Z Z Z`) y se quedó
+dando vueltas los doce bloques enteros: el aviso son tres cajas, el bloque son
+cuatro teclas, el `ABAJO` caía **siempre** sobre la primera caja —donde no hace
+nada— y los tres `Z` avanzaban las tres cajas contestando `No`. Sincronizado
+para fallar.
+
+Con **parejas `ABAJO Z`** el `ABAJO` cae sobre una caja distinta cada vez y a la
+tercera pareja toca el menú. La pregunta siguiente,
+`¿Saltar la intro del juego?`, tiene `Sí` también abajo y lleva a
+`65 Real intro` (las dieciséis cajas de la carta de la profesora Olivier) y de
+ahí a `66 Carriage`. Las cajas son largas: hacen falta **dos** pulsaciones por
+caja —una completa el texto, la otra pasa—, y sesenta parejas cubren el tramo
+con margen (la vuelta 2, con veintiocho, se quedó en la caja trece de dieciséis).
+
+### El menú de pausa de este juego no es el de Essentials
+
+No es `PScreen_PauseMenu`: es uno propio, con iconos y borde naranja.
+
+```
+Bag / Craft / Feats / Save / Options
+```
+
+`Save` es la cuarta: **X, tres ABAJO y Z**.
+
+| ms | dónde |
+|---|---|
+| 50.593 | `[donde] mapa 1 Intro en (10,7)` |
+| 77.208 | `[donde] mapa 168 Auxiliary Intro en (9,6)` |
+| 102.775 | `[donde] mapa 65 Real intro en (1,0)` |
+| 173.927 | `[donde] mapa 66 Carriage en (8,7)` |
+
+### Hitos
+
+| # | Hito | Captura |
+|---|---|---|
+| 4 | Primer mapa jugable | `pokemon-z-hito-4-mapa.png`, `-5-andando.png` |
+| 5 | Menú | `pokemon-z-hito-6-menu.png`, `-7-menu-guardar.png` |
+| 6 | **Guardar** | `pokemon-z-hito-8-confirmar.png`, `-9-guardado.png` |
+| 7 | Combate | no se llegó |
+
+### Lo que queda
+
+- El primer combate.
+- La introducción larga (la que se salta con `No` en `¿Saltar la intro?`) no se
+  ha visto: lleva al mapa 170 y no se ha probado.

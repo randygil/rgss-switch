@@ -170,3 +170,103 @@ sobran**: quien venga detrás puede lanzar con `-Espera 30`.
 Con eso, Iberia llegó a `17 Casa` con el jugador andando y al menú de pausa
 (tecla X, `Input::B`) sin una sola excepción: es el punto más lejano de la
 familia hasta ahora.
+
+---
+
+## El décimo: `Kernel#proc` (9 de septiembre de 2026, tarde)
+
+Los nueve de arriba son los que se ven **al arrancar**. Éste no: aparece al
+**cambiar de mapa**, o sea en cualquier momento de una partida, y por eso es el
+más caro de los diez.
+
+Lo destapó Titán al transferir al primer mapa jugable:
+
+```
+Section116:95:in `block in <main>': unexpected return (LocalJumpError)
+	from Section040:54:in `block in trigger'      (PBEvent#trigger)
+	from Section088:622:in `setMapChanged'
+	from Section019:230:in `transfer_player'
+```
+
+La línea es `Events.onMapChange+=proc {|sender,e| return if !$PokemonGlobal ...`
+de `PokemonRoaming.rb`. **En 1.8 `Kernel#proc` era un alias de `lambda`**, así
+que ese `return` salía del proc y era legal; en 1.9 `proc` pasó a ser
+`Proc.new`, el `return` intenta volver a un método que ya no existe —el bloque
+se escribió en el nivel superior de una sección— y sale `LocalJumpError`. El
+cargador de Essentials **no** lo rescata: el hilo RGSS muere, la pantalla se
+queda negra a 0 FPS y no hay `errorlog.txt`.
+
+Contados con las llaves emparejadas, no con un grep de tres líneas:
+
+| Juego | `proc {...}` | con `return` dentro | ficheros |
+|---|---|---|---|
+| Ópalo | 845 | **74** | 10 |
+| Z | 1.341 | **74** | 10 |
+| Iberia | 703 | **72** | 9 |
+| Titán | 674 | **72** | 9 |
+| Uranium | 669 | **78** | 10 |
+| Añil (v21.1, Ruby 3.1) | 2.060 | **0** | 0 |
+
+Los mismos nueve o diez ficheros en los cinco: `ItemHandlers::UseInField`, los MO
+de campo, el Pokémon errante, el Poké Radar, el Chatter, los Pokémon oscuros. Y
+**cero en Añil**, que es la versión moderna de Essentials: eso es lo que
+demuestra que es una diferencia de 1.8 y no una manía de estos juegos.
+
+El arreglo **no convierte el bloque en lambda**: no se puede sin `define_method`,
+y eso le cambia el `self`, que es justo lo que estos manejadores necesitan
+conservar. Lo que se hace es envolverlo en otro `Proc` que llama al de dentro y
+recoge el `LocalJumpError`, devolviendo su `exit_value` —el valor que el juego
+quería devolver—. Desde el que llama el efecto es el de 1.8, y además se conserva
+la tolerancia de arity de los `Proc`, que es *más* permisiva que la del `lambda`
+de 1.8 y por tanto no puede romper nada que antes funcionara. El `arity` se
+repone a mano sobre el envoltorio porque `PBEvent#trigger` lo mira
+(`if callback.arity>2`).
+
+## Leer la introducción antes de encender
+
+`leer-mapa.rb` abre un `MapNNN.rxdata` con el Ruby 3.1 del PC y escupe los
+comandos de evento: cuántas cajas de diálogo hay, qué menús de elección salen, en
+qué orden están sus opciones y a qué mapa transfiere al final. `Marshal` no pasa
+por `const_missing`, así que las nueve clases de `RPG::` que aparecen en un mapa
+van declaradas a mano, y `Table`/`Color`/`Tone` con su `_load`.
+
+Esto cambia cómo se conducen estos juegos. Antes se pulsaba a ciegas y cada
+desincronización costaba una vuelta de emulador entera; ahora se sabe de
+antemano:
+
+- **Iberia y Titán**: todas las elecciones tienen en el índice 0 lo que interesa
+  (Chico, Sí, Modo Normal, no randomizar, dificultad Normal, Iniciales
+  Oficiales), así que un chorro de `Z` con una `C` intercalada las cruza solo. La
+  `C` no hace nada sobre una caja de texto y es la que salta a `FIN` en la
+  rejilla, con lo que da igual en qué bloque caiga la rejilla.
+- **Z**: al revés. En `168 Auxiliary Intro` el `¿ENTENDIDO?` tiene `["No","Sí"]`
+  **en ese orden** y `No` salta a la etiqueta y vuelve a empezar el aviso; el
+  `¿Saltar la intro del juego?` de detrás, igual. Ahí hay que **bajar**, y con
+  **parejas `ABAJO Z`**: un bloque de cuatro teclas se sincroniza con las tres
+  cajas del aviso y se queda dando vueltas para siempre (pasó, doce bloques
+  enteros).
+- Las cajas largas necesitan **dos** pulsaciones —una completa el texto, la otra
+  pasa—, así que hay que contar el doble de las cajas que diga el volcado.
+
+## El menú de pausa, por juego
+
+Con el jugador recién salido de la introducción (sin Pokédex ni equipo):
+
+| Juego | Menú | Para «Guardar» |
+|---|---|---|
+| Iberia, Titán | `Mochila / <nombre> / Guardar / Opciones / Controles / Salir` | X, **dos ABAJO**, Z |
+| Ópalo | `Logros / …` por delante (no se ha llegado) | — |
+| Z | menú propio con iconos: `Bag / Craft / Feats / Save / Options` | X, **tres ABAJO**, Z |
+
+Y después, `¿Quieres guardar la partida?` con `Sí` arriba (Z) y el aviso de
+guardado (Z). La partida sale como `Game.rxdata` en la carpeta del juego de la
+tarjeta.
+
+## Dónde está cada uno al cerrar esta sesión
+
+| Juego | Estado | Partida |
+|---|---|---|
+| Z | **jugable** | `Game.rxdata` 85.701 B, mapa 66 `Carriage` |
+| Iberia | **jugable** | `Game.rxdata` 65.609 B, mapa 17 `Casa` |
+| Titán | **jugable** | `Game.rxdata` 56.737 B, mapa 12 `Casa` |
+| Ópalo | `no-arranca` | el que se muere es Ryujinx: `0xC0000005` (ver `pokemon-opalo.md`) |

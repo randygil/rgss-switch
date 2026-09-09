@@ -128,3 +128,81 @@ puede volver a hacer.
   `mkxp-debug.log`).
 - El agua y las cascadas: son lo que `KleinBitmap.dll` animaba desplazando el
   bitmap. Hay que mirarlas cuando alguien llegue a un mapa con agua.
+
+---
+
+## Segunda vuelta — 9 de septiembre de 2026, tarde: **jugable**
+
+**Estado: `jugable`.** Cuatro pasos dentro de `17 Casa`, menú de pausa y
+**partida guardada**: `Game.rxdata`, 65.609 bytes, en la carpeta del juego de la
+tarjeta. Ni una excepción, ni `errorlog.txt`. Dos vueltas de emulador, y la
+primera falló sólo por quedarse corta de pulsaciones.
+
+### La introducción se contó antes de encender
+
+`leer-mapa.rb` lee un `MapNNN.rxdata` con el Ruby 3.1 del PC —`Marshal` con
+las nueve clases de `RPG::` puestas a mano, porque `Marshal` no pasa por
+`const_missing`— y escupe los comandos de evento. Con eso, la introducción de
+este juego deja de ser una adivinanza: `Map001`, evento 2 «Intro», 211 comandos.
+
+- tres cajas del **Profesor Félix**, una caja más y una elección
+  (`Cuéntame más` / `No me des más el tostón`);
+- `¿eres chico o chica?` (tres opciones);
+- la rejilla del nombre y el `¿Así que te llamas X?`;
+- tres cajas, el **modo de juego** (Normal / Nuzlocke / Seminuzlocke / Infórmame),
+  el **randomizador** y las seis cajas del parte del tiempo;
+- y `201 0, 17, 7, 8` — la transferencia a `17 Casa` en (7,8).
+
+**En todas las elecciones el índice 0 es lo que interesa** (Chico, Sí, Modo
+Normal, no randomizar), así que la cruza sola un chorro de `Z` con una `C`
+intercalada: la `C` no hace nada sobre una caja de texto y es la que salta a
+`FIN` en la rejilla, con lo que da igual en qué bloque caiga la rejilla. Dieciséis
+bloques de `Z Z Z Z C Z` bastan; con doce se llegaba justo al parte del tiempo y
+no al mapa (vuelta 1).
+
+### El menú y el guardado
+
+El menú de pausa de este juego, con el jugador recién salido de la introducción,
+es exactamente el que dice `PokemonPauseMenu.rb` cuando no hay Pokédex ni equipo:
+
+```
+Mochila / <nombre del jugador> / Guardar / Opciones / Controles / Salir
+```
+
+O sea **X, dos ABAJO y Z**; luego `¿Quieres guardar la partida?` con `Sí` arriba
+(otra Z) y el aviso de guardado (otra Z). El cuadro de la izquierda dice
+`Casa · Jugador A · Tiempo 00:02 · Medallas 0 · Archivo 1`.
+
+| ms | dónde |
+|---|---|
+| 52.119 | `[donde] mapa 1 Intro en (9,7)` |
+| 124.554 | `[donde] mapa 17 Casa en (7,8)` |
+| ~150.000 | `Game.rxdata` escrito |
+
+### Las capturas volvieron a salir con el escritorio dentro, y por qué
+
+La vuelta 1 guardó nueve capturas con medio escritorio de Randy dentro **con el
+recorte al área de cliente puesto y funcionando**. La causa no era el recorte:
+`jugar.ps1` llamaba a `SetProcessDPIAware()`, que sólo entera al proceso del DPI
+**del sistema**, y esta máquina tiene dos monitores con escalas distintas
+(`GetDpiForWindow` sobre la ventana del emulador devuelve 120). Con eso Windows
+virtualiza las coordenadas y `GetClientRect`/`ClientToScreen` contestan en un
+sistema mientras `CopyFromScreen` copia en otro. Se cambió a
+`SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)` y se añadió una
+comprobación que **omite la foto** si el área calculada no cabe dentro del marco
+de la ventana. Las nueve se borraron.
+
+### Hitos
+
+| # | Hito | Captura |
+|---|---|---|
+| 4 | Primer mapa con el jugador andando | `pokemon-iberia-hito-4-mapa.png`, `-5-andando.png` |
+| 5 | Menú de pausa | `pokemon-iberia-hito-6-menu.png`, `-7-menu-guardar.png` |
+| 6 | **Guardar** | `pokemon-iberia-hito-8-confirmar.png`, `-9-guardado.png` |
+| 7 | Combate | no se llegó |
+
+### Lo que queda
+
+- El primer combate. Hay que salir de la casa y buscar hierba.
+- El agua y las cascadas de `KleinBitmap.dll`, y los cuatro `.mid` sin soundfont:
+  igual que estaban.

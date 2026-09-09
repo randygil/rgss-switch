@@ -7,11 +7,11 @@
     "titulo": "^Pokemon Iberia$"
   },
   "motor": "ruby18",
-  "estado": "arranca",
+  "estado": "jugable",
   "mkxp": {},
   "preload": [],
   "sueltos": [],
   "excluir": [],
   "rubyLoadpath": [],
-  "notas": "Probado en el emulador el 2026-09-09 y ARRANCA A LA PRIMERA, sin una sola vuelta de arreglo: los nueve arreglos que salieron de Opalo y de Z valen tal cual. Titulo, menu de carga, partida nueva, introduccion y la rejilla del nombre, con errorlog.txt sin crearse. Motor listo en 5,0 s y el juego dibujando a los 9,5 s. NXFuente: 168 secciones, 4 tocadas, 28 arreglos -las 28 lineas exactas del censo, con los tres break en cuerpo de metodo-. Animations/ suelta y PBS excluida, como decia el perfil, y el Editor.ini enganoso no engano a nadie. 38 Win32API pedidas, ninguna sin semantica, y una que SI se llama: kleinbitmap!version, o sea que pregunta de verdad por KleinBitmap.dll y sus efectos de bitmap salen sin aplicar. Los cuatro .mid no suenan (no hay soundfont). Detalle: docs/pruebas/pokemon-iberia.md."
+  "notas": "Probado en el emulador el 2026-09-09 y ARRANCA A LA PRIMERA, sin una sola vuelta de arreglo: los nueve arreglos que salieron de Opalo y de Z valen tal cual. Titulo, menu de carga, partida nueva, introduccion y la rejilla del nombre, con errorlog.txt sin crearse. Motor listo en 5,0 s y el juego dibujando a los 9,5 s. NXFuente: 168 secciones, 4 tocadas, 28 arreglos -las 28 lineas exactas del censo, con los tres break en cuerpo de metodo-. Animations/ suelta y PBS excluida, como decia el perfil, y el Editor.ini enganoso no engano a nadie. 38 Win32API pedidas, ninguna sin semantica, y una que SI se llama: kleinbitmap!version, o sea que pregunta de verdad por KleinBitmap.dll y sus efectos de bitmap salen sin aplicar. Los cuatro .mid no suenan (no hay soundfont). Detalle: docs/pruebas/pokemon-iberia.md. SEGUNDA VUELTA (2026-09-09, tarde): JUGABLE. Cuatro pasos dentro del mapa 17 'Casa', menu de pausa y PARTIDA GUARDADA: Game.rxdata de 65.609 bytes, sin una excepcion y sin errorlog.txt. La introduccion se conto antes de encender leyendo Map001 con tmp/leer-mapa.rb: tres cajas del profesor Felix, una eleccion, chico/chica, la rejilla del nombre, el '¿Asi que te llamas X?', tres cajas, el modo de juego, el randomizador y las seis cajas del parte del tiempo. En TODAS las elecciones el indice 0 es lo que interesa, asi que la cruza sola un chorro de Z con una C intercalada -la C no hace nada sobre una caja y es la que salta a FIN en la rejilla-. Su menu de pausa es Mochila / <nombre> / Guardar / Opciones / Controles / Salir: dos ABAJO."
 }
