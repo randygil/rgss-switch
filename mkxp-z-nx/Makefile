@@ -12,9 +12,16 @@
 # con contrabarras de TMP/TEMP se corrompen y GCC cae a C:\WINDOWS, donde no
 # tiene permiso de escritura. Se fijan aqui para que la compilacion no dependa
 # del entorno del shell.
-export TMPDIR := C:/anilswitch/tmp
-export TMP    := C:/anilswitch/tmp
-export TEMP   := C:/anilswitch/tmp
+# La raiz del repositorio, en FORMA WINDOWS (C:/rgss-switch, no /c/rgss-switch):
+# GCC bajo MSYS2 no entiende las rutas de MSYS (mismo problema de forma que
+# §5.15 y §5.18). Sale de la ubicacion de este Makefile, asi que el arbol se
+# puede clonar en cualquier sitio sin tocar nada. Si cygpath no esta -por
+# ejemplo si make se invoca desde otra shell-, se cae a la ruta de siempre.
+RAIZ := $(shell cygpath -m $(abspath $(CURDIR)/..) 2>/dev/null || echo C:/rgss-switch)
+
+export TMPDIR := $(RAIZ)/tmp
+export TMP    := $(RAIZ)/tmp
+export TEMP   := $(RAIZ)/tmp
 
 # switch.specs contiene -T %:getenv(DEVKITPRO /libnx/switch.ld), y GCC expande
 # %:getenv leyendo el ENTORNO, no las variables de make. Sin `export` el enlace
@@ -24,8 +31,8 @@ export DEVKITPRO := C:/devkitPro
 DEVKITA64 := $(DEVKITPRO)/devkitA64
 PORTLIBS  := $(DEVKITPRO)/portlibs/switch
 LIBNX     := $(DEVKITPRO)/libnx
-NXPREFIX  := C:/anilswitch/out/nx
-MKXPZ     := C:/anilswitch/src/mkxp-z
+NXPREFIX  := $(RAIZ)/out/nx
+MKXPZ     := $(RAIZ)/src/mkxp-z
 
 PREFIX  := $(DEVKITA64)/bin/aarch64-none-elf-
 CC      := $(PREFIX)gcc
@@ -104,7 +111,7 @@ INCLUDE := $(addprefix -I$(MKXPZ)/src/,$(MKXPZ_INC)) \
            -I$(MKXPZ)            -I$(NXPREFIX)/include/pixman-1            -I$(PORTLIBS)/include -I$(PORTLIBS)/include/SDL2            -I$(PORTLIBS)/include/AL \
            -I$(PORTLIBS)/include/freetype2 \
            -I$(LIBNX)/include \
-           -IC:/anilswitch/patches/include
+           -I$(RAIZ)/patches/include
 
 #-------------------------------------------------------------------------------
 # Defines equivalentes a los que inyecta meson
@@ -187,7 +194,7 @@ $(TARGET).elf: $(OBJS)
 	@echo "LD   $@"
 	@$(CXX) $(LDFLAGS) $(OBJS) $(LIBS) -o $@
 	@echo "ARM  $@"
-	@python C:/anilswitch/fixup-arm64.py $@
+	@python $(RAIZ)/fixup-arm64.py $@
 
 # El NRO necesita su seccion ASET (icono + NACP). Es la unica diferencia
 # estructural que habia con el hello-ruby-nx de H2, que si carga: alli el
