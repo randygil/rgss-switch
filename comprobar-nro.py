@@ -8,9 +8,14 @@ offset mal puesto deja un fichero del tamano correcto que la consola rechaza sin
 decir por que, y probarlo cuesta copiar el .nro a una tarjeta y encender la
 Switch. Esto lo lee como lo leeria hbmenu y lo dice en cuatro lineas.
 
-    python comprobar-nro.py <fichero.nro> [--todos]
+    python comprobar-nro.py <fichero.nro> [--todos] [--comparar ref.nro]
 
 --todos ensena las 16 entradas de idioma, no solo las tres que se rellenan.
+--comparar contrasta el .nro con uno de referencia hecho por elf2nro: primero
+las estructuras (cabecera NRO0, cabecera ASET, tamanos) y luego los bytes,
+diciendo en que tramos difieren y a que campo del NACP caen. Es como se
+encontro que los cuatro identificadores del NACP eran lo unico distinto entre
+un .nro que arrancaba y otro que no.
 
 Formato (switchbrew, "NRO"):
     0x10  "NRO0", version, 0x18 tamano del NRO (u32)
@@ -143,13 +148,132 @@ def main(ruta, todos=False):
         print("  add-on content base %016X   (0x3070, = title id + 0x1000)" % dlc)
         if duenno != tid or local != tid:
             print("  AVISO: los cuatro identificadores no cuadran entre si")
+        # LA comprobacion que faltaba. En un homebrew, Ryujinx saca el program id
+        # del proceso del SaveDataOwnerId y, si no es cero, le prepara la partida
+        # guardada con ese id. Un id del rango 05.. -el nuestro por CONVENCIONES
+        # 4- no es una aplicacion que el emulador conozca: la preparacion falla,
+        # el proceso no nace y lo unico que se lee en el registro es "Loading as
+        # homebrew" seguido de nada. elf2nro deja estos campos a cero y por eso
+        # sus .nro arrancan.
+        if tid == 0 and duenno == 0 and local == 0:
+            print("  (los cuatro a cero: es lo que lleva un .nro homebrew; el title id va en el NSP)")
+        if duenno != 0:
+            print("  AVISO: SaveDataOwnerId no es cero en un .nro. Ryujinx no creara el proceso:")
+            print("         un .nro homebrew lleva estos cuatro identificadores a cero, como los deja elf2nro.")
+            print("         El title id va en el NSP (NACP + NPDM), no aqui.")
         version = texto(nacp[0x3060:0x3070])
         print("  version             %r" % version)
     return 0
 
 
+CAMPOS = [
+    (0x3000, 0x3025, "Isbn"),
+    (0x3025, 0x3026, "StartupUserAccount"),
+    (0x302C, 0x3030, "SupportedLanguageFlag"),
+    (0x3030, 0x3034, "ParentalControlFlag"),
+    (0x3038, 0x3040, "PresenceGroupId"),
+    (0x3040, 0x3060, "RatingAge"),
+    (0x3060, 0x3070, "DisplayVersion"),
+    (0x3070, 0x3078, "AddOnContentBaseId"),
+    (0x3078, 0x3080, "SaveDataOwnerId"),
+    (0x3080, 0x3088, "UserAccountSaveDataSize"),
+    (0x30B0, 0x30B8, "LocalCommunicationId"),
+]
+
+
+def campo(off):
+    """A que campo del NACP cae un desplazamiento, para que un tramo distinto
+    diga algo mas que un numero."""
+    if off < 0x3000:
+        return "entrada de idioma %d (%s)" % (off // 0x300,
+                                              "nombre" if (off % 0x300) < 0x200 else "autor")
+    for a, b, nombre in CAMPOS:
+        if a <= off < b:
+            return nombre
+    return "?"
+
+
+def secciones(d):
+    tam = struct.unpack_from("<I", d, 0x18)[0]
+    if len(d) <= tam:
+        return tam, None
+    a = tam
+    v = {"ASET": a}
+    v["ver"] = struct.unpack_from("<I", d, a + 4)[0]
+    v["icono"] = struct.unpack_from("<QQ", d, a + 8)
+    v["nacp"] = struct.unpack_from("<QQ", d, a + 0x18)
+    v["romfs"] = struct.unpack_from("<QQ", d, a + 0x28)
+    return tam, v
+
+
+def comparar(ruta, ref):
+    a = open(ruta, "rb").read()
+    b = open(ref, "rb").read()
+    print("COMPARAR")
+    print("  %s  %d bytes" % (ruta, len(a)))
+    print("  %s  %d bytes  (referencia)" % (ref, len(b)))
+
+    ta, va = secciones(a)
+    tb, vb = secciones(b)
+    if ta != tb:
+        print("  el cuerpo mide %d y el de referencia %d" % (ta, tb))
+    if a[:0x40] != b[:0x40]:
+        print("  la cabecera NRO0 (0x00-0x40) DIFIERE")
+    if va and vb:
+        for k in ("ver", "icono", "nacp", "romfs"):
+            if va[k] != vb[k]:
+                print("  ASET %s: %r vs %r" % (k, va[k], vb[k]))
+        # El fichero tiene que medir exactamente cuerpo + cabecera + secciones.
+        for nombre, d_, t_ in (("este", va, ta), ("referencia", vb, tb)):
+            esperado = t_ + 0x38 + d_["icono"][1] + d_["nacp"][1] + d_["romfs"][1]
+            real = len(a) if nombre == "este" else len(b)
+            if esperado != real:
+                print("  %s: el fichero mide %d y cuerpo+0x38+icono+nacp+romfs son %d"
+                      % (nombre, real, esperado))
+
+    idx = [i for i in range(min(len(a), len(b))) if a[i] != b[i]]
+    if not idx and len(a) == len(b):
+        print("  IDENTICOS byte a byte.")
+        return 0
+    runs = []
+    for i in idx:
+        if runs and i == runs[-1][1] + 1:
+            runs[-1][1] = i
+        else:
+            runs.append([i, i])
+    print("  %d bytes distintos en %d tramos:" % (len(idx), len(runs)))
+    for s, e in runs[:40]:
+        donde = "cuerpo"
+        if va and s >= ta:
+            rel = s - ta
+            if rel < 0x38:
+                donde = "cabecera ASET +0x%X" % rel
+            elif va["nacp"][0] <= rel < va["nacp"][0] + va["nacp"][1]:
+                donde = "NACP 0x%04X %s" % (rel - va["nacp"][0], campo(rel - va["nacp"][0]))
+            elif va["icono"][0] <= rel < va["icono"][0] + va["icono"][1]:
+                donde = "icono"
+            else:
+                donde = "romfs"
+        print("    0x%X..0x%X (%d)  %s" % (s, e, e - s + 1, donde))
+        if (e - s) < 16:
+            print("      este %s" % a[s:e + 1].hex())
+            print("      ref  %s" % b[s:e + 1].hex())
+    if len(runs) > 40:
+        print("    ... y %d tramos mas" % (len(runs) - 40))
+    return 1
+
+
 if __name__ == "__main__":
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if "--comparar" in sys.argv:
+        i = sys.argv.index("--comparar")
+        ref = sys.argv[i + 1]
+        args = [a for a in args if a != ref]
+        if len(args) != 1:
+            sys.exit(__doc__)
+        main(args[0], "--todos" in sys.argv)
+        print()
+        sys.exit(comparar(args[0], ref))
     if len(args) != 1:
         sys.exit(__doc__)
     sys.exit(main(args[0], "--todos" in sys.argv))

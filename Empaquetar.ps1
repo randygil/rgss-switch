@@ -861,7 +861,30 @@ function Pon-U64([byte[]]$b, [int]$off, [uint64]$v) {
 # que la consola va a mirar seguro: AmericanEnglish (0, el de reserva de Horizon
 # cuando no encuentra el del idioma configurado), LatinAmericanSpanish (5) y
 # Spanish (6).
-function Reescribe-Nacp([byte[]]$nacp, [string]$nombre, [string]$autor, [string]$titleid, [string]$version) {
+# SOLO se tocan el nombre, el autor y la version. Los identificadores del juego
+# -presence group (0x3038), add-on content base (0x3070), SAVE DATA OWNER
+# (0x3078) y local communication (0x30B0)- se dejan como esten, y eso costo un
+# .nro que no arrancaba.
+#
+# El sintoma: Ryujinx escribia "Loading as homebrew", no creaba proceso y a
+# veces soltaba "The HLE Process map did not have a process with ID 0". El .nro
+# que iterate.sh hace con elf2nro arrancaba a la primera. Comparados byte a
+# byte, la cabecera NRO0 y la cabecera ASET eran IDENTICAS y el cuerpo tambien:
+# la unica diferencia estaba en esos cuatro campos del NACP, que este guion
+# rellenaba con el title id calculado y elf2nro deja a cero.
+#
+# El motivo: en un homebrew, Ryujinx saca el program id del proceso del
+# SaveDataOwnerId del NACP y, cuando no es cero, le prepara la partida guardada
+# con ese identificador. Un id del rango 05.. -que es el nuestro por §4- no es
+# una aplicacion que el emulador conozca, asi que esa preparacion falla y el
+# proceso no llega a nacer. Con el campo a cero, Ryujinx usa el id de homebrew
+# de siempre (0x0100000000000000) y todo funciona.
+#
+# El title id SIGUE haciendo falta, pero donde de verdad se usa: en el NSP, con
+# su NPDM al lado. Ahi lo pone nacptool con --titleid en esos mismos cuatro
+# sitios (se dedujo restando dos NACP generados con y sin la opcion), y Crea-Nsp
+# comprueba que lo hizo.
+function Reescribe-Nacp([byte[]]$nacp, [string]$nombre, [string]$autor, [string]$version) {
     for ($i = 0; $i -lt 16; $i++) {
         $o = $i * 0x300
         if ($nacp[$o] -eq 0 -and $i -ne 0 -and $i -ne 5 -and $i -ne 6) { continue }
@@ -869,18 +892,6 @@ function Reescribe-Nacp([byte[]]$nacp, [string]$nombre, [string]$autor, [string]
         Pon-Cadena $nacp ($o + 0x200) 0x100 $autor
     }
     if ($version) { Pon-Cadena $nacp 0x3060 0x10 $version }
-    if ($titleid) {
-        # Los cuatro sitios donde nacptool escribe el title id, deducidos
-        # restando dos NACP generados con y sin --titleid: presence group
-        # (0x3038), add-on content base = id + 0x1000 (0x3070), save data owner
-        # (0x3078) y local communication (0x30B0). Si no cuadran, la consola se
-        # hace un lio con la carpeta de la partida guardada.
-        $tid = [System.Convert]::ToUInt64($titleid, 16)
-        Pon-U64 $nacp 0x3038 $tid
-        Pon-U64 $nacp 0x3070 ($tid + 0x1000)
-        Pon-U64 $nacp 0x3078 $tid
-        Pon-U64 $nacp 0x30B0 $tid
-    }
 }
 
 # Rehace la seccion ASET del final del .nro. El cuerpo del NRO no se toca: lo que
@@ -891,7 +902,7 @@ function Reescribe-Nacp([byte[]]$nacp, [string]$nombre, [string]$autor, [string]
 #   "ASET" (4) + version (u32) + tres pares offset/size (u64) para icono, NACP y
 #   romfs, con los offsets relativos al inicio del ASET. La cabecera mide 0x38.
 function Rehace-Nro([string]$origen, [string]$destino, [string]$icono,
-                    [string]$nombre, [string]$autor, [string]$titleid, [string]$version,
+                    [string]$nombre, [string]$autor, [string]$version,
                     [string]$imagenRomfs) {
     $b = [System.IO.File]::ReadAllBytes($origen)
     if ([System.Text.Encoding]::ASCII.GetString($b, 0x10, 4) -ne "NRO0") {
@@ -940,7 +951,7 @@ function Rehace-Nro([string]$origen, [string]$destino, [string]$icono,
             }
         }
     }
-    Reescribe-Nacp $nacp $nombre $autor $titleid $version
+    Reescribe-Nacp $nacp $nombre $autor $version
 
     $ico = [System.IO.File]::ReadAllBytes($icono)
     if ($ico.Length -lt 4 -or $ico[0] -ne 0xFF -or $ico[1] -ne 0xD8) {
@@ -1128,7 +1139,14 @@ function Crea-Nsp($info, [string]$salida, [string]$icono, [string]$version, [str
     $c = Ejecuta-Herramienta $nacptool @("--create", (Sin-Acentos $info.Nombre), (Sin-Acentos $info.Autor), $version, $nacpRuta, ("--titleid=" + $info.TitleId)) $tmp "nacp" $avisa
     if ($c -ne 0) { throw "nacptool fallo (codigo $c)" }
     $nacp = [System.IO.File]::ReadAllBytes($nacpRuta)
-    Reescribe-Nacp $nacp $info.Nombre $info.Autor $info.TitleId $version
+    # Aqui el title id SI tiene que estar, y lo pone nacptool con --titleid. Se
+    # comprueba en vez de suponerlo: si el NACP y el NPDM no llevan el mismo,
+    # la consola instala el NSP y luego no encuentra su partida guardada.
+    $puesto = ([BitConverter]::ToUInt64($nacp, 0x3078)).ToString("X16")
+    if ($puesto -ne $info.TitleId) {
+        throw "nacptool no dejo el title id en el NACP: hay $puesto y se pidio $($info.TitleId)."
+    }
+    Reescribe-Nacp $nacp $info.Nombre $info.Autor $version
     [System.IO.File]::WriteAllBytes($nacpRuta, $nacp)
 
     # El icono se elige por idioma de la consola; AmericanEnglish es el que
@@ -1197,13 +1215,13 @@ function Pon-Motor($info, [string]$juego, [string]$destino, [scriptblock]$avisa)
     $imagen = Crea-Romfs $info.Slug $avisa
     try {
         Rehace-Nro (Join-Path $Entrega "motor\rgss-switch.nro") (Join-Path $destino ($info.Slug + ".nro")) `
-                   $icono $info.Nombre $info.Autor $info.TitleId $version $imagen
+                   $icono $info.Nombre $info.Autor $version $imagen
     } finally {
         if ($imagen) { Remove-Item -LiteralPath (Split-Path -Parent $imagen) -Recurse -Force -ErrorAction SilentlyContinue }
     }
     $conRomfs = "sin romfs propio (solo hbmenu)"
     if ($imagen) { $conRomfs = "romfs:/juego.txt -> sdmc:/switch/" + $info.Slug }
-    $avisa.Invoke("     $($info.Slug).nro   title id $($info.TitleId)   " + (Split-Path -Leaf $icono) + "   " + $conRomfs)
+    $avisa.Invoke("     $($info.Slug).nro   " + (Split-Path -Leaf $icono) + "   " + $conRomfs)
 
     Escribe-Utf8 (Join-Path $destino "mkxp.json") (Compone-Mkxp $info $juego $avisa)
     $avisa.Invoke("     mkxp.json compuesto (base + juego + perfil $($info.NombrePerfil))")
