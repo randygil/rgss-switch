@@ -204,6 +204,35 @@ $LOAD_PATH.map! do |ruta|
   end
 end
 NX.log("[nx] raiz sin dispositivo: #{NX::RAIZ.inspect}")
+
+# Y por el mismo motivo, Dir.pwd. Lo que le pasa a $LOAD_PATH le pasa a
+# cualquier ruta que el juego construya con el directorio de trabajo, porque
+# File.expand_path usa la misma rb_is_absolute_path:
+#
+#   File.expand_path("Mods", Dir.pwd)
+#     -> "sdmc:/switch/pokemon-vanguard/sdmc:/switch/pokemon-vanguard/Mods"
+#
+# Eso no es una suposicion: es la linea 37 de 022_Main/999_Main.rb de Project
+# Vanguard, y su propio `puts` lo dejo escrito tal cual en mkxp-ruby.log la
+# primera vez que el juego se encendio en el emulador. Resultado: el cargador de
+# Mods contesta "Directory exists? false" y la carpeta Mods/ no se carga nunca,
+# aunque este ahi suelta y bien copiada.
+#
+# Se devuelve la ruta SIN dispositivo, que es la misma que ya se usa para el
+# $LOAD_PATH: newlib resuelve las rutas sin dispositivo contra el de por
+# omision, que en homebrew es la tarjeta, y para Ruby empieza por "/" y por eso
+# es absoluta. El valor se calcula una vez porque el motor hace su chdir antes
+# de arrancar el interprete y despues nadie mueve el directorio de trabajo.
+module Dir
+  class << self
+    alias_method :nx_pwd_con_dispositivo, :pwd
+    def pwd
+      NX::RAIZ
+    end
+  end
+end
+NX.log("[nx] Dir.pwd contesta #{Dir.pwd.inspect} " \
+       "(con dispositivo era #{Dir.nx_pwd_con_dispositivo.inspect})")
 NX.log("[nx] $LOAD_PATH: #{$LOAD_PATH.inspect}")
 
 # --- comprobacion del cargador --------------------------------------------
