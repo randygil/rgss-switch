@@ -65,7 +65,7 @@ SOLO = {
     "nro":  ["@nro"],
     # Game.rgssad va aqui y no en "todo": son ocho bytes que no cambian nunca,
     # pero sin ellos el juego no mira dentro de datos.zip y muere a los veinte
-    # segundos (README 5.60). Si la carpeta de la consola viene de un
+    # segundos (bitacora §5.60). Si la carpeta de la consola viene de un
     # empaquetado con contenedor, esto es lo que la completa.
     "ruby": ["mkxp.json", "preload.rb", "Game.rgssad"],
     # Todo lo que sale de compilar, y nada mas. Es lo que hay que subir despues

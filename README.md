@@ -21,16 +21,19 @@ README la cita por número cuando hace falta.
 ## 1. Qué hay en este repositorio
 
 ```
-mkxp-z-nx/          el motor: 23 fuentes en nx/ (registro, excepciones, hilos,
-                    tuberías, memoria, texturas, la pantalla de aviso) y el
-                    Makefile que sustituye a meson
-patches/            30 parches contra CRuby 3.1.7 y mkxp-z 2.4.2, con ORDEN.txt,
-                    nxcompat.c y las cabeceras shim: src/ no entra en git, así
-                    que esto es el único ejemplar del trabajo
+mkxp-z-nx/          el motor: 21 fuentes en nx/ (registro, excepciones, hilos,
+                    tuberías, memoria, texturas, la pantalla de aviso y la de
+                    carga) y el Makefile que sustituye a meson
+patches/            75 parches contra CRuby 3.1.7 y mkxp-z 2.4.2 —30 de mkxp-z
+                    con su ORDEN.txt, 8 de Ruby y los 37 de syntax-transform,
+                    que todavía no están aplicados—, más nxcompat.c y las
+                    cabeceras shim: src/ no entra en git, así que esto es el
+                    único ejemplar del trabajo
 runtime/            lo que va a la tarjeta y es fuente: mkxp.base.json (la capa
-                    1 de mkxp.json), lib/ con los shims de Ruby, lib-stdlib.txt
-                    con el recorte de la biblioteca estándar, y diagnostico/
-                    con las sondas de medición
+                    1 de mkxp.json), lib/ con los shims de Ruby que van siempre,
+                    shims/ con la biblioteca compartida y su catalogo.json,
+                    lib-stdlib.txt con el recorte de la biblioteca estándar, y
+                    diagnostico/ con las sondas de medición
 juegos/            un perfil por juego (perfil.json + lib/*.rb + icono.jpg),
                     más generico/, que es donde cae lo que nadie reconoce
 Empaquetar.ps1      el empaquetador: detecta el juego, compone su mkxp.json por
@@ -272,10 +275,13 @@ antes de que nuestro manejador de excepciones esté puesto.
    Lo mínimo es `slug`, `nombre` y `detectar.titulo`. Si el juego lee alguna
    carpeta suya con `Dir` o `File.read`, ponla en `sueltos` o el juego no la
    verá; si hace `require` sobre ella, añádela también a `rubyLoadpath`.
-4. **Shims en `juegos/<slug>/lib/`** y su nombre en `preload`, para lo que sea
-   de ese juego y de ningún otro. Lo que valga para todos va a `runtime/lib/`;
-   lo que valga para una familia entera se añade por familia, como
-   `nx-ruby18.rb`. Un `icono.jpg` (JPEG 256×256 baseline) para el menú HOME es
+4. **Mira primero el catálogo** (`runtime/shims/catalogo.json`): si el arreglo
+   que necesitas ya está escrito, se enciende por su nombre en la clave `shims`
+   del perfil y no se copia nada. Si no está y sirve para más de un juego, se
+   escribe ahí. **Shims en `juegos/<slug>/lib/`** y su nombre en `preload`, sólo
+   para lo que sea de ese juego y de ningún otro. Lo que valga para todos va a
+   `runtime/lib/`; lo que valga para una familia entera se añade por familia,
+   como `nx-ruby18.rb`. Un `icono.jpg` (JPEG 256×256 baseline) para el menú HOME es
    opcional.
 5. **Rellena `estado` y `notas`** con lo que pasó y la fecha. Las notas son
    prosa: lo que hay que saber antes de volver a tocar ese juego.
@@ -462,7 +468,45 @@ otro, y esto es lo que sólo se ve corriendo:
 
 ---
 
-## 7. Licencias
+## 7. Mantener esto
+
+El contrato entre el motor, el empaquetador, los shims y los perfiles está en
+[`CONVENCIONES.md`](CONVENCIONES.md), y es lo primero que hay que leer: los
+nombres, la carpeta de cada juego en la tarjeta, cómo encuentra el motor su
+juego, cómo se compone `mkxp.json` por capas, qué es un perfil y las reglas de
+la casa. Nada de lo que hay aquí se entiende sin eso.
+
+Por dónde empezar, según lo que quieras hacer:
+
+| Quiero… | Empieza por |
+|---|---|
+| Añadir un juego | §4 de aquí, `docs/censo-juegos.md` y `juegos/README.md` |
+| Arreglar un juego que no arranca | sus cuatro registros (§3), `TRIAJE.md` y `triaje.py` |
+| Tocar el motor | `mkxp-z-nx/nx/`, `patches/` y `docs/bitacora-anil.md` §5 |
+| Publicar una versión | [`PUBLICAR.md`](PUBLICAR.md) |
+
+Lo que conviene saber antes del primer commit:
+
+- **`.gitignore` es una lista blanca.** El directorio de trabajo comparte sitio
+  con gigabytes que no pueden publicarse —los recursos del juego, los scripts
+  extraídos, los árboles de fuentes de terceros, los objetos compilados—, así
+  que se ignora todo y sólo entra lo que se nombra. Un fichero nuevo no está en
+  el commit hasta que aparece ahí: comprobar con `git status --short`.
+- **`src/` no está en git, y `patches/` es el único ejemplar del trabajo.**
+  `reconstruir-src.py` rehace el árbol entero desde los parches; si tocas
+  `src/`, el cambio se guarda como parche o se pierde.
+- **Los símbolos no son opcionales.** `construir.sh` archiva el `.elf` de cada
+  compilación en `release/simbolos/`, y `publicar.sh` se niega a etiquetar sin
+  él. Es lo que convierte el `+0x7abd30` del volcado de un jugador en un nombre
+  de función.
+- **Comentarios y mensajes en español**, en el tono del historial: se explica el
+  fallo que motivó cada cosa, no sólo qué hace. Un comentario que repite el
+  código sobra; el que cuenta por qué el código es así, no.
+- **Ningún juego entra en el repositorio ni en la entrega.** Nunca.
+
+---
+
+## 8. Licencias
 
 Tres bloques con condiciones distintas —el código propio de este porteo (GPLv2 o
 posterior), mkxp-z y CRuby con las suyas, y las herramientas de `tools/`—, cada

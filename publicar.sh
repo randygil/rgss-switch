@@ -45,7 +45,7 @@ echo "ok: $ZIP ($(du -h "$ZIP" | cut -f1)) es la $VERSION"
 echo "=== simbolos ==="
 # Publicar sin archivar el .elf es publicar a ciegas: el dia que un jugador
 # mande un volcado, `+0x7abd30` no sera ningun nombre de funcion y habra que
-# desensamblar el .nro en crudo y adivinar (README 5.65). Asi que aqui se
+# desensamblar el .nro en crudo y adivinar (bitacora §5.65). Asi que aqui se
 # comprueba que construir.sh dejo los simbolos de ESTA compilacion —mismo hash
 # de .nro, no solo mismo sello— y se marcan como publicados para que la poda de
 # construir.sh no los toque nunca mas.

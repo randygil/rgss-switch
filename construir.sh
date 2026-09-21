@@ -12,7 +12,7 @@
 #      mkxp.diagnostico.json y diagnostico/, que usa Empaquetar.ps1
 #      -Diagnostico- y lo comprime.
 #   5. Archiva los simbolos de ESTA compilacion en release/simbolos/, que es lo
-#      que permite leer la pila de un volcado de un jugador (README 5.65).
+#      que permite leer la pila de un volcado de un jugador (bitacora §5.65).
 #
 # LO QUE YA NO HACE: el .nsp. Hasta la 1.1.1 se empaquetaba aqui, con las
 # prod.keys de quien compilaba y para un juego concreto. Con un motor generico
@@ -29,7 +29,7 @@ VERSION=$(cat VERSION)
 export DEVKITPRO=${DEVKITPRO:-C:/devkitPro}
 [ -d "$DEVKITPRO/devkitA64" ] || DEVKITPRO=C:/devkitPro
 # El Makefile quiere DEVKITPRO en forma Windows (C:/...) porque GCC lo expande
-# el mismo (README 5.15); pero el PATH de la shell quiere forma POSIX (/c/...).
+# el mismo (bitacora §5.15); pero el PATH de la shell quiere forma POSIX (/c/...).
 # Son dos variables distintas por una buena razon, no por descuido.
 DKP_POSIX=$DEVKITPRO
 command -v cygpath >/dev/null && DKP_POSIX=$(cygpath -u "$DEVKITPRO") || DKP_POSIX=$(echo "$DEVKITPRO" | sed -E 's#^([A-Za-z]):#/\L\1#')
@@ -46,7 +46,7 @@ if [ ! -f out/nx/lib/libruby-static.a ]; then
   echo "falta out/nx/lib/libruby-static.a: el interprete todavia no esta portado en esta maquina."
   echo "  ./build-deps.sh && ./build-deps2.sh    (dependencias de mkxp-z)"
   echo "  ./build-ruby-switch.sh && ./finalize-ruby.sh   (CRuby 3.1.7 -> libnx)"
-  echo "El README, seccion 4 y 5, cuenta cada problema que te vas a encontrar y su arreglo."
+  echo "docs/bitacora-anil.md, seccion 5, cuenta cada problema que te vas a encontrar y su arreglo."
   exit 1
 fi
 echo "ok"
@@ -178,7 +178,7 @@ paso "5. Simbolos"
 # un jugador es una direccion relativa y nada mas: `+0x7abd30` no dice ninguna
 # funcion. La 1.0.0 se publico sin archivarlo y hubo que desensamblar el .nro en
 # crudo y comparar firmas de instrucciones contra una compilacion posterior para
-# ponerle nombre a la pila (README 5.65, docs/consola/20260905-pidgey/). Eso
+# ponerle nombre a la pila (bitacora §5.65, docs/consola/20260905-pidgey/). Eso
 # funciono por suerte —la funcion no habia cambiado— y la suerte no se planifica.
 #
 # Asi que cada compilacion deja aqui su .elf, su .nro y un SELLO.txt con los

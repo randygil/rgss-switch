@@ -3,7 +3,7 @@
 # Ryujinx -> leer trazas.
 #
 # Las trazas NO se leen de la salida estandar del emulador (ese canal no llega,
-# ver README 5.31); se leen de los ficheros que el propio juego escribe en la SD
+# ver bitacora §5.31); se leen de los ficheros que el propio juego escribe en la SD
 # virtual.
 #
 #   ./iterate.sh <slug> [segundos] [--sin-compilar]

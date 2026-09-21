@@ -60,7 +60,7 @@ tres de los indicadores que uno escribiría de memoria se caen enteros:
   discriminan y no se usan para nada en este informe.**
 - PNG de más de 4096 píxeles — Añil tiene **3.395 de 17.814** y corre: los
   tilesets altos entran por el camino de *mega surface* de mkxp-z y se quedan
-  en RAM (README 5.70). Es un coste conocido de carga, no un impedimento.
+  en RAM (bitacora §5.70). Es un coste conocido de carga, no un impedimento.
   Ningún juego del censo supera esa cifra salvo Z (3.281), que está en el
   mismo orden.
 

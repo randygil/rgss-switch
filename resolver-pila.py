@@ -414,7 +414,7 @@ def main():
         return 1
 
     ref = next((x for x in archivos() if x["elf"]), None)
-    print("Caigo al metodo del desensamblado en crudo (README 5.65):")
+    print("Caigo al metodo del desensamblado en crudo (bitacora §5.65):")
     print("  binario:   %s" % os.path.relpath(nro, RAIZ))
     if ref:
         print("  referencia: %s (%s) para poner nombres por firma de instrucciones"

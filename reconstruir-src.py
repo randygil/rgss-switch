@@ -73,7 +73,7 @@ def donde_aplicar(arbol, parche):
     # la cola— pero el cwd salia una carpeta mas adentro, y desde ahi patch -p1
     # buscaba binding/binding/binding-mri.cpp y contestaba que no aplica. Es lo
     # que hacia que los DOCE parches con cabeceras de git (a/... b/...) se
-    # dieran por rotos estando bien: los mismos doce que README 5.71 daba por
+    # dieran por rotos estando bien: los mismos doce que bitacora §5.71 daba por
     # investigar.
     cola = ficheros[0]
     rel = resuelve(arbol, cola)

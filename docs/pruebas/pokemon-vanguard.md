@@ -193,7 +193,7 @@ Message: You are missing the graphic for this UI. Make sure the image is in
 `if !File.file?("Graphics/Pictures/EncounterUI/"+WINDOWSKIN)`. La imagen esta,
 dentro de `datos.zip`; lo que no la ve es `File.file?`. El motor engancha
 `FileTest.exist?`, `FileTest.exists?`, `File.exist?` y `File.exists?`
-(`nx/nx_ficheros.cpp`, README 5.62) pero no `file?`.
+(`nx/nx_ficheros.cpp`, bitacora §5.62) pero no `file?`.
 
 **Arreglo.** `nx_ficheros.cpp` registra tambien `File.file?` y
 `FileTest.file?`, con una funcion propia: en la tarjeta se mira con `stat` y

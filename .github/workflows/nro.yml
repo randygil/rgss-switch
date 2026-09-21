@@ -3,9 +3,10 @@
 # Reproduce lo que hace construir.sh dentro del contenedor oficial de devkitPro.
 # El paso caro es portar CRuby y las dependencias (build-deps*.sh y
 # build-ruby-switch.sh): son los mismos guiones que en Windows, pero este flujo
-# no se ha ejecutado nunca de punta a punta en Linux. Si falla, el README
-# (secciones 4 y 5) documenta cada problema conocido y su arreglo; lo que si
-# esta comprobado es la compilacion del .nro a partir de las bibliotecas.
+# no se ha ejecutado nunca de punta a punta en Linux. Si falla, la bitacora de
+# ingenieria (docs/bitacora-anil.md §5) documenta cada problema conocido y su
+# arreglo; lo que si esta comprobado es la compilacion del .nro a partir de las
+# bibliotecas ya portadas.
 #
 # Se lanza a mano (workflow_dispatch) y deja el .nro como artefacto. El .nsp no
 # se genera aqui: necesita prod.keys, que no se suben a ningun sitio.

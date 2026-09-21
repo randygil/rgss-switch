@@ -194,20 +194,22 @@ tools/   hacbrewpack.exe  nacptool.exe  npdmtool.exe   (+ sus licencias en LICEN
 `C:\Games\publish\Ryujinx.exe`. Su tarjeta virtual es
 `%APPDATA%\Ryujinx\sdcard\`, así que un juego se prueba dejándolo en
 `%APPDATA%\Ryujinx\sdcard\switch\<slug>\` y lanzando
-`Ryujinx.exe --fullscreen <ruta al .nro>`. Los registros se leen en caliente
-de esa carpeta. **Sólo puede correr un Ryujinx a la vez**: quien lo lance lo
-cierra al terminar (`Stop-Process`), y no lo lanza si ya hay uno.
+`Ryujinx.exe <ruta al .nro>`. Los registros se leen en caliente de esa carpeta.
+**Sólo puede correr un Ryujinx a la vez**: quien lo lance lo cierra al terminar
+(`Stop-Process`), y no lo lanza si ya hay uno. **En ventana**, con el volumen
+del emulador a cero, y las capturas recortadas a su área de cliente: una
+captura con el escritorio dentro no se publica (`47a4f8c`).
 
 `iterate.sh <slug>` compila, despliega y lanza; `jugar.ps1 -Juego <slug>`
 lanza y conduce con el teclado (A=Z, B=X, X=C, Y=V, cruceta=flechas).
 
 ## 9. Reglas de la casa
 
-- **Nada de `C:\anilswitch`** se toca: es otro repositorio con otra sesión
-  encima. Se lee si hace falta; no se escribe.
-- **No se hace `git push`** a ningún remoto. Se confirma en local, en `main`,
-  con mensajes en español que digan qué cambia y por qué, como los del
-  historial.
+- **Nada de `C:\anilswitch`** se toca: en la máquina de referencia es el
+  repositorio del porteo original de Añil. Se lee si hace falta; no se escribe.
+- Se trabaja en `main`, con mensajes en español que digan **qué cambia y por
+  qué**, como los del historial. Al remoto sólo van cambios confirmados y
+  probados; la etiqueta y la release las pone `publicar.sh`, nunca a mano.
 - `.gitignore` es una **lista blanca**: un fichero nuevo no entra en un commit
   hasta que se nombra ahí. Comprobar con `git status --short` que lo nuevo
   aparece.

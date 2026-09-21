@@ -11,7 +11,7 @@ Cubre todo lo que se escribió aquí:
 
 | Qué | Dónde |
 |---|---|
-| Los 13 shims de Horizon | `mkxp-z-nx/nx/*.c` |
+| Los 21 shims de Horizon | `mkxp-z-nx/nx/*.c`, `mkxp-z-nx/nx/*.cpp` |
 | El sistema de compilación que sustituye a meson | `mkxp-z-nx/Makefile` |
 | El shim de POSIX para newlib | `patches/nxcompat.c`, `patches/include/` |
 | Los sustitutos de la biblioteca estándar | `runtime/lib/*.rb`, `runtime/lib/io/wait.rb` |
