@@ -1,0 +1,128 @@
+# 0023-array-hash-to-s.patch
+#
+# DE DONDE SALE. Parche 0017 de los 37 de syntax-transform/3.1/ del PR https://github.com/mkxp-z/mkxp-z/pull/304
+# de mkxp-z, de white-axe (rama syntax-transform, 0be32ad119b054749cf3db8c72434f8fa1ac83ea).
+# Ensenan al parser y al nucleo de Ruby 3.1 la gramatica y la semantica de
+# Ruby 1.8, que es en lo que estan escritos cinco de los ocho juegos del censo.
+#
+# COMO SE APLICA. Sobre src/ruby-3.1.7 DESPUES de los parches 0001-0005 y en
+# orden de numero: el 0006 (prelude) monta el mecanismo que los otros 36 usan,
+# y varios de ellos tocan el mismo fichero, asi que el orden no es decorativo.
+#
+#     cd src/ruby-3.1.7
+#     sed -i 's/\r$//' string.c
+#     for n in $(seq 6 42); do
+#       patch -p1 -i "../../patches/$(printf '%04d' $n)-"*.patch || break
+#     done
+#     rm -f parse.c id.h insns.inc insns_info.inc opt_sc.inc optinsn.inc \
+#           optunifs.inc vm.inc vmtc.inc mjit_compile.inc
+#
+# Ese `rm` NO es opcional y cuesta una tarde descubrirlo. El tarball de Ruby
+# trae parse.c y los .inc YA GENERADOS en el propio directorio de fuentes, y
+# un `#include "insns.inc"` desde compile.c mira primero la carpeta del fichero
+# que incluye: aunque el build regenere los suyos al lado del Makefile, gana el
+# viejo. Con parse.c viejo los ocho parches de gramatica no llegan al binario y
+# NADA lo dice; con los .inc viejos, al menos, no compila
+# ('YARVINSN_mkxp_syntax_transform_raise_invalid_break' undeclared).
+#
+# El cuerpo del diff, de aqui abajo, es el del PR VERBATIM: los 37 aplicaron
+# sin fuzz y sin rechazos sobre este arbol, asi que no habia nada que adaptar.
+# Lo unico que hay que vigilar es string.c, que en este repositorio esta en
+# CRLF y al que `patch` le deja el fichero entero en LF; se normaliza antes,
+# para que ese cambio sea deliberado y no un efecto secundario.
+#
+# COMPROBADO. Con los 37 puestos, bison 3.8.2 acepta la gramatica (parse.y
+# declara %expect 0: cualquier conflicto nuevo habria sido un error, y no hubo
+# ninguno) y CRuby 3.1.7 cruza-compila para aarch64 con devkitA64 16.1.0 hasta
+# libruby-static.a (44,7 MB), con los simbolos del mecanismo dentro
+# (mkxp_syntax_transform_set_next_eval, mkxp_ec_is_syntax_transform_active,
+# mkxp_syntax_transform_target_ruby_version_*) y 14 instrucciones nuevas en
+# insns.inc. No se ha ejecutado: eso pide consola.
+#
+# QUE HACE FALTA ADEMAS. Estos parches por si solos NO cambian el
+# comportamiento: mkxp_syntax_transform_target_ruby_version_* nace en -1 y la
+# transformacion queda apagada, asi que el interprete se comporta como el de
+# hoy. Encenderla es cosa del lado de mkxp-z (armar
+# mkxp_syntax_transform_set_next_eval(1) alrededor del eval de cada seccion de
+# Scripts.rxdata y fijar la version objetivo desde mkxp.json), que en este
+# repositorio todavia no esta hecho.
+#
+# Licencia: GPL-2.0-or-later, la del PR. La cabecera original va debajo.
+# ---------------------------------------------------------------------------
+
+#
+# This file is part of mkxp.
+#
+# Copyright (C) 2026 The mkxp-z authors
+#
+# mkxp is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 2 of the License, or
+# (at your option) any later version.
+#
+# mkxp is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with mkxp.  If not, see <http://www.gnu.org/licenses/>.
+
+# In Ruby 1.8, calling `.to_s` on an array returns the concatenation of the
+# `.to_s` of its elements, and calling `.to_s` on a hash returns the
+# concatenation of the `.to_s` of the first key, then the first value, then the
+# second key, then the second value, and so on. In later versions, `.to_s` is an
+# alias of `.inspect` for arrays and hashes. That means this code snippet prints
+# `"1"` and `"23"` in Ruby 1.8 but `[1]` and `{2 => 3}` in later versions.
+#
+#   p [1].to_s
+#   p ({2 => 3}).to_s
+
+--- a/array.c
++++ b/array.c
+@@ -2887,6 +2887,12 @@ rb_ary_inspect(VALUE ary)
+     return rb_exec_recursive(inspect_ary, ary, 0);
+ }
+ 
++static VALUE
++mkxp_ary_to_s(VALUE ary)
++{
++    return mkxp_ec_is_syntax_transform_active(1, 8, -1) ? rb_ary_join(ary, rb_str_new_cstr("")) : rb_ary_inspect(ary);
++}
++
+ VALUE
+ rb_ary_to_s(VALUE ary)
+ {
+@@ -8270,7 +8276,7 @@ Init_Array(void)
+     rb_define_method(rb_cArray, "initialize_copy", rb_ary_replace, 1);
+ 
+     rb_define_method(rb_cArray, "inspect", rb_ary_inspect, 0);
+-    rb_define_alias(rb_cArray,  "to_s", "inspect");
++    rb_define_method(rb_cArray, "to_s", mkxp_ary_to_s, 0);
+     rb_define_method(rb_cArray, "to_a", rb_ary_to_a, 0);
+     rb_define_method(rb_cArray, "to_h", rb_ary_to_h, 0);
+     rb_define_method(rb_cArray, "to_ary", rb_ary_to_ary_m, 0);
+--- a/hash.c
++++ b/hash.c
+@@ -3490,6 +3490,12 @@ rb_hash_inspect(VALUE hash)
+     return rb_exec_recursive(inspect_hash, hash, 0);
+ }
+ 
++static VALUE
++mkxp_hash_to_s(VALUE hash)
++{
++    return mkxp_ec_is_syntax_transform_active(1, 8, -1) ? rb_ary_join(rb_hash_to_a(hash), rb_str_new_cstr("")) : rb_hash_inspect(hash);
++}
++
+ /*
+  *  call-seq:
+  *    hash.to_hash -> self
+@@ -7196,7 +7202,7 @@ Init_Hash(void)
+     rb_define_method(rb_cHash, "to_h", rb_hash_to_h, 0);
+     rb_define_method(rb_cHash, "to_a", rb_hash_to_a, 0);
+     rb_define_method(rb_cHash, "inspect", rb_hash_inspect, 0);
+-    rb_define_alias(rb_cHash, "to_s", "inspect");
++    rb_define_method(rb_cHash, "to_s", mkxp_hash_to_s, 0);
+     rb_define_method(rb_cHash, "to_proc", rb_hash_to_proc, 0);
+ 
+     rb_define_method(rb_cHash, "==", rb_hash_equal, 1);

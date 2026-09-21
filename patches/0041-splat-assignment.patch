@@ -1,0 +1,142 @@
+# 0041-splat-assignment.patch
+#
+# DE DONDE SALE. Parche 0035 de los 37 de syntax-transform/3.1/ del PR https://github.com/mkxp-z/mkxp-z/pull/304
+# de mkxp-z, de white-axe (rama syntax-transform, 0be32ad119b054749cf3db8c72434f8fa1ac83ea).
+# Ensenan al parser y al nucleo de Ruby 3.1 la gramatica y la semantica de
+# Ruby 1.8, que es en lo que estan escritos cinco de los ocho juegos del censo.
+#
+# COMO SE APLICA. Sobre src/ruby-3.1.7 DESPUES de los parches 0001-0005 y en
+# orden de numero: el 0006 (prelude) monta el mecanismo que los otros 36 usan,
+# y varios de ellos tocan el mismo fichero, asi que el orden no es decorativo.
+#
+#     cd src/ruby-3.1.7
+#     sed -i 's/\r$//' string.c
+#     for n in $(seq 6 42); do
+#       patch -p1 -i "../../patches/$(printf '%04d' $n)-"*.patch || break
+#     done
+#     rm -f parse.c id.h insns.inc insns_info.inc opt_sc.inc optinsn.inc \
+#           optunifs.inc vm.inc vmtc.inc mjit_compile.inc
+#
+# Ese `rm` NO es opcional y cuesta una tarde descubrirlo. El tarball de Ruby
+# trae parse.c y los .inc YA GENERADOS en el propio directorio de fuentes, y
+# un `#include "insns.inc"` desde compile.c mira primero la carpeta del fichero
+# que incluye: aunque el build regenere los suyos al lado del Makefile, gana el
+# viejo. Con parse.c viejo los ocho parches de gramatica no llegan al binario y
+# NADA lo dice; con los .inc viejos, al menos, no compila
+# ('YARVINSN_mkxp_syntax_transform_raise_invalid_break' undeclared).
+#
+# El cuerpo del diff, de aqui abajo, es el del PR VERBATIM: los 37 aplicaron
+# sin fuzz y sin rechazos sobre este arbol, asi que no habia nada que adaptar.
+# Lo unico que hay que vigilar es string.c, que en este repositorio esta en
+# CRLF y al que `patch` le deja el fichero entero en LF; se normaliza antes,
+# para que ese cambio sea deliberado y no un efecto secundario.
+#
+# COMPROBADO. Con los 37 puestos, bison 3.8.2 acepta la gramatica (parse.y
+# declara %expect 0: cualquier conflicto nuevo habria sido un error, y no hubo
+# ninguno) y CRuby 3.1.7 cruza-compila para aarch64 con devkitA64 16.1.0 hasta
+# libruby-static.a (44,7 MB), con los simbolos del mecanismo dentro
+# (mkxp_syntax_transform_set_next_eval, mkxp_ec_is_syntax_transform_active,
+# mkxp_syntax_transform_target_ruby_version_*) y 14 instrucciones nuevas en
+# insns.inc. No se ha ejecutado: eso pide consola.
+#
+# QUE HACE FALTA ADEMAS. Estos parches por si solos NO cambian el
+# comportamiento: mkxp_syntax_transform_target_ruby_version_* nace en -1 y la
+# transformacion queda apagada, asi que el interprete se comporta como el de
+# hoy. Encenderla es cosa del lado de mkxp-z (armar
+# mkxp_syntax_transform_set_next_eval(1) alrededor del eval de cada seccion de
+# Scripts.rxdata y fijar la version objetivo desde mkxp.json), que en este
+# repositorio todavia no esta hecho.
+#
+# Licencia: GPL-2.0-or-later, la del PR. La cabecera original va debajo.
+# ---------------------------------------------------------------------------
+
+#
+# This file is part of mkxp.
+#
+# Copyright (C) 2026 The mkxp-z authors
+#
+# mkxp is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 2 of the License, or
+# (at your option) any later version.
+#
+# mkxp is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with mkxp.  If not, see <http://www.gnu.org/licenses/>.
+
+# In Ruby 1.8, the result of assigning a splatted array to a variable is `nil`
+# if the array is empty, the one element of the array if the array contains
+# exactly one element, or a copy of the array if the array contains more than
+# one element. In later versions of Ruby, the result of splatting an array is
+# always a copy of the array regardless of how many elements the array contains.
+# Thus, this code snippet prints `nil`, `1` and `[1, 2]` in Ruby 1.8 but `[]`,
+# `[1]` and `[1, 2]` in later versions.
+#
+#   a = *[]
+#   p a
+#   a = *[1]
+#   p a
+#   a = *[1, 2]
+#   p a
+#
+# This also applies to other objects: objects with a `.to_a` method are
+# converted to an array by calling `.to_a`, and objects with no `.to_a` method
+# are converted to an array containing the object as its only element. So this
+# code snippet prints `nil`, `0`, `nil`, `[1, 1]` and `[[1, 1], [2, 2]]` in Ruby
+# 1.8 but `[]`, `[0]`, `[]`, `[[1, 1]]` and `[[1, 1], [2, 2]]` in later
+# versions.
+#
+#   a = *a
+#   p a
+#   a = *0
+#   p a
+#   a = *{}
+#   p a
+#   a = *{1 => 1}
+#   p a
+#   a = *{1 => 1, 2 => 2}
+#   p a
+#
+# Fixes <https://github.com/Ancurio/mkxp/issues/177>.
+
+--- a/compile.c
++++ b/compile.c
+@@ -9702,6 +9702,9 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const no
+       case NODE_SPLAT:{
+ 	CHECK(COMPILE(ret, "splat", node->nd_head));
+ 	ADD_INSN1(ret, node, splatarray, Qtrue);
++        if (mkxp_iseq_is_syntax_transform_active(iseq, 1, 8, -1)) {
++            ADD_INSN(ret, node, mkxp_syntax_transform_convert_splatarray_output);
++        }
+ 
+ 	if (popped) {
+ 	    ADD_INSN(ret, node, pop);
+--- a/insns.def
++++ b/insns.def
+@@ -1585,3 +1585,22 @@ mkxp_syntax_transform_raise_invalid_yield
+ {
+     rb_exc_raise(rb_exc_new_cstr(rb_eLocalJumpError, "no block given"));
+ }
++
++DEFINE_INSN
++mkxp_syntax_transform_convert_splatarray_output
++()
++(VALUE ary)
++(VALUE val)
++{
++    switch (RARRAY_LEN(ary)) {
++        case 0:
++            val = Qnil;
++            break;
++        case 1:
++            val = rb_ary_entry(ary, 0);
++            break;
++        default:
++            val = ary;
++            break;
++    }
++}

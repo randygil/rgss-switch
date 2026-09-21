@@ -1,0 +1,125 @@
+# 0025-toplevel-constant.patch
+#
+# DE DONDE SALE. Parche 0019 de los 37 de syntax-transform/3.1/ del PR https://github.com/mkxp-z/mkxp-z/pull/304
+# de mkxp-z, de white-axe (rama syntax-transform, 0be32ad119b054749cf3db8c72434f8fa1ac83ea).
+# Ensenan al parser y al nucleo de Ruby 3.1 la gramatica y la semantica de
+# Ruby 1.8, que es en lo que estan escritos cinco de los ocho juegos del censo.
+#
+# COMO SE APLICA. Sobre src/ruby-3.1.7 DESPUES de los parches 0001-0005 y en
+# orden de numero: el 0006 (prelude) monta el mecanismo que los otros 36 usan,
+# y varios de ellos tocan el mismo fichero, asi que el orden no es decorativo.
+#
+#     cd src/ruby-3.1.7
+#     sed -i 's/\r$//' string.c
+#     for n in $(seq 6 42); do
+#       patch -p1 -i "../../patches/$(printf '%04d' $n)-"*.patch || break
+#     done
+#     rm -f parse.c id.h insns.inc insns_info.inc opt_sc.inc optinsn.inc \
+#           optunifs.inc vm.inc vmtc.inc mjit_compile.inc
+#
+# Ese `rm` NO es opcional y cuesta una tarde descubrirlo. El tarball de Ruby
+# trae parse.c y los .inc YA GENERADOS en el propio directorio de fuentes, y
+# un `#include "insns.inc"` desde compile.c mira primero la carpeta del fichero
+# que incluye: aunque el build regenere los suyos al lado del Makefile, gana el
+# viejo. Con parse.c viejo los ocho parches de gramatica no llegan al binario y
+# NADA lo dice; con los .inc viejos, al menos, no compila
+# ('YARVINSN_mkxp_syntax_transform_raise_invalid_break' undeclared).
+#
+# El cuerpo del diff, de aqui abajo, es el del PR VERBATIM: los 37 aplicaron
+# sin fuzz y sin rechazos sobre este arbol, asi que no habia nada que adaptar.
+# Lo unico que hay que vigilar es string.c, que en este repositorio esta en
+# CRLF y al que `patch` le deja el fichero entero en LF; se normaliza antes,
+# para que ese cambio sea deliberado y no un efecto secundario.
+#
+# COMPROBADO. Con los 37 puestos, bison 3.8.2 acepta la gramatica (parse.y
+# declara %expect 0: cualquier conflicto nuevo habria sido un error, y no hubo
+# ninguno) y CRuby 3.1.7 cruza-compila para aarch64 con devkitA64 16.1.0 hasta
+# libruby-static.a (44,7 MB), con los simbolos del mecanismo dentro
+# (mkxp_syntax_transform_set_next_eval, mkxp_ec_is_syntax_transform_active,
+# mkxp_syntax_transform_target_ruby_version_*) y 14 instrucciones nuevas en
+# insns.inc. No se ha ejecutado: eso pide consola.
+#
+# QUE HACE FALTA ADEMAS. Estos parches por si solos NO cambian el
+# comportamiento: mkxp_syntax_transform_target_ruby_version_* nace en -1 y la
+# transformacion queda apagada, asi que el interprete se comporta como el de
+# hoy. Encenderla es cosa del lado de mkxp-z (armar
+# mkxp_syntax_transform_set_next_eval(1) alrededor del eval de cada seccion de
+# Scripts.rxdata y fijar la version objetivo desde mkxp.json), que en este
+# repositorio todavia no esta hecho.
+#
+# Licencia: GPL-2.0-or-later, la del PR. La cabecera original va debajo.
+# ---------------------------------------------------------------------------
+
+#
+# This file is part of mkxp.
+#
+# Copyright (C) 2026 The mkxp-z authors
+#
+# mkxp is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 2 of the License, or
+# (at your option) any later version.
+#
+# mkxp is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with mkxp.  If not, see <http://www.gnu.org/licenses/>.
+
+# In Ruby versions up to and including Ruby 2.4, toplevel constants are also
+# defined in every class. In later Ruby versions, toplevel constants are also
+# defined in the class `Object` but not in any other classes. So this prints
+# `"constant"` in Ruby versions up to and including 2.4 but `nil` in later
+# versions.
+#
+#   A = 1
+#   p defined? Module::A
+#
+# Likewise, this prints `1` in Ruby versions up to and including 2.4 but raises
+# a `NameError` in later versions. However, in Ruby versions up to and including
+# 2.4, it also shows the warning "toplevel constant A referenced by Module::A".
+#
+#   A = 1
+#   p Module::A
+#
+# This code snippet prints `"constant"` and `1` in every Ruby version without
+# showing any warnings.
+#
+#   A = 1
+#   p defined? Object::A
+#   p Object::A
+#
+# This code snippet prints `nil` and then throws a `NameError` in every Ruby
+# version because `Kernel` is a module, not a class.
+#
+#   A = 1
+#   p defined? Kernel::A
+#   p Kernel::A
+
+--- a/variable.c
++++ b/variable.c
+@@ -2745,7 +2745,11 @@ rb_const_search_from(VALUE klass, ID id, int exclude, int recurse, int visibilit
+ 		continue;
+ 	    }
+             if (exclude && tmp == rb_cObject) {
+-		goto not_found;
++                /* If syntax transform is active and targeting Ruby <= 2.4, make sure toplevel constants are accessible as constants of classes as well */
++                if (!mkxp_ec_is_syntax_transform_active(2, 4, -1)) {
++                    goto not_found;
++                }
++                rb_warn("toplevel constant %"PRIsVALUE" referenced by %"PRIsVALUE"::%"PRIsVALUE"", QUOTE_ID(id), rb_class_name(klass), QUOTE_ID(id));
+ 	    }
+ 	    return value;
+ 	}
+@@ -3077,7 +3081,8 @@ rb_const_defined_0(VALUE klass, ID id, int exclude, int recurse, int visibility)
+ 		!rb_autoloading_value(tmp, id, NULL, NULL))
+ 		return (int)Qfalse;
+ 
+-	    if (exclude && tmp == rb_cObject && klass != rb_cObject) {
++            /* If syntax transform is active and targeting Ruby <= 2.4, make sure toplevel constants are also considered to be defined in classes */
++            if (!mkxp_ec_is_syntax_transform_active(2, 4, -1) && exclude && tmp == rb_cObject && klass != rb_cObject) {
+ 		return (int)Qfalse;
+ 	    }
+ 

@@ -1,0 +1,122 @@
+# 0042-brace-after-array-literal-arg.patch
+#
+# DE DONDE SALE. Parche 0036 de los 37 de syntax-transform/3.1/ del PR https://github.com/mkxp-z/mkxp-z/pull/304
+# de mkxp-z, de white-axe (rama syntax-transform, 0be32ad119b054749cf3db8c72434f8fa1ac83ea).
+# Ensenan al parser y al nucleo de Ruby 3.1 la gramatica y la semantica de
+# Ruby 1.8, que es en lo que estan escritos cinco de los ocho juegos del censo.
+#
+# COMO SE APLICA. Sobre src/ruby-3.1.7 DESPUES de los parches 0001-0005 y en
+# orden de numero: el 0006 (prelude) monta el mecanismo que los otros 36 usan,
+# y varios de ellos tocan el mismo fichero, asi que el orden no es decorativo.
+#
+#     cd src/ruby-3.1.7
+#     sed -i 's/\r$//' string.c
+#     for n in $(seq 6 42); do
+#       patch -p1 -i "../../patches/$(printf '%04d' $n)-"*.patch || break
+#     done
+#     rm -f parse.c id.h insns.inc insns_info.inc opt_sc.inc optinsn.inc \
+#           optunifs.inc vm.inc vmtc.inc mjit_compile.inc
+#
+# Ese `rm` NO es opcional y cuesta una tarde descubrirlo. El tarball de Ruby
+# trae parse.c y los .inc YA GENERADOS en el propio directorio de fuentes, y
+# un `#include "insns.inc"` desde compile.c mira primero la carpeta del fichero
+# que incluye: aunque el build regenere los suyos al lado del Makefile, gana el
+# viejo. Con parse.c viejo los ocho parches de gramatica no llegan al binario y
+# NADA lo dice; con los .inc viejos, al menos, no compila
+# ('YARVINSN_mkxp_syntax_transform_raise_invalid_break' undeclared).
+#
+# El cuerpo del diff, de aqui abajo, es el del PR VERBATIM: los 37 aplicaron
+# sin fuzz y sin rechazos sobre este arbol, asi que no habia nada que adaptar.
+# Lo unico que hay que vigilar es string.c, que en este repositorio esta en
+# CRLF y al que `patch` le deja el fichero entero en LF; se normaliza antes,
+# para que ese cambio sea deliberado y no un efecto secundario.
+#
+# COMPROBADO. Con los 37 puestos, bison 3.8.2 acepta la gramatica (parse.y
+# declara %expect 0: cualquier conflicto nuevo habria sido un error, y no hubo
+# ninguno) y CRuby 3.1.7 cruza-compila para aarch64 con devkitA64 16.1.0 hasta
+# libruby-static.a (44,7 MB), con los simbolos del mecanismo dentro
+# (mkxp_syntax_transform_set_next_eval, mkxp_ec_is_syntax_transform_active,
+# mkxp_syntax_transform_target_ruby_version_*) y 14 instrucciones nuevas en
+# insns.inc. No se ha ejecutado: eso pide consola.
+#
+# QUE HACE FALTA ADEMAS. Estos parches por si solos NO cambian el
+# comportamiento: mkxp_syntax_transform_target_ruby_version_* nace en -1 y la
+# transformacion queda apagada, asi que el interprete se comporta como el de
+# hoy. Encenderla es cosa del lado de mkxp-z (armar
+# mkxp_syntax_transform_set_next_eval(1) alrededor del eval de cada seccion de
+# Scripts.rxdata y fijar la version objetivo desde mkxp.json), que en este
+# repositorio todavia no esta hecho.
+#
+# Licencia: GPL-2.0-or-later, la del PR. La cabecera original va debajo.
+# ---------------------------------------------------------------------------
+
+#
+# This file is part of mkxp.
+#
+# Copyright (C) 2026 The mkxp-z authors
+#
+# mkxp is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 2 of the License, or
+# (at your option) any later version.
+#
+# mkxp is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with mkxp.  If not, see <http://www.gnu.org/licenses/>.
+
+# In Ruby versions greater than or equal to 1.9.0 and less than 2.5.0, an
+# expression consisting of a function name, then a space, then an array literal,
+# then a space, then a curly-brace block, is valid, but is not valid in any
+# other version of Ruby. Below are examples of such expressions:
+#
+#   p [] {}
+#   p *[] {}
+#   p [1, 2, 3] {}
+#   p [1, [2, 3]] {}
+#   p [1, [2, 3]] {||}
+#   p [1, [2, 3]] {|| true}
+#
+# If these expressions are rewritten to have the array literal parenthesized,
+# they become valid in other versions of Ruby as well (and do the same things as
+# the original expressions):
+#
+#   p ([]) {}
+#   p ([1, 2, 3]) {}
+#   p ([1, [2, 3]]) {}
+#   p ([1, [2, 3]]) {||}
+#   p ([1, [2, 3]]) {|| true}
+#
+# They can also be made valid by using the `do`/`end` block syntax instead of
+# the curly-brace block syntax:
+#
+#   p [] do end
+#   p *[] do end
+#   p [1, 2, 3] do end
+#   p [1, [2, 3]] do end
+#   p [1, [2, 3]] do || end
+#   p [1, [2, 3]] do || true end
+
+--- a/parse.y
++++ b/parse.y
+@@ -9996,7 +9996,7 @@ parser_yylex(struct parser_params *p)
+       case ']':
+ 	COND_POP();
+ 	CMDARG_POP();
+-	SET_LEX_STATE(EXPR_END);
++	SET_LEX_STATE(mkxp_parser_is_syntax_transform_active(p, 2, 4, -1) && !mkxp_parser_is_syntax_transform_active(p, 1, 8, -1) ? EXPR_ENDARG : EXPR_END);
+ 	p->lex.paren_nest--;
+ 	return c;
+ 
+@@ -10005,7 +10005,7 @@ parser_yylex(struct parser_params *p)
+ 	if (!p->lex.brace_nest--) return tSTRING_DEND;
+ 	COND_POP();
+ 	CMDARG_POP();
+-	SET_LEX_STATE(EXPR_END);
++	SET_LEX_STATE(mkxp_parser_is_syntax_transform_active(p, 2, 4, -1) && !mkxp_parser_is_syntax_transform_active(p, 1, 8, -1) ? EXPR_ENDARG : EXPR_END);
+ 	p->lex.paren_nest--;
+ 	return c;
+ 
