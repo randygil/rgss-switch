@@ -98,6 +98,10 @@
 !/nsp/npdm.json
 !/nsp/nacp-utf8.py
 !/nsp/icono.jpg
+# hacer-espera.py rehace mkxp-z-nx/nx/espera.png, la pantalla de CARGANDO, a
+# partir de las mismas medidas y colores que el icono: la marca del motor vive
+# en esta carpeta y las dos caras tienen que ser la misma.
+!/nsp/hacer-espera.py
 # control/, exefs/, nca/, temp/ y salida/ los produce empaquetar-nsp.sh, y el
 # NCA va firmado con prod.keys de tu propia consola.
 
@@ -125,6 +129,10 @@
 !/docs/capturas/cargar-b06.png
 !/docs/capturas/nom2-b-letras.png
 !/docs/capturas/pokemon-anil-regresion-motor-generico.png
+# La pantalla de carga del motor despues de quitarle el logo de Anil, tomada en
+# el emulador con Opalo: es la prueba de que la ensenan todos los juegos y de
+# que ya no anuncia el juego equivocado.
+!/docs/capturas/pantalla-carga-motor.png
 # Los hitos de las primeras partidas de Vanguard y Reborn en el emulador. Solo
 # los hitos: las capturas de las vueltas fallidas se quedan en el disco.
 !/docs/capturas/pokemon-vanguard-hito-*.png

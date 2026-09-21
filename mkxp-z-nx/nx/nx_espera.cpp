@@ -8,7 +8,7 @@
  * que hacer. El registro decia desde el principio que el arranque iba bien; el
  * problema es que el jugador no lee registros.
  *
- * Asi que se dibuja algo. El logo del juego, la palabra CARGANDO y una barra
+ * Asi que se dibuja algo. La marca del motor, la palabra CARGANDO y una barra
  * que avanza en cada hito del arranque:
  *
  *   0,15  contexto GL creado (aqui empieza a haber donde dibujar)
@@ -217,8 +217,15 @@ void nx_espera_abre(SDL_Window *v)
     gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
                            (const void *)(2 * sizeof(float)));
 
-    /* El logo. Va empotrado en el binario porque esto se dibuja ANTES de que
-     * PhysFS monte nada: en ese momento no se puede leer un fichero del juego. */
+    /* La marca. Va empotrada en el binario porque esto se dibuja ANTES de que
+     * PhysFS monte nada: en ese momento no se puede leer un fichero del juego.
+     *
+     * Y por eso mismo es la marca DEL MOTOR y no la del juego. Hasta ahora
+     * espera.png era la pantalla de titulo de Pokemon Anil 4.0, que era el
+     * unico juego que habia; empotrada en el binario, la ensenaban los ocho
+     * -Opalo arrancaba anunciando Anil-, y ademas metia arte de un tercero
+     * dentro de algo que se distribuye bajo la GPL. Ahora es la misma cara que
+     * lleva el icono de la consola (nsp/icono.jpg), dibujada con sus colores. */
     {
         SDL_RWops *rw = SDL_RWFromConstMem(nx_espera_png, (int)nx_espera_png_len);
         SDL_Surface *bruta = rw ? IMG_Load_RW(rw, 1) : 0;

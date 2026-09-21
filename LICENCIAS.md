@@ -18,6 +18,7 @@ Cubre todo lo que se escribió aquí:
 | La biblioteca de shims y su catálogo, salvo los dos ficheros de la tabla de §2.1 | `runtime/shims/catalogo.json`, `runtime/shims/discord.rb`, `poke-api-v2.rb`, `rubygems.rb`, `nx-rutas-windows.rb`, `nx-marshal-huerfano.rb`, `nx-msgbox.rb` |
 | La configuración del motor para la consola | `runtime/mkxp.json` |
 | El banco de pruebas del intérprete | `hello-ruby-nx/` |
+| La marca del motor: el icono de la consola y la pantalla de carga | `nsp/icono.jpg`, `nsp/hacer-espera.py`, `mkxp-z-nx/nx/espera.png` |
 | Los guiones de compilación, empaquetado y depuración | `*.sh`, `*.py`, `*.ps1`, `nsp/` |
 | La bitácora de ingeniería | `README.md` |
 
