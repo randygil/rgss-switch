@@ -1,0 +1,142 @@
+//==============================================================================
+// catalogo.json — el catálogo de shims de compatibilidad.
+//
+// Antes, cada perfil listaba a mano los .rb que necesitaba y cada juego traía
+// su propio parche de Ruby en `juegos/<slug>/lib/`. Tres de esos ficheros
+// (discord.rb, poke-api-v2.rb, rubygems.rb) no eran de Reborn: eran de
+// cualquier juego que haga `require` de una gema de Windows. Aquí viven los que
+// sirven para más de un juego, y el perfil sólo dice su NOMBRE:
+//
+//     "shims": ["discord", "poke-api-v2", "rubygems"]
+//
+// Empaquetar.ps1 lo resuelve contra este fichero: copia los .rb que haga falta
+// a `lib/` de la tarjeta, los ordena y compone `preloadScript` (CONVENCIONES.md
+// §5, capa 4). Lo que sólo sirve en UN juego se queda en `juegos/<slug>/lib/` y
+// en la lista `preload` del perfil, que sigue existiendo y va la última.
+//
+// Es JSON5 —lleva comentarios— como mkxp.base.json: el empaquetador los limpia
+// antes de leerlo.
+//
+// CAMPOS DE CADA SHIM
+//   ficheros   los .rb, EN EL ORDEN EN QUE SE CARGAN entre ellos.
+//   carga      "preload"  va a preloadScript, antes de los scripts del juego.
+//              "require"  se copia a lib/ y nada más: lo encuentra el `require`
+//                         del propio juego. No se ejecuta si nadie lo pide.
+//              "postload" iría a postloadScript. ESTE MOTOR NO LO TIENE:
+//                         mkxp-z 2.4.2 sólo lee preloadScript (config.cpp:196).
+//                         El empaquetador lo emite igualmente y avisa de que la
+//                         consola lo va a ignorar; hoy no lo usa ningún shim.
+//   orden      entero. Manda sobre el orden en que el perfil los liste, para
+//              que dos perfiles no acaben con dos órdenes de carga distintos.
+//   en         "shims" (este directorio) o "lib" (los del motor, que ya viajan
+//              en lib/ de la entrega y no hay que copiar).
+//   siempre    true: se carga en todos los juegos, lo pida el perfil o no.
+//   familias   se carga sólo en estas familias de motor (perfil → "motor").
+//   mkxp       claves de mkxp.json que el shim implica. Se aplican por debajo
+//              del bloque "mkxp" del perfil, que siempre puede pisarlas.
+//   arregla / visto-en / origen   para quién lee esto dentro de un año.
+//==============================================================================
+{
+  "shims": {
+
+    //--- Los del motor. Viajan en lib/ y se cargan solos (§5 capa 4) ---------
+    "compat": {
+      "ficheros": ["nx-compat.rb"],
+      "carga": "preload", "orden": 10, "en": "lib", "siempre": true,
+      "mkxp": {},
+      "arregla": "El modulo MKXP (la API de JoiPlay), $stdout a fichero y Marshal.neverload. Va SIEMPRE el primero: los preload.rb de estos juegos llaman a MKXP en su primera linea.",
+      "visto-en": "todos",
+      "origen": "propio del porteo (GPLv2+)"
+    },
+    "teclado": {
+      "ficheros": ["nx-teclado.rb"],
+      "carga": "preload", "orden": 20, "en": "lib", "siempre": true,
+      "mkxp": {},
+      "arregla": "La entrada de texto: sin teclado fisico, PokemonEntryScene tiene que ser la rejilla de letras.",
+      "visto-en": "pokemon-vanguard",
+      "origen": "propio del porteo (GPLv2+)"
+    },
+    "rutas": {
+      "ficheros": ["nx-rutas.rb"],
+      "carga": "preload", "orden": 30, "en": "lib", "siempre": true,
+      "mkxp": {},
+      "arregla": "Memoriza el resolutor de rutas de Essentials: cada imagen costaba cinco llamadas al sistema de ficheros, y en Horizon cada una son ~2 ms de IPC.",
+      "visto-en": "pokemon-anil",
+      "origen": "propio del porteo (GPLv2+)"
+    },
+    "ruby18": {
+      "ficheros": ["nx-ruby18.rb"],
+      "carga": "preload", "orden": 40, "en": "lib",
+      "familias": ["ruby18", "rgss1"],
+      "mkxp": {},
+      "arregla": "Los once arreglos de la familia de Ruby 1.8: el Win32API postizo, las diferencias 1.8->3.1 que no son de sintaxis (proc con return, getbyte, StringInput), LargePlane y la pantalla logica de 512x384.",
+      "visto-en": "pokemon-opalo, pokemon-iberia, pokemon-titan, pokemon-z, pokemon-uranium",
+      "origen": "propio del porteo (GPLv2+)"
+    },
+
+    //--- Biblioteca compartida. El perfil los pide por nombre ----------------
+    "win32": {
+      "ficheros": ["win32_wrap.rb", "win32_wrap_encoding.rb"],
+      "carga": "preload", "orden": 50, "en": "shims",
+      "mkxp": {},
+      "arregla": "Win32API en los juegos de la familia ruby31, que NO cargan nx-ruby18.rb: GetKeyState, GetAsyncKeyState, ScreenToClient, SetWindowPos y el sonido por MCI, resueltos contra Input y Audio en vez de contra user32.",
+      "visto-en": "sin encender en ningun perfil (2026-09-11); el censo lo pide para los plugins de Reborn y Vanguard",
+      "origen": "Empo / mkxp-z-apple-mobile: win32_wrap.rb de Ancurio + Splendide Imaginarius (CC0), win32_wrap_encoding.rb GPLv2+. Ver LICENCIAS.md"
+    },
+    "rutas-windows": {
+      "ficheros": ["nx-rutas-windows.rb"],
+      "carga": "preload", "orden": 55, "en": "shims",
+      "mkxp": {},
+      "arregla": "Rutas con contrabarra, Dir.chdir a una carpeta que no existe y ENV['TEMP'] vacio, para los juegos de ruby31 (en ruby18 ya lo tapa nx-ruby18.rb).",
+      "visto-en": "sin encender en ningun perfil (2026-09-11)",
+      "origen": "idea de windows_fs.rb de Empo (GPLv2+), reescrito aqui"
+    },
+    "marshal-huerfano": {
+      "ficheros": ["nx-marshal-huerfano.rb"],
+      "carga": "preload", "orden": 60, "en": "shims",
+      "mkxp": {},
+      "arregla": "Marshal.load de una clase que este motor no define ('undefined class/module Win32API'): la define inerte y reintenta, en vez de llevarse la partida por delante.",
+      "visto-en": "sin encender en ningun perfil (2026-09-11)",
+      "origen": "idea de los stubs de JoiPlay que recoge Empo (GPLv2+), escrito aqui de cero"
+    },
+    "msgbox": {
+      "ficheros": ["nx-msgbox.rb"],
+      "carga": "preload", "orden": 65, "en": "shims",
+      "mkxp": {},
+      "arregla": "msgbox, msgbox_p y Game.msgbox, que en Windows abren una ventana y aqui no existen: el texto va a mkxp-ruby.log.",
+      "visto-en": "sin encender en ningun perfil (2026-09-11)",
+      "origen": "idea de rgss_plugin_stubs.rb de Empo (GPLv2+), escrito aqui de cero"
+    },
+
+    //--- Gemas de Windows que un `require` del juego no puede dejar de encontrar
+    // Estos tres NO se cargan: se copian a lib/, que va delante de gems/ en
+    // rubyLoadpath, y ahi los encuentra el `require` del propio juego. Un
+    // LoadError en estos juegos no se queda en "sin Discord": el cargador de
+    // Essentials rescata StandardError y LoadError es ScriptError, asi que se
+    // lleva el arranque entero sin escribir una linea de errorlog.txt.
+    "discord": {
+      "ficheros": ["discord.rb"],
+      "carga": "require", "orden": 70, "en": "shims",
+      "mkxp": {},
+      "arregla": "require 'discord': la gema de verdad carga discord.so, una extension nativa de Windows.",
+      "visto-en": "pokemon-reborn",
+      "origen": "propio del porteo (GPLv2+); estaba en juegos/pokemon-reborn/lib/"
+    },
+    "poke-api-v2": {
+      "ficheros": ["poke-api-v2.rb"],
+      "carga": "require", "orden": 71, "en": "shims",
+      "mkxp": {},
+      "arregla": "require 'poke-api-v2': el validador consulta pokeapi.co por HTTP y aqui no hay red.",
+      "visto-en": "pokemon-reborn",
+      "origen": "propio del porteo (GPLv2+); estaba en juegos/pokemon-reborn/lib/"
+    },
+    "rubygems": {
+      "ficheros": ["rubygems.rb"],
+      "carga": "require", "orden": 72, "en": "shims",
+      "mkxp": {},
+      "arregla": "require 'rubygems': el RubyGems de verdad pide rbconfig y monitor.so, que este interprete no lleva. Solo se define Gem::Version, que es lo unico que usan.",
+      "visto-en": "pokemon-reborn",
+      "origen": "propio del porteo (GPLv2+); estaba en juegos/pokemon-reborn/lib/"
+    }
+  }
+}

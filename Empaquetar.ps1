@@ -104,7 +104,14 @@ $ClavesDelJuego = @(
 # Los shims genericos, en su orden. nx-compat.rb va SIEMPRE el primero: define
 # el modulo MKXP (la API de JoiPlay) que los preload.rb de varios de estos juegos
 # llaman en su primera linea.
+#
+# Esto es hoy la RESERVA: quien manda es el catalogo (shims/catalogo.json, o
+# runtime/shims/catalogo.json si se ejecuta contra el arbol del repositorio), que
+# dice lo mismo y ademas de donde sale cada fichero y que juego lo pidio. Una
+# entrega vieja sin catalogo se empaqueta igual con estas tres lineas, que es
+# exactamente lo que hacia antes.
 $ShimsGenericos = @("nx-compat.rb", "nx-teclado.rb", "nx-rutas.rb")
+$ShimFamilia18 = "nx-ruby18.rb"
 
 #============================================================== utilidades base
 
@@ -725,6 +732,90 @@ function Comprueba-Contenedor([string]$ruta, $cuenta, [scriptblock]$avisa) {
     } finally { $zip.Dispose() }
 }
 
+#=============================================================== el catalogo
+
+# La biblioteca de shims: un .rb por arreglo y un catalogo que dice para que
+# sirve cada uno, en que orden se cargan y de donde salio el codigo. Antes esto
+# estaba repartido entre una lista de tres nombres aqui arriba, un `if` por la
+# familia de motor, y la lista `preload` escrita a mano en cada perfil; el
+# resultado era que tres ficheros de Reborn (discord.rb, poke-api-v2.rb y
+# rubygems.rb) que valen para CUALQUIER juego que haga `require` de una gema de
+# Windows vivian dentro de juegos/pokemon-reborn/lib/ y no los veia nadie mas.
+#
+# En la entrega el catalogo esta en shims/; contra el arbol del repositorio, en
+# runtime/shims/. Si no aparece, se sigue con las listas de reserva de arriba.
+function Carpeta-Shims() {
+    foreach ($c in @((Join-Path $Entrega "shims"), (Join-Path $Entrega "runtime\shims"))) {
+        if (Test-Path -LiteralPath (Join-Path $c "catalogo.json")) { return $c }
+    }
+    return $null
+}
+
+$script:CatalogoLeido = $false
+$script:CatalogoCache = $null
+function Lee-Catalogo() {
+    if (-not $script:CatalogoLeido) {
+        $script:CatalogoLeido = $true
+        $dir = Carpeta-Shims
+        if ($dir) { $script:CatalogoCache = Lee-Json (Join-Path $dir "catalogo.json") }
+    }
+    return $script:CatalogoCache
+}
+
+# Que shims le tocan a ESTE juego, ya ordenados. Tres motivos para que uno entre:
+# "siempre" (los del motor), su familia de motor (nx-ruby18.rb en ruby18 y
+# rgss1) o que el perfil lo pida por nombre en "shims". Devuelve una fila por
+# FICHERO -un shim puede ser mas de uno, como win32- con lo que hace falta para
+# copiarlo y para componer el preloadScript.
+function Resuelve-Shims($info, [scriptblock]$avisa) {
+    $cat = Lee-Catalogo
+    $sel = @()
+
+    if ($null -eq $cat) {
+        $orden = 10
+        foreach ($s in $ShimsGenericos) {
+            $sel += [pscustomobject]@{ Nombre = $s; Fichero = $s; Carga = "preload"; En = "lib"; Orden = $orden; Mkxp = $null; PorFamilia = $false }
+            $orden += 10
+        }
+        if ($info.Familia -eq "ruby18" -or $info.Familia -eq "rgss1") {
+            $sel += [pscustomobject]@{ Nombre = "ruby18"; Fichero = $ShimFamilia18; Carga = "preload"; En = "lib"; Orden = 40; Mkxp = $null; PorFamilia = $true }
+        }
+        return @($sel)
+    }
+
+    $tabla = Objeto-A-Tabla (Valor $cat "shims")
+    $pedidos = @(Lista $info.Perfil "shims")
+    foreach ($p in $pedidos) {
+        if (-not $tabla.Contains($p)) {
+            $avisa.Invoke("     AVISO: el perfil pide el shim '$p' y el catalogo no lo conoce; se ignora.")
+        }
+    }
+
+    foreach ($e in $tabla.GetEnumerator()) {
+        $def = $e.Value
+        $familias = @(Lista $def "familias")
+        $porFamilia = ($familias.Count -gt 0 -and ($familias -contains $info.Familia))
+        $entra = [bool](Valor $def "siempre") -or $porFamilia -or ($pedidos -contains $e.Key)
+        if (-not $entra) { continue }
+
+        $orden = Valor $def "orden"; if ($null -eq $orden) { $orden = 100 }
+        $carga = Valor $def "carga"; if (-not $carga) { $carga = "preload" }
+        $en    = Valor $def "en";    if (-not $en)    { $en = "shims" }
+        $i = 0
+        foreach ($f in (Lista $def "ficheros")) {
+            # El orden de dentro de un shim -win32_wrap.rb antes que su
+            # win32_wrap_encoding.rb- se respeta sumando centesimas, para no
+            # tener que numerar a mano cada fichero en el catalogo.
+            $sel += [pscustomobject]@{
+                Nombre = $e.Key; Fichero = $f; Carga = $carga; En = $en
+                Orden = ([double]$orden + $i / 100.0); Mkxp = (Valor $def "mkxp"); PorFamilia = $porFamilia
+            }
+            $i++
+        }
+    }
+    return @($sel | Sort-Object Orden)
+}
+
 #================================================================== mkxp.json
 
 # §5: cuatro capas, la de abajo pisa a la de arriba. Se escribe SIN comentarios
@@ -765,24 +856,40 @@ function Compone-Mkxp($info, [string]$juego, [scriptblock]$avisa) {
         }
     }
 
+    # Lo que impliquen los shims elegidos (catalogo -> "mkxp") va JUSTO DEBAJO
+    # del perfil, no encima: un shim describe lo que necesita para funcionar, y
+    # el perfil de un juego concreto siempre tiene la ultima palabra.
+    $shims = @(Resuelve-Shims $info $avisa)
+    foreach ($s in $shims) {
+        foreach ($p in (Objeto-A-Tabla $s.Mkxp).GetEnumerator()) { $cfg[$p.Key] = $p.Value }
+    }
+
     foreach ($p in (Objeto-A-Tabla (Valor $info.Perfil "mkxp")).GetEnumerator()) { $cfg[$p.Key] = $p.Value }
 
+    # Los shims del catalogo: primero los que van SIEMPRE (nx-compat.rb el
+    # primero de todos, que define el modulo MKXP que los preload.rb de estos
+    # juegos llaman en su primera linea), luego el de la FAMILIA y luego los que
+    # el perfil pide por nombre. Los de carga "require" no se cargan: se copian
+    # a lib/ y los encuentra el `require` del propio juego.
+    #
+    # El shim de familia: los juegos de ruby18 -Opalo, Iberia, Titan, Z- y el de
+    # rgss1 -Uranium- traen scripts escritos para Ruby 1.8: 25-28 lineas de
+    # sintaxis que 3.1 ya no acepta y, sobre todo, doce o catorce Win32API.new
+    # de nivel superior que revientan el arranque en la seccion 21 de 168 con
+    # "uninitialized constant Win32API" (docs/censo-juegos.md). nx-ruby18.rb es
+    # lo que los tapa, y no lo pide ningun perfil porque no es de ningun juego:
+    # es de la familia entera.
     $preload = @()
-    foreach ($s in $ShimsGenericos) { $preload += ("lib/" + $s) }
-
-    # Shim por FAMILIA, antes que los del perfil. Los juegos de la familia
-    # ruby18 -Opalo, Iberia, Titan, Z- y el de rgss1 -Uranium- traen scripts
-    # escritos para Ruby 1.8: 25-28 lineas de sintaxis que 3.1 ya no acepta y,
-    # sobre todo, doce o catorce Win32API.new de nivel superior que revientan el
-    # arranque en la seccion 21 de 168 con "uninitialized constant Win32API"
-    # (docs/censo-juegos.md). nx-ruby18.rb es lo que los tapa. Va aqui y no en
-    # cada perfil porque no es de ningun juego: es de la familia entera.
-    if ($info.Familia -eq "ruby18" -or $info.Familia -eq "rgss1") {
-        if (Test-Path -LiteralPath (Join-Path $Entrega "lib\nx-ruby18.rb")) {
-            $preload += "lib/nx-ruby18.rb"
-        } else {
-            $avisa.Invoke("     AVISO: este juego es de la familia $($info.Familia) y esta entrega no trae lib\nx-ruby18.rb; se empaqueta sin el, y casi seguro no arranca.")
+    $postload = @()
+    foreach ($s in $shims) {
+        if ($s.Carga -eq "require") { continue }
+        if ($s.En -eq "lib" -and $s.PorFamilia -and
+            -not (Test-Path -LiteralPath (Join-Path $Entrega ("lib\" + $s.Fichero)))) {
+            $avisa.Invoke("     AVISO: este juego es de la familia $($info.Familia) y esta entrega no trae lib\$($s.Fichero); se empaqueta sin el, y casi seguro no arranca.")
+            continue
         }
+        if ($s.Carga -eq "postload") { $postload += ("lib/" + $s.Fichero) }
+        else                         { $preload  += ("lib/" + $s.Fichero) }
     }
 
     foreach ($s in (Lista $info.Perfil "preload")) { $preload += ("lib/" + $s) }
@@ -800,6 +907,17 @@ function Compone-Mkxp($info, [string]$juego, [scriptblock]$avisa) {
     # interprete ya remendado por nx-compat.rb, no al reves.
     if (Test-Path -LiteralPath (Join-Path $juego "preload.rb")) { $preload += "preload.rb" }
     $cfg["preloadScript"] = $preload
+
+    # postloadScript existe en la configuracion de otros mkxp-z (el de Empo lo
+    # usa para sus stubs de despues de los scripts del juego), pero EN ESTE NO:
+    # mkxp-z 2.4.2 solo lee preloadScript (src/config.cpp:196). Se emite igual
+    # si algun shim lo pide -para que el dia que el motor lo tenga no haya que
+    # tocar nada- y se dice que hoy la consola lo va a ignorar. Hoy no lo pide
+    # ningun shim, asi que la clave no aparece en ningun mkxp.json.
+    if ($postload.Count) {
+        $cfg["postloadScript"] = $postload
+        $avisa.Invoke("     AVISO: " + ($postload -join ", ") + " se piden como postload y este motor (mkxp-z 2.4.2) no tiene postloadScript: la clave se escribe y la consola la ignora.")
+    }
 
     $rutas = @("lib")
     foreach ($r in (Lista $info.Perfil "rubyLoadpath")) { if ($rutas -notcontains $r) { $rutas += $r } }
@@ -1234,6 +1352,26 @@ function Pon-Motor($info, [string]$juego, [string]$destino, [scriptblock]$avisa)
         Get-ChildItem -LiteralPath $libDestino -Filter "nx-*.rb" -ErrorAction SilentlyContinue | Remove-Item -Force
     }
     Copia-Arbol (Join-Path $Entrega "lib") $libDestino $avisa
+
+    # Los shims de la biblioteca compartida (shims/catalogo.json) van a lib/
+    # junto a los del motor, ANTES que los del perfil: si un juego trae su
+    # propia version de uno de ellos en juegos/<slug>/lib/, gana la suya.
+    $shimsElegidos = @(Resuelve-Shims $info $avisa) | Where-Object { $_.En -eq "shims" }
+    if ($shimsElegidos.Count) {
+        $dirShims = Carpeta-Shims
+        $copiados = @()
+        foreach ($s in $shimsElegidos) {
+            $origen = $(if ($dirShims) { Join-Path $dirShims $s.Fichero } else { $null })
+            if ($origen -and (Test-Path -LiteralPath $origen)) {
+                Copy-Item -LiteralPath $origen -Destination $libDestino -Force
+                $copiados += $s.Fichero
+            } else {
+                $avisa.Invoke("     AVISO: el shim '$($s.Nombre)' pide $($s.Fichero) y no esta en la biblioteca; se empaqueta sin el.")
+            }
+        }
+        if ($copiados.Count) { $avisa.Invoke("     shims de la biblioteca (" + ($copiados -join ", ") + ")") }
+    }
+
     if ($info.CarpetaPerfil) {
         $libPerfil = Join-Path $info.CarpetaPerfil "lib"
         if (Test-Path -LiteralPath $libPerfil) {

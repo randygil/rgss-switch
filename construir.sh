@@ -136,6 +136,20 @@ else
   aviso "no esta tools/hacbrewpack/hacbrewpack.exe: la entrega no podra hacer NSP (solo .nro)"
 fi
 
+# --- la biblioteca de shims --------------------------------------------
+# Los parches de Ruby que antes vivian sueltos en juegos/<slug>/lib/ o
+# cableados en Empaquetar.ps1. Ahora son una biblioteca con catalogo y cada
+# perfil elige por nombre lo que necesita. Si esto no viaja en la entrega, el
+# empaquetador cae a la lista cableada de reserva: funciona igual que antes,
+# pero ningun perfil puede pedir un shim nuevo.
+if [ -d runtime/shims ]; then
+  mkdir -p "$ENT/shims"
+  cp runtime/shims/* "$ENT/shims/"
+  echo "shims/: $(ls -1 runtime/shims/*.rb | wc -l) shims + catalogo.json"
+else
+  aviso "no hay runtime/shims/: los perfiles que pidan shims se empaquetaran sin ellos"
+fi
+
 # --- el modo diagnostico ------------------------------------------------
 # Lo monta Empaquetar.ps1 -Diagnostico: otra configuracion (registro linea a
 # linea, autopruebas del arranque) y unos shims de Ruby que solo sirven para

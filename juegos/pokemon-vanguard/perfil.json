@@ -13,6 +13,7 @@
   "motor": "ruby31",
   "estado": "jugable",
   "mkxp": {},
+  "shims": [],
   "preload": [],
   "sueltos": [
     "Data/Scripts",

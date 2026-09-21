@@ -12,6 +12,11 @@
   "motor": "ruby31",
   "estado": "jugable",
   "mkxp": {},
+  "shims": [
+    "discord",
+    "poke-api-v2",
+    "rubygems"
+  ],
   "preload": [
     "nx-reborn.rb"
   ],

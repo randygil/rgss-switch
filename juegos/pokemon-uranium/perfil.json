@@ -14,6 +14,7 @@
   "mkxp": {
     "execName": "Uranium"
   },
+  "shims": [],
   "preload": [
     "nx-uranium-audio.rb"
   ],

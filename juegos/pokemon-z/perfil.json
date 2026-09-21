@@ -9,6 +9,7 @@
   "motor": "ruby18",
   "estado": "jugable",
   "mkxp": {},
+  "shims": [],
   "preload": [],
   "sueltos": [],
   "excluir": [],

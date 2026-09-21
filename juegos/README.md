@@ -21,6 +21,7 @@ cae en `generico/perfil.json` y se empaqueta igual, con el slug que salga de su
   "motor": "ruby31",
   "estado": "sin-probar",
   "mkxp": { "SESourceCount": 12 },
+  "shims": ["discord", "poke-api-v2", "rubygems"],
   "preload": ["nx-ejemplo.rb"],
   "sueltos": ["Scripts", "patch", "stdlib", "gems"],
   "excluir": [],
@@ -40,7 +41,8 @@ cae en `generico/perfil.json` y se empaqueta igual, con el slug que salga de su
 | `motor` | `ruby31`, `ruby18` o `rgss1`. Ver abajo. |
 | `estado` | `jugable`, `arranca`, `no-arranca`, `sin-probar`. Lo cambia quien lo prueba, con la fecha en `notas`. |
 | `mkxp` | Claves que se meten en el `mkxp.json` compuesto por encima de las del juego. |
-| `preload` | Shims de `juegos/<slug>/lib/` que se cargan antes de los scripts, en este orden. |
+| `shims` | Nombres del catalogo compartido (`runtime/shims/catalogo.json`), no ficheros: el arreglo que sirve para mas de un juego se escribe una vez alli y aqui solo se enciende. El catalogo dice el orden de carga y si el shim se carga o solo se copia a `lib/` para que lo encuentre un `require` del juego. |
+| `preload` | Shims de `juegos/<slug>/lib/` que se cargan antes de los scripts, en este orden. Es para lo que SOLO sirve en este juego; va detras de los del catalogo. |
 | `sueltos` | Carpetas que NO pueden ir dentro del contenedor porque el juego las lee con `Dir`/`File`, que no ven dentro de PhysFS. |
 | `excluir` | Carpetas que no se copian. Se añaden a las de por omisión (`PBS`, `dist`, `Credits`, `DataBackup`, `DataExport`). |
 | `rubyLoadpath` | Carpetas que se añaden a `["lib"]` para `require`. |

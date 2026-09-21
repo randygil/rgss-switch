@@ -15,6 +15,7 @@ Cubre todo lo que se escribió aquí:
 | El sistema de compilación que sustituye a meson | `mkxp-z-nx/Makefile` |
 | El shim de POSIX para newlib | `patches/nxcompat.c`, `patches/include/` |
 | Los sustitutos de la biblioteca estándar | `runtime/lib/*.rb`, `runtime/lib/io/wait.rb` |
+| La biblioteca de shims y su catálogo, salvo los dos ficheros de la tabla de §2.1 | `runtime/shims/catalogo.json`, `runtime/shims/discord.rb`, `poke-api-v2.rb`, `rubygems.rb`, `nx-rutas-windows.rb`, `nx-marshal-huerfano.rb`, `nx-msgbox.rb` |
 | La configuración del motor para la consola | `runtime/mkxp.json` |
 | El banco de pruebas del intérprete | `hello-ruby-nx/` |
 | Los guiones de compilación, empaquetado y depuración | `*.sh`, `*.py`, `*.ps1`, `nsp/` |
@@ -35,6 +36,34 @@ bajo la licencia de su origen. No hay nada que elegir aquí.
 |---|---|---|
 | `patches/000[1-5]-*.patch` | CRuby 3.1.7 | Licencia de Ruby o BSD-2, a elección |
 | `patches/mkxpz-*.patch` | mkxp-z 2.4.2 | GPLv2+ |
+
+### 2.1 Shims copiados de Empo
+
+Dos ficheros de `runtime/shims/` **no** se escribieron aquí: vienen de
+[`mkxp-z-apple-mobile`](https://github.com/mateo-m/mkxp-z-apple-mobile), el fork
+de mkxp-z de [Empo](https://github.com/mateo-m/empo-app) (el reproductor de
+juegos de RPG Maker para iOS), que resuelve el mismo problema que este porteo en
+otra consola. Se copian con su cabecera de autoría intacta y con una cabecera en
+español encima que dice qué arreglan y de dónde salen.
+
+| Fichero | Origen | Autores | Licencia |
+|---|---|---|---|
+| `runtime/shims/win32_wrap.rb` | `scripts/preload/win32_wrap.rb` | Ancurio (2014), ediciones de Splendide Imaginarius (2023-2024) | **CC0 1.0** (dominio público; lo dice el propio fichero) |
+| `runtime/shims/win32_wrap_encoding.rb` | `scripts/preload/win32_wrap_encoding.rb` | del fork | Sin cabecera propia: la del repositorio, o sea **GPLv2+** heredada de mkxp-z (`COPYING`) |
+
+Las dos son compatibles con la GPLv2+ con la que se distribuye esto. El segundo
+fichero no se puede relicenciar ni meter en una entrega que no sea GPL, y no
+hace falta: esta lo es.
+
+**Lo que NO se copió, y por qué.** `scripts/postload/nilclass_safe_stubs.rb`,
+`rgss_plugin_stubs.rb` y `pokemon_online_stubs.rb` son de *postload*, y este
+motor no tiene `postloadScript`: mkxp-z 2.4.2 sólo lee `preloadScript`
+(`src/config.cpp:196`). De `windows_fs.rb` y `rgss_plugin_stubs.rb` se tomó la
+**idea** (rutas con contrabarra y `Dir.chdir`; `msgbox`; clases ausentes al
+deserializar) y se escribió de cero en `nx-rutas-windows.rb`, `nx-msgbox.rb` y
+`nx-marshal-huerfano.rb`, que son propios y van en la tabla de §1. Tampoco se
+copió `mkxp_wrap.rb` (CC0): `runtime/lib/nx-compat.rb` ya define el módulo
+`MKXP`, y dos definiciones del mismo módulo se pisarían.
 
 ## 3. Lo que hace falta y **no** está aquí
 

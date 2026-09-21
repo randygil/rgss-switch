@@ -38,7 +38,7 @@ y se recortan de los extremos. `Pokemon  Vanguard` → `pokemon-vanguard`,
 ```
 <slug>.nro            el motor, con el NACP y el icono de este juego
 mkxp.json             compuesto por el empaquetador (ver §5)
-lib/                  shims de Ruby del motor + subconjunto de la stdlib 3.1.7 + shims del perfil
+lib/                  shims de Ruby del motor + subconjunto de la stdlib 3.1.7 + los del catálogo que este juego encienda + shims del perfil
 datos.zip             Data/ Graphics/ Audio/ Fonts/ Movies/ dentro   (modo contenedor)
 Game.rgssad           la llave de 8 bytes                             (modo contenedor)
 Data/ Graphics/ ...   sueltos                                         (modo carpetas)
@@ -116,10 +116,21 @@ Cuatro capas, la de abajo pisa a la de arriba:
    son JSON5: llevan comentarios `//` y comas finales, y hay que quitarlos
    antes de `ConvertFrom-Json`.
 3. `mkxp` del perfil.
-4. `preloadScript`, compuesto: shims genéricos de `runtime/lib/` en su orden
-   → shims del perfil (`juegos/<slug>/lib/*.rb`, copiados a `lib/`) →
-   `preload.rb` del juego si existe. `rubyLoadpath` = `["lib"]` + lo que el
-   perfil añada (`stdlib`, `gems`...).
+4. `preloadScript`, compuesto a partir del **catálogo de shims**
+   (`runtime/shims/catalogo.json`, `shims/catalogo.json` en la entrega): los
+   que van `siempre` (los de `runtime/lib/`, en su orden) → el de la `familia`
+   de motor (`nx-ruby18.rb` en `ruby18` y `rgss1`) → los que el perfil pida por
+   nombre en `shims` → los shims del perfil (`juegos/<slug>/lib/*.rb`, la lista
+   `preload`) → `preload.rb` del juego si existe. `rubyLoadpath` = `["lib"]` +
+   lo que el perfil añada (`stdlib`, `gems`...).
+
+   Un shim del catálogo con `carga: "require"` **no** entra en
+   `preloadScript`: sólo se copia a `lib/`, para que lo encuentre el `require`
+   del propio juego (`discord`, `poke-api-v2`, `rubygems`). Uno con
+   `carga: "postload"` saldría en `postloadScript`, que **este motor ignora**:
+   mkxp-z 2.4.2 sólo lee `preloadScript`. Lo que un shim implique en
+   `mkxp.json` (su campo `mkxp`) se aplica justo por debajo de la capa 3, para
+   que el perfil siempre pueda pisarlo.
 
 Si el juego no trae `mkxp.json`, la capa 2 está vacía y `windowTitle` sale
 del `Title=` de `Game.ini`.
@@ -136,6 +147,7 @@ del `Title=` de `Game.ini`.
   "motor": "ruby31",
   "estado": "sin-probar",
   "mkxp": { "SESourceCount": 12 },
+  "shims": ["discord", "rubygems"],
   "preload": ["nx-ejemplo.rb"],
   "sueltos": ["Scripts", "patch", "stdlib", "gems"],
   "excluir": [],
@@ -152,6 +164,11 @@ del `Title=` de `Game.ini`.
   `Game.exe` grande con `/lib/ruby/1.8` → `ruby18`; `Game.exe` pequeño (< 1 MB)
   con `RGSS10*.dll` → `rgss1`. Con `ruby18` o `rgss1` empaqueta igual pero
   **avisa** de que los scripts son de Ruby 1.8 y el motor lleva 3.1.
+- `shims`: nombres del catálogo (`runtime/shims/catalogo.json`), no ficheros.
+  Es la biblioteca compartida: un arreglo que sirve para más de un juego se
+  escribe **una vez** ahí y cada perfil lo enciende por su nombre. `preload`
+  sigue siendo para lo que sólo sirve en ESE juego y vive en
+  `juegos/<slug>/lib/`; va detrás de los del catálogo.
 - `estado`: `jugable`, `arranca`, `no-arranca`, `sin-probar`. Lo actualiza
   quien lo prueba, con la fecha en `notas`.
 - Todo es opcional menos `slug` y `nombre`. Lo que falta cae al perfil
@@ -163,6 +180,8 @@ del `Title=` de `Game.ini`.
 Empaquetar.cmd  Empaquetar.ps1  GUIA.md  LICENSE  LICENCIAS.md  VERSION.txt
 motor/   rgss-switch.nro  main  npdm.json  icono.jpg
 lib/     runtime/lib/**  +  los ficheros de runtime/lib-stdlib.txt desde src/ruby-3.1.7/lib
+shims/   runtime/shims/**  (la biblioteca compartida y su catalogo.json; el
+         empaquetador copia a lib/ sólo los que cada juego encienda)
 mkxp.base.json
 juegos/  <slug>/perfil.json  [lib/*.rb]  [icono.jpg]   (todos los perfiles del repo)
 tools/   hacbrewpack.exe  nacptool.exe  npdmtool.exe   (+ sus licencias en LICENCIAS.md)
