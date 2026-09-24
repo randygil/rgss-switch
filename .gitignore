@@ -118,6 +118,8 @@
 !/docs/test-results-hardware-real.txt
 !/docs/censo-juegos.md
 !/docs/bitacora-anil.md
+# HTTPLite por HTTP y HTTPS: que cambio, como se prueba y lo que falta ver en consola.
+!/docs/red-httplite.md
 # Un fichero por juego encendido: que se empaqueto, cada vuelta (sintoma ->
 # linea del registro -> causa -> arreglo), tiempos y lo que queda.
 !/docs/pruebas/

@@ -483,6 +483,7 @@ Por dónde empezar, según lo que quieras hacer:
 | Añadir un juego | §4 de aquí, `docs/censo-juegos.md` y `juegos/README.md` |
 | Arreglar un juego que no arranca | sus cuatro registros (§3), `TRIAJE.md` y `triaje.py` |
 | Tocar el motor | `mkxp-z-nx/nx/`, `patches/` y `docs/bitacora-anil.md` §5 |
+| Usar la red desde un juego (`HTTPLite`, HTTPS) | [`docs/red-httplite.md`](docs/red-httplite.md) |
 | Publicar una versión | [`PUBLICAR.md`](PUBLICAR.md) |
 
 Lo que conviene saber antes del primer commit:

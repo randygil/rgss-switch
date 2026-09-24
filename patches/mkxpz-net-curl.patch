@@ -1,0 +1,751 @@
+HTTPLite sobre libcurl: HTTPS en la consola, cuerpos binarios y sin tocar
+Ruby sin el GVL.
+
+net.cpp iba sobre cpp-httplib, que solo sabe TLS con OpenSSL, y en Switch no
+hay OpenSSL: todo https:// moria en "Failed to create HTTP client". La libcurl
+de portlibs (7.69.1) trae TLS a traves del servicio ssl del sistema, que
+verifica contra los certificados raiz de la consola. net.cpp se reescribe
+sobre ella con la misma interfaz de net.h: cabeceras propias, cuerpos
+binarios, cabeceras y estado de la respuesta, redirecciones donde las seguia
+el original, 10 s para conectar y 60 s por peticion, y la verificacion del
+certificado ENCENDIDA (el original la apagaba).
+
+net.h gana post(body, len, ctype): post_body cortaba el cuerpo en el primer
+NUL porque pasaba por strlen.
+
+http-binding.cpp: el original armaba el Hash de la respuesta y lanzaba la
+excepcion DENTRO de rb_thread_call_without_gvl, tocando el interprete sin el
+candado. Ahora la parte sin GVL solo hace C++ y el Hash o la excepcion se
+hacen al volver. La cabecera Content-Type se busca sin distinguir mayusculas
+(Node y los servidores HTTP/2 la mandan en minusculas y el JSON llegaba como
+ASCII-8BIT).
+
+Los sockets que necesita curl los abre mkxp-z-nx/nx/nx_red.c (userAppInit),
+y el Makefile enlaza -lcurl.
+
+--- a/binding/http-binding.cpp
++++ b/binding/http-binding.cpp
+@@ -6,6 +6,8 @@
+ //
+ 
+ #include <stdio.h>
++#include <string.h>
++#include <strings.h>
+ 
+ #include "util/json5pp.hpp"
+ #include "binding-util.h"
+@@ -48,7 +50,13 @@
+ 
+ VALUE getResponseBody(mkxp_net::HTTPResponse &res) {
+ #if RAPI_FULL >= 190
+-    auto it = res.headers().find("Content-Type");
++    // rgss-switch: el nombre de la cabecera sin distinguir mayusculas. HTTP no
++    // las distingue, y Node, nginx o un servidor HTTP/2 la mandan como
++    // "content-type": con find() exacto un JSON llegaba como ASCII-8BIT.
++    auto it = res.headers().begin();
++    for (; it != res.headers().end(); ++it)
++        if (strcasecmp(it->first.c_str(), "Content-Type") == 0)
++            break;
+     if (it == res.headers().end())
+         return rb_str_new(res.body().c_str(), res.body().length());
+     
+@@ -74,26 +82,97 @@
+     return ret;
+ }
+ 
+-#if RAPI_MAJOR >= 2
+-void* httpGetInternal(void *req) {
+-    VALUE ret;
+-    
+-    GUARD_EXC(
+-              mkxp_net::HTTPResponse res = ((mkxp_net::HTTPRequest*)req)->get();
+-              ret = formResponse(res);
+-              );
+-    
+-    return (void*)ret;
++// rgss-switch: la petición corre con el GVL suelto y NADA MÁS.
++//
++// El original armaba el Hash de respuesta (rb_hash_new, rb_str_new...) y
++// lanzaba la excepción (rb_raise) dentro de la función que se le pasa a
++// rb_thread_call_without_gvl, es decir, tocando el intérprete sin tener el
++// candado. Mientras la petición dura otro hilo de Ruby puede estar corriendo,
++// y el recolector con él: es una carrera que no avisa y que, con subidas de
++// varios megas y varios segundos, deja de ser improbable. Aquí la parte sin
++// GVL sólo hace C++ y deja el resultado o el error en una estructura; el Hash
++// y la excepción se hacen al volver, con el candado otra vez en la mano.
++//
++// El error se lanza fuera de la función que tiene los objetos de C++
++// (petición, respuesta, cabeceras) y desde un búfer plano: rb_raise salta con
++// longjmp y no corre destructores, y un plugin que reintenta sin red perdería
++// memoria en cada intento. net.cpp sólo lanza MKXPError, así que la clase es
++// siempre esa.
++
++namespace {
++
++enum HttpVerbo { HTTP_GET, HTTP_POST_FORM, HTTP_POST_BODY };
++
++struct HttpTrabajo {
++    HttpVerbo verbo;
++    mkxp_net::HTTPRequest *req;
++    mkxp_net::StringMap *postData;
++    const char *body;
++    size_t bodyLen;
++    const char *ctype;
++
++    mkxp_net::HTTPResponse *res;
++    char *error;        // búfer del que llama; vacío = sin error
++
++    HttpTrabajo() : verbo(HTTP_GET), req(0), postData(0), body(0), bodyLen(0), ctype(0),
++                    res(0), error(0) {}
++};
++
++const size_t HTTP_ERROR_MAX = 600;
++
++void *httpSinGVL(void *arg) {
++    HttpTrabajo *t = (HttpTrabajo*)arg;
++    try {
++        switch (t->verbo) {
++            case HTTP_GET:
++                t->res = new mkxp_net::HTTPResponse(t->req->get());
++                break;
++            case HTTP_POST_FORM:
++                t->res = new mkxp_net::HTTPResponse(t->req->post(*t->postData));
++                break;
++            case HTTP_POST_BODY:
++                t->res = new mkxp_net::HTTPResponse(t->req->post(t->body, t->bodyLen, t->ctype));
++                break;
++        }
++    } catch (const Exception &e) {
++        snprintf(t->error, HTTP_ERROR_MAX, "%s", e.msg.c_str());
++    } catch (const std::exception &e) {
++        snprintf(t->error, HTTP_ERROR_MAX, "HTTP: %s", e.what());
++    }
++    // Un mensaje vacío no distinguiría el fallo del éxito.
++    if (!t->res && !t->error[0])
++        snprintf(t->error, HTTP_ERROR_MAX, "HTTP: fallo sin mensaje");
++    return 0;
+ }
++
++// Corre la petición y devuelve el Hash; si falla, deja el mensaje en `error`
++// y devuelve Qnil. Todos los objetos de C++ mueren antes de salir.
++VALUE httpEjecutar(HttpTrabajo &t, char *error) {
++    error[0] = 0;
++    t.error = error;
++#if RAPI_MAJOR >= 2
++    rb_thread_call_without_gvl(httpSinGVL, &t, 0, 0);
++#else
++    httpSinGVL(&t);
+ #endif
++    if (error[0]) {
++        delete t.res;
++        t.res = 0;
++        return Qnil;
++    }
++    VALUE ret = formResponse(*t.res);
++    delete t.res;
++    t.res = 0;
++    return ret;
++}
+ 
+-RB_METHOD(httpGet) {
+-    RB_UNUSED_PARAM;
+-    
++}
++
++static VALUE httpGetImpl(int argc, VALUE *argv, char *error) {
+     VALUE path, rheaders, redirect;
+     rb_scan_args(argc, argv, "12", &path, &rheaders, &redirect);
+     SafeStringValue(path);
+-    
++
+     bool rd;
+     rb_bool_arg(redirect, &rd);
+     mkxp_net::HTTPRequest req(RSTRING_PTR(path), rd);
+@@ -101,42 +180,27 @@
+         auto headers = hash2StringMap(rheaders);
+         req.headers().insert(headers.begin(), headers.end());
+     }
+-#if RAPI_MAJOR >= 2
+-    return (VALUE)rb_thread_call_without_gvl(httpGetInternal, &req, 0, 0);
+-#else
+-    return (VALUE)httpGetInternal(&req);
+-#endif
+-}
+-
+-#if RAPI_MAJOR >= 2
+-
+-typedef struct {
+-    mkxp_net::HTTPRequest *req;
+-    mkxp_net::StringMap *postData;
+-} httpPostInternalArgs;
+ 
+-void* httpPostInternal(void *args) {
+-    VALUE ret;
+-    
+-    mkxp_net::HTTPRequest *req = ((httpPostInternalArgs*)args)->req;
+-    mkxp_net::StringMap *postData = ((httpPostInternalArgs*)args)->postData;
+-    
+-    GUARD_EXC(
+-              mkxp_net::HTTPResponse res = req->post(*postData);
+-              ret = formResponse(res);
+-              );
+-    
+-    return (void*)ret;
++    HttpTrabajo t;
++    t.verbo = HTTP_GET;
++    t.req = &req;
++    return httpEjecutar(t, error);
+ }
+-#endif
+ 
+-RB_METHOD(httpPost) {
++RB_METHOD(httpGet) {
+     RB_UNUSED_PARAM;
+-    
++    char error[HTTP_ERROR_MAX];
++    VALUE ret = httpGetImpl(argc, argv, error);
++    if (error[0])
++        rb_raise(getRbData()->exc[MKXP], "%s", error);
++    return ret;
++}
++
++static VALUE httpPostImpl(int argc, VALUE *argv, char *error) {
+     VALUE path, postDataHash, rheaders, redirect;
+     rb_scan_args(argc, argv, "22", &path, &postDataHash, &rheaders, &redirect);
+     SafeStringValue(path);
+-    
++
+     bool rd;
+     rb_bool_arg(redirect, &rd);
+     mkxp_net::HTTPRequest req(RSTRING_PTR(path), rd);
+@@ -144,61 +208,58 @@
+         auto headers = hash2StringMap(rheaders);
+         req.headers().insert(headers.begin(), headers.end());
+     }
+-    
++
+     mkxp_net::StringMap postData = hash2StringMap(postDataHash);
+-    httpPostInternalArgs args {&req, &postData};
+-#if RAPI_MAJOR >= 2
+-    return (VALUE)rb_thread_call_without_gvl(httpPostInternal, &args, 0, 0);
+-#else
+-    return httpPostInternal(&args);
+-#endif
++    HttpTrabajo t;
++    t.verbo = HTTP_POST_FORM;
++    t.req = &req;
++    t.postData = &postData;
++    return httpEjecutar(t, error);
+ }
+ 
+-#if RAPI_MAJOR >= 2
+-typedef struct {
+-    mkxp_net::HTTPRequest *req;
+-    const char *body;
+-    const char *ctype;
+-} httpPostBodyInternalArgs;
+-
+-void* httpPostBodyInternal(void *args) {
+-    VALUE ret;
+-    
+-    mkxp_net::HTTPRequest *req = ((httpPostBodyInternalArgs*)args)->req;
+-    const char *reqbody = ((httpPostBodyInternalArgs*)args)->body;
+-    const char *reqctype = ((httpPostBodyInternalArgs*)args)->ctype;
+-    
+-    GUARD_EXC(
+-              mkxp_net::HTTPResponse res = req->post(reqbody, reqctype);
+-              ret = formResponse(res);
+-              );
+-    
+-    return (void*)ret;
++RB_METHOD(httpPost) {
++    RB_UNUSED_PARAM;
++    char error[HTTP_ERROR_MAX];
++    VALUE ret = httpPostImpl(argc, argv, error);
++    if (error[0])
++        rb_raise(getRbData()->exc[MKXP], "%s", error);
++    return ret;
+ }
+-#endif
+ 
+-RB_METHOD(httpPostBody) {
+-    RB_UNUSED_PARAM;
+-    
++static VALUE httpPostBodyImpl(int argc, VALUE *argv, char *error) {
+     VALUE path, body, ctype, rheaders;
+     rb_scan_args(argc, argv, "31", &path, &body, &ctype, &rheaders);
+     SafeStringValue(path);
+     SafeStringValue(body);
+     SafeStringValue(ctype);
+-    
+-    
++
+     mkxp_net::HTTPRequest req(RSTRING_PTR(path));
+     if (rheaders != Qnil) {
+         auto headers = hash2StringMap(rheaders);
+         req.headers().insert(headers.begin(), headers.end());
+     }
+-    
+-    httpPostBodyInternalArgs args {&req, RSTRING_PTR(body), RSTRING_PTR(ctype)};
+-#if RAPI_MAJOR >= 2
+-    return (VALUE)rb_thread_call_without_gvl(httpPostBodyInternal, &args, 0, 0);
+-#else
+-    return httpPostBodyInternal(&args);
+-#endif
++
++    // El cuerpo se copia: sin el GVL, otro hilo de Ruby podría modificar o
++    // liberar la cadena mientras curl la está mandando.
++    std::string cuerpo(RSTRING_PTR(body), RSTRING_LEN(body));
++    std::string tipo(RSTRING_PTR(ctype), RSTRING_LEN(ctype));
++
++    HttpTrabajo t;
++    t.verbo = HTTP_POST_BODY;
++    t.req = &req;
++    t.body = cuerpo.data();
++    t.bodyLen = cuerpo.size();
++    t.ctype = tipo.c_str();
++    return httpEjecutar(t, error);
++}
++
++RB_METHOD(httpPostBody) {
++    RB_UNUSED_PARAM;
++    char error[HTTP_ERROR_MAX];
++    VALUE ret = httpPostBodyImpl(argc, argv, error);
++    if (error[0])
++        rb_raise(getRbData()->exc[MKXP], "%s", error);
++    return ret;
+ }
+ 
+ VALUE json2rb(json5pp::value const &v) {
+--- a/src/net/net.cpp
++++ b/src/net/net.cpp
+@@ -4,33 +4,43 @@
+ //
+ //  Created by ゾロアーク on 12/29/20.
+ //
++//  rgss-switch: reescrito sobre libcurl.
++//
++//  El original va sobre cpp-httplib, que sólo sabe HTTPS con OpenSSL
++//  (CPPHTTPLIB_OPENSSL_SUPPORT bajo MKXPZ_SSL). En Switch no hay OpenSSL, y
++//  cualquier https:// acababa en "Failed to create HTTP client". La libcurl de
++//  portlibs (7.69.1) sí trae TLS, y no de una biblioteca propia: su backend
++//  vtls/libnx.c habla con el servicio ssl del sistema, que verifica contra los
++//  certificados raíz de la consola. Así que se cambia de biblioteca y se deja
++//  intacta la interfaz de net.h, que es lo que ve http-binding.cpp y, a través
++//  de él, HTTPLite en Ruby.
++//
++//  Lo que cambia de comportamiento, a propósito:
++//    - La verificación del certificado queda ENCENDIDA. El original la apagaba
++//      ("Seems to need to be disabled for now, at least on macOS"); aquí el
++//      almacén es el del sistema y no hay motivo para aceptar cualquier cosa.
++//    - Hay plazos: 10 s para conectar y 60 s para la petición entera. Sin
++//      ellos, una red que se cae a medio envío deja el juego colgado para
++//      siempre, porque la llamada corre con el GVL suelto y nadie la despierta.
++//    - Los cuerpos son binarios: el de la respuesta ya lo era, el de la
++//      petición se cortaba en el primer \0 (strlen). Ver post(body, len, ...).
++//
+ 
+ #include <stdio.h>
++#include <string.h>
++#include <strings.h>
++#include <pthread.h>
+ 
+-#if defined(MKXPZ_SSL)
+-#define CPPHTTPLIB_OPENSSL_SUPPORT
+-#endif
+-#include "httplib.h"
++#include <curl/curl.h>
+ 
+ #include "util/exception.h"
+ 
+ #include "LUrlParser.h"
+ #include "net.h"
+ 
+-const char* httpErrorNames[] = {
+-    "Success",
+-    "Unknown",
+-    "Connection",
+-    "Bind IP Address",
+-    "Read",
+-    "Write",
+-    "Exceed Redirect Count",
+-    "Canceled",
+-    "SSLConnection",
+-    "SSL Loading Certs",
+-    "SSL Server Verification",
+-    "Unsupported Multipart Boundary Chars"
+-};
++#ifdef __SWITCH__
++extern "C" const char *nx_red_estado(void);
++#endif
+ 
+ const char *urlErrorNames[] = {
+     "OK",
+@@ -43,40 +53,166 @@
+     "No Slash"
+ };
+ 
+-LUrlParser::ParseURL readURL(const char *url) {
++// La URL se sigue validando con LUrlParser antes de dársela a curl: los
++// mensajes "Invalid URL: ..." son los mismos que daba el original, y un
++// plugin que los compare no tiene por qué enterarse del cambio de biblioteca.
++static void readURL(const char *url) {
+     LUrlParser::ParseURL p = LUrlParser::ParseURL::parseURL(std::string(url));
+     if (!p.isValid() || p.errorCode_){
+         throw Exception(Exception::MKXPError, "Invalid URL: %s", urlErrorNames[p.errorCode_]);
+     }
+-    return p;
+ }
+ 
+-std::string getHost(LUrlParser::ParseURL url) {
+-    std::string host;
+-    host += url.scheme_;
+-    host += "://";
+-    host += url.host_;
+-    
+-    int port;
+-    if (!url.port_.empty() && url.getPort(&port)) {
+-        host += ":";
+-        host += std::to_string(port);
+-    }
+-    return host;
+-}
+-
+-std::string getPath(LUrlParser::ParseURL url) {
+-    std::string path = "/";
+-    path += url.path_;
+-    
+-    if (!url.query_.empty()) {
+-        path += "?";
+-        path += url.query_;
++// curl_global_init no es seguro entre hilos y tiene que ir antes que cualquier
++// otra llamada. Una vez por proceso, en la primera petición: pedirlo en el
++// arranque haría abrir ssl y csrng a los juegos que nunca usan la red.
++static pthread_once_t curlOnce = PTHREAD_ONCE_INIT;
++static CURLcode curlInitRc = CURLE_FAILED_INIT;
++
++static void curlInitOnce() {
++    curlInitRc = curl_global_init(CURL_GLOBAL_DEFAULT);
++}
++
++namespace {
++
++// Cabeceras de la respuesta. Sólo las de la ÚLTIMA: con redirecciones, o con
++// un "100 Continue" delante, curl entrega varias tandas y cada línea de estado
++// abre una nueva. Duplicadas: gana la primera, como con el unordered_map del
++// original (emplace no pisa).
++struct Captura {
++    std::string *body;
++    mkxp_net::StringMap *headers;
++};
++
++size_t alEscribir(char *ptr, size_t size, size_t nmemb, void *userdata) {
++    Captura *c = (Captura*)userdata;
++    size_t n = size * nmemb;
++    c->body->append(ptr, n);
++    return n;
++}
++
++size_t alCabecera(char *ptr, size_t size, size_t nmemb, void *userdata) {
++    Captura *c = (Captura*)userdata;
++    size_t n = size * nmemb;
++    std::string linea(ptr, n);
++
++    while (!linea.empty() && (linea.back() == '\r' || linea.back() == '\n'))
++        linea.pop_back();
++
++    if (linea.compare(0, 5, "HTTP/") == 0) {
++        c->headers->clear();
++        return n;
++    }
++
++    size_t dos = linea.find(':');
++    if (dos == std::string::npos || dos == 0)
++        return n;
++
++    std::string nombre = linea.substr(0, dos);
++    size_t v = dos + 1;
++    while (v < linea.size() && (linea[v] == ' ' || linea[v] == '\t'))
++        v++;
++    c->headers->emplace(nombre, linea.substr(v));
++    return n;
++}
++
++bool tieneCabecera(const mkxp_net::StringMap &h, const char *nombre) {
++    for (auto const &it : h)
++        if (strcasecmp(it.first.c_str(), nombre) == 0)
++            return true;
++    return false;
++}
++
++// Una petición completa. `body` a NULL es un GET; si no, un POST con ese
++// cuerpo tal cual (curl no lo copia, pero vive hasta que perform vuelve).
++void hacer(const char *verbo, const std::string &url, const mkxp_net::StringMap &reqHeaders,
++           bool follow, const char *body, size_t bodyLen, const char *ctype,
++           int &status, std::string &respBody, mkxp_net::StringMap &respHeaders) {
++    readURL(url.c_str());
++
++    pthread_once(&curlOnce, curlInitOnce);
++    if (curlInitRc != CURLE_OK)
++        throw Exception(Exception::MKXPError, "Failed to create HTTP client (curl_global_init: %s)",
++                        curl_easy_strerror(curlInitRc));
++
++    CURL *curl = curl_easy_init();
++    if (!curl)
++        throw Exception(Exception::MKXPError, "Failed to create HTTP client (curl_easy_init)");
++
++    struct curl_slist *lista = NULL;
++    for (auto const &h : reqHeaders) {
++        // "Nombre;" es como se le pide a curl una cabecera con valor vacío;
++        // "Nombre:" a secas la quitaría.
++        std::string l = h.first + (h.second.empty() ? ";" : ": " + h.second);
++        lista = curl_slist_append(lista, l.c_str());
++    }
++    if (body) {
++        if (ctype && !tieneCabecera(reqHeaders, "Content-Type"))
++            lista = curl_slist_append(lista, (std::string("Content-Type: ") + ctype).c_str());
++        // curl 7.69 manda "Expect: 100-continue" con cuerpos de más de 1 KB y
++        // se queda esperando hasta un segundo la respuesta intermedia. Con
++        // subidas de partida de varios megas por cada guardado, es un segundo
++        // regalado en cada una; cpp-httplib tampoco lo mandaba.
++        if (!tieneCabecera(reqHeaders, "Expect"))
++            lista = curl_slist_append(lista, "Expect:");
++    }
++
++    Captura cap { &respBody, &respHeaders };
++    char errbuf[CURL_ERROR_SIZE];
++    errbuf[0] = 0;
++
++    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
++    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, lista);
++    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, alEscribir);
++    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &cap);
++    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, alCabecera);
++    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &cap);
++    curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errbuf);
++    // Sin señales: la petición corre fuera del hilo principal de Ruby y
++    // Horizon no tiene alarm() que valga para el resolvedor.
++    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
++    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, follow ? 1L : 0L);
++    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 20L);   // el límite de cpp-httplib
++    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
++    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
++    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
++    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
++    // gzip/deflate si el servidor quiere (curl lleva zlib): un JSON de partida
++    // en base64 baja a la mitad. El cuerpo llega ya descomprimido.
++    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
++    if (!tieneCabecera(reqHeaders, "User-Agent"))
++        curl_easy_setopt(curl, CURLOPT_USERAGENT, "mkxp-z/" MKXPZ_VERSION " (rgss-switch)");
++
++    if (body) {
++        curl_easy_setopt(curl, CURLOPT_POST, 1L);
++        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)bodyLen);
++        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
++    } else {
++        curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
++    }
++
++    CURLcode rc = curl_easy_perform(curl);
++
++    long code = 0;
++    if (rc == CURLE_OK)
++        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
++
++    curl_slist_free_all(lista);
++    curl_easy_cleanup(curl);
++
++    if (rc != CURLE_OK) {
++        const char *detalle = errbuf[0] ? errbuf : curl_easy_strerror(rc);
++        const char *red = NULL;
++#ifdef __SWITCH__
++        red = nx_red_estado();
++#endif
++        throw Exception(Exception::MKXPError, "Failed to %s %s (%i: %s%s%s)", verbo, url.c_str(),
++                        (int)rc, detalle, red ? "; " : "", red ? red : "");
+     }
+-    
+-    return path;
++    status = (int)code;
+ }
+ 
++} // namespace
+ 
+ using namespace mkxp_net;
+ 
+@@ -114,130 +250,41 @@
+ 
+ HTTPResponse HTTPRequest::get() {
+     HTTPResponse ret;
+-    auto target = readURL(destination.c_str());
+-    
+-    httplib::Client *client = nullptr;
+-    try {
+-        client = new httplib::Client(getHost(target).c_str());
+-    }
+-    catch (std::exception &e) {
+-        delete client;
+-        throw Exception(Exception::MKXPError, "Failed to create HTTP client (%s)", e.what());
+-    }
+-    
+-    httplib::Headers head;
+-    
+-    // Seems to need to be disabled for now, at least on macOS
+-#ifdef MKXPZ_SSL
+-    client->enable_server_certificate_verification(false);
+-#endif
+-    client->set_follow_location(follow_location);
+-    
+-    for (auto const &h : _headers)
+-        head.emplace(h.first, h.second);
+-        
+-    if (auto result = client->Get(getPath(target).c_str(), head)) {
+-        auto response = result.value();
+-        ret._status = response.status;
+-        ret._body = response.body;
+-        
+-        for (auto const &h : response.headers)
+-            ret._headers.emplace(h.first, h.second);
+-    }
+-    else {
+-        int err = result.error();
+-        const char *errname = httpErrorNames[err];
+-        delete client;
+-        throw Exception(Exception::MKXPError, "Failed to GET %s (%i: %s)", destination.c_str(), err, errname);
+-    }
+-    
+-    delete client;
++    hacer("GET", destination, _headers, follow_location, NULL, 0, NULL,
++          ret._status, ret._body, ret._headers);
+     return ret;
+ }
+ 
++// Formulario: application/x-www-form-urlencoded, que es lo que mandaba
++// cpp-httplib con Params.
+ HTTPResponse HTTPRequest::post(StringMap &postData) {
+     HTTPResponse ret;
+-    auto target = readURL(destination.c_str());
+-    
+-    httplib::Client *client = nullptr;
+-    try {
+-        client = new httplib::Client(getHost(target).c_str());
+-    }
+-    catch (std::exception &e) {
+-        delete client;
+-        throw Exception(Exception::MKXPError, "Failed to create HTTP client (%s)", e.what());
+-    }
+-    
+-    httplib::Headers head;
+-    httplib::Params params;
+-    
+-    // Seems to need to be disabled for now, at least on macOS
+-#ifdef MKXPZ_SSL
+-    client->enable_server_certificate_verification(false);
+-#endif
+-    client->set_follow_location(follow_location);
+-    
+-    for (auto const &h : _headers)
+-        head.emplace(h.first, h.second);
+-    
+-    for (auto const &p : postData)
+-        params.emplace(p.first, p.second);
+-    
+-    if (auto result = client->Post(getPath(target).c_str(), head, params)) {
+-        auto response = result.value();
+-        ret._status = response.status;
+-        ret._body = response.body;
+-        
+-        for (auto h : response.headers)
+-            ret._headers.emplace(h.first, h.second);
+-    }
+-    else {
+-        int err = result.error();
+-        const char *errname = httpErrorNames[err];
+-        delete client;
+-        throw Exception(Exception::MKXPError, "Failed to POST %s (%i: %s)", destination.c_str(), err, errname);
++    std::string form;
++    for (auto const &p : postData) {
++        char *k = curl_easy_escape(NULL, p.first.c_str(), (int)p.first.size());
++        char *v = curl_easy_escape(NULL, p.second.c_str(), (int)p.second.size());
++        if (!form.empty())
++            form += '&';
++        form += k ? k : "";
++        form += '=';
++        form += v ? v : "";
++        curl_free(k);
++        curl_free(v);
+     }
+-    delete client;
++    hacer("POST", destination, _headers, follow_location, form.data(), form.size(),
++          "application/x-www-form-urlencoded", ret._status, ret._body, ret._headers);
+     return ret;
+ }
+ 
+ HTTPResponse HTTPRequest::post(const char *body, const char *content_type) {
++    return post(body, strlen(body), content_type);
++}
++
++// El original seguía las redirecciones aquí siempre, sin mirar
++// follow_location; se conserva.
++HTTPResponse HTTPRequest::post(const char *body, size_t body_len, const char *content_type) {
+     HTTPResponse ret;
+-    auto target = readURL(destination.c_str());
+-    
+-    httplib::Client *client = nullptr;
+-    try {
+-        client = new httplib::Client(getHost(target).c_str());
+-    }
+-    catch (std::exception &e) {
+-        delete client;
+-        throw Exception(Exception::MKXPError, "Failed to create HTTP client (%s)", e.what());
+-    }
+-    
+-    httplib::Headers head;
+-    
+-    // Seems to need to be disabled for now, at least on macOS
+-#ifdef MKXPZ_SSL
+-    client->enable_server_certificate_verification(false);
+-#endif
+-    client->set_follow_location(true);
+-    
+-    for (auto const &h : _headers)
+-        head.emplace(h.first, h.second);
+-
+-    if (auto result = client->Post(getPath(target).c_str(), head, body, content_type)) {
+-        auto response = result.value();
+-        ret._status = response.status;
+-        ret._body = response.body;
+-        
+-        for (auto const &h : response.headers)
+-            ret._headers.emplace(h.first, h.second);
+-    }
+-    else {
+-        int err = result.error();
+-        delete client;
+-        throw Exception(Exception::MKXPError, "Failed to POST %s (%i: %s)", destination.c_str(), err, httpErrorNames[err]);
+-    }
+-    delete client;
++    hacer("POST", destination, _headers, true, body, body_len, content_type,
++          ret._status, ret._body, ret._headers);
+     return ret;
+ }
+--- a/src/net/net.h
++++ b/src/net/net.h
+@@ -10,6 +10,7 @@
+ 
+ #include <unordered_map>
+ #include <string>
++#include <stddef.h>
+ 
+ namespace mkxp_net {
+ 
+@@ -43,6 +44,9 @@
+     HTTPResponse get();
+     HTTPResponse post(StringMap &postData);
+     HTTPResponse post(const char *body, const char *content_type);
++    // rgss-switch: el cuerpo con su longitud, para que un NUL no lo corte.
++    // La de arriba se queda por compatibilidad y llama a esta con strlen().
++    HTTPResponse post(const char *body, size_t body_len, const char *content_type);
+ private:
+     StringMap _headers;
+     bool follow_location;

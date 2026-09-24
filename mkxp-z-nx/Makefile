@@ -121,11 +121,15 @@ DEFINES := -D__SWITCH__ -DMKXPZ_BUILD_MESON -DMKXPZ_VERSION=\"2.4.2\" -DNX_BUILD
            -DGLES2_HEADER \
            -DMKXPZ_ALCDEVICE=ALCdevice \
            -DAL_LIBTYPE_STATIC \
-           -DWORKDIR_CURRENT
+           -DWORKDIR_CURRENT \
+           -DCURL_STATICLIB
 # GLES2_HEADER    -> backend GLES en vez de GL de escritorio (gfx_backend=gles)
 # MKXPZ_ALCDEVICE -> openal-soft 1.21.1 de portlibs usa `ALCdevice` (>=1.20.1)
 # AL_LIBTYPE_STATIC -> enlace estatico de OpenAL
 # WORKDIR_CURRENT -> el juego se busca en el directorio de trabajo actual
+# CURL_STATICLIB  -> libcurl de portlibs, estatica. HTTPLite va sobre ella
+#                    (src/net/net.cpp): su TLS es el servicio ssl del sistema,
+#                    y ademas necesita los sockets que abre nx/nx_red.c.
 
 ARCH   := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 WARN   := -Wall -Wno-non-virtual-dtor -Wno-reorder -Wno-uninitialized \
@@ -142,6 +146,7 @@ LIBS     := -lruby-static -lnxcompat \
             -ltheoradec -ltheora -lvorbisfile -lvorbis -logg \
             -lmpg123 -lmodplug \
             -lpixman-1 -luchardet -lfreetype -lharfbuzz -lfreetype \
+            -lcurl \
             -lpng16 -ljpeg -lwebp -lz -lbz2 -liconv -lcharset \
             -lEGL -lglapi -ldrm_nouveau \
             -lnx -lm -lstdc++

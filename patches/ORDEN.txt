@@ -22,6 +22,7 @@ mkxpz-lector-contenedor.patch
 mkxpz-main.cpp.patch
 mkxpz-me-vuelve-muda.patch
 mkxpz-montaje-ventana.patch
+mkxpz-net-curl.patch
 mkxpz-nucleo-musica.patch
 mkxpz-pathcache-readdir.patch
 mkxpz-fichero-lento.patch

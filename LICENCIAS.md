@@ -11,7 +11,7 @@ Cubre todo lo que se escribió aquí:
 
 | Qué | Dónde |
 |---|---|
-| Los 21 shims de Horizon | `mkxp-z-nx/nx/*.c`, `mkxp-z-nx/nx/*.cpp` |
+| Los 22 shims de Horizon | `mkxp-z-nx/nx/*.c`, `mkxp-z-nx/nx/*.cpp` |
 | El sistema de compilación que sustituye a meson | `mkxp-z-nx/Makefile` |
 | El shim de POSIX para newlib | `patches/nxcompat.c`, `patches/include/` |
 | Los sustitutos de la biblioteca estándar | `runtime/lib/*.rb`, `runtime/lib/io/wait.rb` |
@@ -82,6 +82,7 @@ copió `mkxp_wrap.rb` (CC0): `runtime/lib/nx-compat.rb` ya define el módulo
 | pixman | MIT | sí |
 | uchardet | MPL 1.1 / GPL 2.0 / LGPL 2.1 | sí |
 | SDL_sound | zlib | sí |
+| libcurl 7.69.1 (portlibs de devkitPro, TLS por el servicio `ssl` del sistema) | curl (tipo MIT) | sí, estáticamente |
 | [hacbrewpack](https://github.com/The-4N/hacbrewpack) | ISC | sí, en `tools/` de la entrega |
 | `nacptool`, `npdmtool` y `build_romfs` ([switch-tools](https://github.com/switchbrew/switch-tools)) | ISC | sí, en `tools/` de la entrega |
 | Liberation Sans (dentro de mkxp-z) | SIL OFL 1.1 | empotrada |
