@@ -1,0 +1,79 @@
+El recolector de Ruby con un monton a la medida de un Essentials.
+
+CRuby arranca con 10.000 casillas y solo crece cuando, despues de una pasada,
+queda menos de un 20 % libre. Un Essentials tiene en el mapa unos 940.000
+objetos vivos y crea 1.200-1.700 por fotograma, asi que el monton se queda
+justo por encima de lo vivo y el recolector pasa cada cuatro o cinco segundos
+(registro de la consola, "[monton] ruby"); al arrancar, 37 pasadas en trece
+segundos. Antes de ruby_options() -que es quien lee las variables- se ponen
+RUBY_GC_HEAP_INIT_SLOTS y RUBY_GC_HEAP_FREE_SLOTS. Solo en __SWITCH__; con
+sin-gc.txt en la carpeta del juego, el recolector de fabrica. Bitacora §5.75.
+
+--- a/binding/binding-mri.cpp
++++ b/binding/binding-mri.cpp
+@@ -1249,9 +1249,64 @@
+     showMsg(ms);
+ }
+ 
++#ifdef __SWITCH__
++/* --------------------------------------------------------------------------
++ * El recolector de Ruby, con un monton a la medida de un juego y no de un
++ * guion de terminal.
++ *
++ * De fabrica CRuby empieza con 10.000 casillas y crece a base de recoger: cada
++ * vez que se le acaban, una pasada, y solo si despues de la pasada queda menos
++ * de un 20 % libre, crece. Un Essentials tiene en el mapa unos 940.000 objetos
++ * vivos (registro de la consola, "[monton] ruby") y crea entre 1.200 y 1.700
++ * por fotograma (bitacora §5.74), asi que el monton se queda justo por encima
++ * de lo vivo y el recolector pasa cada 300 fotogramas, cinco segundos, con
++ * todo el monton por barrer. Y al arrancar es peor: 37 pasadas en los
++ * primeros trece segundos, mientras se cargan los scripts, para llegar a un
++ * monton que se sabia desde el principio que iba a hacer falta.
++ *
++ * Las mismas variables RUBY_GC_* que entiende cualquier ruby, puestas antes de
++ * ruby_options() (que es quien las lee, en ruby_gc_set_params). En Horizon
++ * nadie hereda un entorno, asi que no se pisa nada que alguien haya pedido; con
++ * setenv(..., 0) tampoco se pisaria. Con sin-gc.txt en la carpeta del juego no
++ * se pone ninguna: el recolector de fabrica, para medir el antes y el despues
++ * con el mismo binario.
++ *
++ * Lo que cuesta en memoria: cada casilla son 40 bytes, y lo que se pide de mas
++ * son del orden de un millon, 40 MB, en una consola con 3.200 MB de monton de
++ * los que el juego usa entre 640 y 900 (bitacora §5.53, §5.66).
++ * -------------------------------------------------------------------------- */
++#define NX_GC_INIT   "1500000"
++#define NX_GC_LIBRES "1000000"
++
++static void nxAjustaRecolector()
++{
++    FILE *f = fopen("sin-gc.txt", "r");
++    if (f)
++    {
++        fclose(f);
++        Debug() << "[gc] sin-gc.txt: el recolector de fabrica";
++        return;
++    }
++
++    /* Al arrancar, sitio para todo lo que un Essentials deja vivo despues de
++     * cargar sus scripts y su primer mapa: las pasadas de la carga desaparecen
++     * casi todas. */
++    setenv("RUBY_GC_HEAP_INIT_SLOTS", NX_GC_INIT, 0);
++    /* Despues de cada pasada, al menos esto libre; si no, el monton crece. Es
++     * lo que espacia las pasadas: a 1.500 objetos por fotograma, un millon de
++     * casillas libres son once segundos a 60 fps en vez de cinco. */
++    setenv("RUBY_GC_HEAP_FREE_SLOTS", NX_GC_LIBRES, 0);
++    Debug() << "[gc] RUBY_GC_HEAP_INIT_SLOTS" << NX_GC_INIT
++            << "RUBY_GC_HEAP_FREE_SLOTS" << NX_GC_LIBRES;
++}
++#endif
++
+ static void mriBindingExecute() {
+     Config &conf = shState->rtData().config;
+-    
++#ifdef __SWITCH__
++    nxAjustaRecolector();
++#endif
++
+ #if RAPI_MAJOR >= 2
+     /* Normally only a ruby executable would do a sysinit,
+      * but not doing it will lead to crashes due to closed

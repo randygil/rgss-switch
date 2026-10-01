@@ -4047,6 +4047,174 @@ procesador o la GPU.
 
 Queda lo mismo que en §5.73 y §5.74: la consola de verdad.
 
+### 5.75 Texto nuevo, el hexágono, la basura y la pantalla de carga
+
+§5.72 dejó cinco cosas abiertas, medidas en Ryujinx. Antes de tocar ninguna se
+miró qué decía de cada una el registro de la consola del 9 de septiembre,
+porque el emulador cobra la GPU a su manera y una cifra suya puede mandar a
+arreglar lo que en la consola no cuesta nada:
+
+| | Ryujinx (§5.72) | consola |
+|---|---|---|
+| `draw_text` | 1,7 ms por llamada | acierto de alijo 0,04–0,08 ms; **fallo 1,3–2,5 ms** |
+| `set_pixel` tras otra operación | 25 ms | `pix 1x 1–7 ms` por lectura |
+| `findCenter` | 30–55 ms | `pix 1x 1–10 ms` |
+| recolector en el mapa | — | una pasada cada 4,3 s |
+| pantalla de carga | — | espera a la red una vez por arranque |
+
+Con eso el orden sale solo: el texto es lo más caro en la consola, y no por
+donde decía el emulador.
+
+**1. El texto: un fallo de alijo creaba una textura.** El alijo de cadenas de
+`mkxpz-alijos-bitmap.patch` acierta casi siempre, y acertando dibujar una
+cadena es un pegado. Lo caro es fallar, y los fallos llegan en racimo: abrir
+una lista que no se había visto es cocer de golpe cientos de cadenas. El peor
+fotograma de texto del registro:
+
+```
+txt 1040x 589 ms | pool 363x 239 ms | nue 349x 229 ms | peg 776x 118 ms | cad 430/776 | fondo 2 aciertos
+```
+
+346 fallos y 349 `Bitmap` nuevos en el mismo fotograma: cada cadena cocida era
+una textura propia con su FBO, el fondo de texturas acertó 2 veces de 363, y
+crear una textura contra el driver son 0,66 ms de media. Cuatro de cada diez
+milisegundos de ese fotograma eran texturas para guardar cadenas de veinte
+píxeles de alto.
+
+Ahora las cadenas se guardan en un **atlas**: hojas de 512×512 (como mucho 32,
+los mismos 32 MB de antes), por estantes de la misma altura, con dos píxeles de
+aire. Un fallo es rasterizar y una subida a un trozo de una hoja que ya existe;
+cuando no cabe nada más se vacía entera la hoja que hace más que no se usa. La
+cadena que no cabe en una hoja (más de 512 de ancho) sigue en el alijo de cajas
+de antes.
+
+*Ni un píxel distinto, y cómo se sabe.* Sin estrujar, cada píxel del destino
+lee el centro exacto de un texel del origen, esté donde esté el rectángulo y
+mida lo que mida la textura. Estrujando (una cadena más ancha que su caja) no:
+las muestras caen entre texels y el redondeo de las coordenadas normalizadas
+depende del tamaño de la textura, así que esas se copian una vez 1:1 a una caja
+propia del tamaño de antes y se estrujan desde allí. Comprobado en Ryujinx con
+`runtime/diagnostico/nx-banco-dibujo.rb`, que conmuta los dos caminos en la
+misma partida (modo diagnóstico y `RGSS_SIN_ATLAS`): una rejilla de 372
+llamadas —tres tamaños, negrita, cuatro colores, uno semitransparente, cadenas
+estrujadas, las tres alineaciones— sobre un `Bitmap` vacío (pegado directo) y
+sobre uno con fondo (el sombreador), por fallo y por acierto: **0 píxeles
+distintos de 196.608**; 992 casos sueltos en un `Bitmap` pequeño, iguales
+salvo los seis de una cadena que se cuenta abajo; y
+después de 6.000 cadenas nuevas que obligan a vaciar hojas, la rejilla sigue
+igual.
+
+Una trampa que costó tres vueltas: en seis partidas de ocho salía distinta una
+cadena («Defensa», la quinta que se dibujaba en toda la partida), siempre la
+misma y en todos los dibujos de esa partida, también tras un `Graphics.update`.
+Las fotos dijeron que el que fallaba era el camino de **antes**: su caja, recién
+creada y recién subida, se dibujaba vacía, y el atlas pintaba lo mismo que pinta
+la caja en las partidas en que sale bien (dibujando esa cadena la primera, o en
+la última vuelta, por las buenas). Es Ryujinx —una textura recién sacada del
+fondo cuya subida no llega a verse—, no se repite de forma fija y no toca al
+atlas. El banco lo avisa en su cabecera.
+
+Tiempos en Ryujinx, 300 cadenas nuevas y luego las mismas otra vez, tres
+vueltas alternas:
+
+| | fallo de alijo | acierto |
+|---|---:|---:|
+| cajas (antes) | 0,34–0,44 ms | 0,05 ms |
+| atlas | 0,25–0,32 ms | 0,06–0,08 ms |
+
+El fallo baja un cuarto, y en la consola tiene que bajar más, porque lo que se
+quita (crear una textura con su FBO) allí cuesta 0,66 ms medidos y en el
+emulador casi nada. El acierto sube 0,02 ms en Ryujinx, con hojas de 1024 y de
+512 igual; en un pegado no hay nada que dependa del tamaño de la textura de
+origen en una GPU de verdad, y la explicación más probable es la del emulador
+comprobando la textura entera cada vez que se usa. Es la cifra que hay que
+mirar en la consola: `sin-atlas.txt` en la carpeta del juego vuelve al alijo de
+cajas con el mismo binario, y `[tiron]` trae `txt`, `peg`, `pool` y `nue`.
+
+**2. `set_pixel` justo después de `clear`.** El pegado diferido de
+`set_pixel` (copia en RAM, rectángulo sucio, una sola subida antes del
+siguiente uso) ya existía desde `mkxpz-alijos-bitmap.patch`; lo que quedaba
+era la **lectura** que lo precede: sin copia en RAM, el primer `set_pixel`
+después de cualquier otra operación trae la textura entera con `glReadPixels`.
+El hexágono del resumen (Marin Better Bitmaps) hace `bitmap.clear` y en seguida
+mil y pico `set_pixel` sobre un `Bitmap` de 512×384, dos veces por página: dos
+lecturas de 768 KB de algo que se acaba de borrar. `BitmapPrivate::todoCero`
+recuerda que la textura está a cero desde el último `clear` (lo quita cualquier
+otra escritura, y también `getGLTypes()`, porque `Graphics.snap_to_bitmap`
+compone directamente en el FBO), y entonces la copia se hace con `memset`.
+`get_pixel`, `set_pixel` y `nx_opaque_bounds` comparten ahora
+`aseguraSuperficie()`. En Ryujinx, con `RGSS_SIN_CEROS` para el antes:
+
+| | leyendo la GPU | a ceros |
+|---|---:|---:|
+| hexágono del resumen (el del juego) | 61–65 ms | 2,3–3,9 ms |
+| `clear` + 2.000 `set_pixel` + `fill_rect` | 142–146 ms | 80–103 ms |
+
+Mismos bytes en los dos, y `get_pixel` tras `clear` da cero sin leer nada. Lo
+que queda en la segunda fila son las 2.000 llamadas de Ruby. En la consola se
+ahorran las dos lecturas por página (`pix`, 1–7 ms cada una).
+
+**3. `findCenter`: no se ha tocado, a propósito.** `nx-centro.rb` ya hace una
+sola lectura por sprite; lo que cuesta 30–55 ms es esa lectura **en el
+emulador**, y en la consola son 1–10 ms. Evitarla del todo pediría tener en RAM
+lo que hay en `@temp_bmp`, que se hace en la GPU (`clear` + `blt` de un
+fotograma que a su vez es un `stretch_blt` de la hoja del Pokémon): o leerlo, o
+reproducir en la CPU cada pegado con su escalado, exacto al píxel, y guardar una
+copia de cada fotograma (unos 15 MB por Pokémon de cien fotogramas). Para 1–10
+ms no compensa.
+
+**4. El recolector.** No había ningún `RUBY_GC_*` puesto (§5.66): CRuby empieza
+con 10.000 casillas y sólo crece cuando, tras una pasada, queda menos de un 20 %
+libre. Con 940.000 objetos vivos y 1.200 nuevos por fotograma el montón se
+queda justo por encima de lo vivo y el recolector pasa cada cuatro o cinco
+segundos. `mriBindingExecute` pone antes de `ruby_options()` —que es quien las
+lee— `RUBY_GC_HEAP_INIT_SLOTS=1500000` y `RUBY_GC_HEAP_FREE_SLOTS=1000000`
+(`mkxpz-recolector.patch`, sólo en `__SWITCH__`; `sin-gc.txt` lo apaga).
+
+Medirlo tuvo su trampa: `GC.total_time` y `GC.stat(:time)` salen **a cero** en
+Horizon, porque el recolector se cronometra con el reloj de CPU del proceso y
+Horizon no lo tiene; el «gc … 0.0 ms» de `nx-mapa.rb` nunca ha medido nada.
+`runtime/diagnostico/nx-gc-pausa.rb` lo mide desde fuera, con el reloj de
+pared: el tiempo de Ruby de los fotogramas en que `GC.count` cambia frente a la
+mediana de los demás. En Ryujinx, el bot de `nx-mapa.rb` andando 90 s por Pueblo
+Paleta:
+
+| | de fábrica | ajustado |
+|---|---:|---:|
+| pasadas al llegar al título | 36 (9 mayores) | 8 (4 mayores) |
+| pasadas menores en el mapa | 2 cada 600 fotogramas | 1 cada 600–1.200 |
+| lo que para cada una | 5,5–7 ms | 6–7 ms |
+| casillas del montón en el mapa | 961.000 (36 MB) | 1.650.000 (62 MB) |
+
+La pasada cuesta lo mismo; pasa entre la mitad y la cuarta parte de veces. Una
+de ellas, al crecer el montón por primera vez, fueron 57 ms, una vez. Son 26 MB
+más de un montón que ronda 640–900 MB de 3.200. En la consola cada pasada será
+varias veces más cara que estos 6 ms y ahí es donde se nota: con `[ritmo]` y
+`sin-gc.txt` se ve.
+
+**5. La pantalla de carga esperaba a la red.** `pbStartLoadScreen` llama a
+`PokeUpdater.check_for_updates` antes de pintar el menú: `network_available?`
+más un pastebin con la última versión. `juegos/pokemon-anil/lib/nx-actualiza.rb`
+lanza esa pregunta en un hilo en cuanto existe el plugin (la intro y el título
+dan segundos de margen) y, al llegar a la pantalla de carga, usa la respuesta
+si ya está —con los mismos mensajes del original, desde el hilo principal, sin
+volver a descargar— y si no, no espera; «Buscar actualizaciones» del menú sigue
+siendo el de siempre. En Ryujinx, que no tiene internet: **7.423 ms → 0 ms**.
+De paso salió que `MKXPError`, lo que lanza `HTTPLite` sin red, no hereda de
+`StandardError`: un `rescue` normal no lo coge, y el hilo moría sin anotar nada.
+
+**Lo que no está.** Nada de esto ha corrido en una consola de verdad: los
+números de arriba son de Ryujinx, y los de la consola son la razón de hacerlo,
+no su resultado. Para medirlo allí, con el mismo binario: `sin-atlas.txt` y
+`sin-gc.txt` en la carpeta del juego, y `[tiron]` y `[ritmo]` en
+`mkxp-boot.log`; o el banco (`nx-banco-dibujo.rb` en `lib/` y en
+`preloadScript`, con `diagnostico.txt`), que deja `banco-dibujo.log` y sale. La
+descarga de `nx-actualiza` desde un hilo con red de verdad está probada en el PC
+(con un `PokeUpdater` de mentira) y en Ryujinx sin red, no en Horizon con Wi-Fi.
+Y `findCenter` queda como estaba.
+
+---
+
 ## 5-bis. Criterio de diseño para los stubs
 
 Auditando `libc.a`, `libsysbase.a` y `libnx.a` con `nm`, el reparto es:

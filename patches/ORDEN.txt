@@ -2,6 +2,7 @@
 # mkxp-z 2.4.2 (src/mkxpz.tar.gz). Lo deduce y lo
 # comprueba reconstruir-src.py: no se edita a mano.
 mkxpz-alijos-bitmap.patch
+mkxpz-atlas-texto.patch
 mkxpz-audio-track-nil.patch
 mkxpz-binding-mri.cpp.patch
 mkxpz-bordes-opacos.patch
@@ -27,6 +28,7 @@ mkxpz-net-curl.patch
 mkxpz-nucleo-musica.patch
 mkxpz-pathcache-readdir.patch
 mkxpz-fichero-lento.patch
+mkxpz-recolector.patch
 mkxpz-sharedstate-trazas.patch
 mkxpz-contenedor-zip.patch
 mkxpz-system.h.patch

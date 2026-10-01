@@ -1,0 +1,733 @@
+El atlas de cadenas de draw_text, y set_pixel sin leer la GPU despues de clear.
+
+Dos costes de bitmap.cpp que quedaban despues de los alijos
+(mkxpz-alijos-bitmap.patch), medidos en la consola y en Ryujinx (bitacora
+§5.75):
+
+1. Un fallo del alijo de texto creaba una textura con su FBO por cadena. Al
+   abrir una lista nueva son cientos de cadenas de golpe, y el fondo de
+   texturas casi no acierta con ellas: en un fotograma de la consola, "txt
+   1040x 589 ms | pool 363x 239 ms | nue 349x 229 ms | cad 430/776". Ahora
+   las cadenas cocidas viven en hojas de 512x512 (AlijoTexto), por estantes
+   de la misma altura, y un fallo es rasterizar y una subida a un trozo de una
+   hoja que ya existe. Mismos 32 MB de presupuesto; lo que no cabe en una hoja
+   sigue en el alijo de cajas. Las cadenas que hay que
+   estrujar se estrujan desde una copia 1:1 en una caja propia del mismo
+   tamano que antes, para que el redondeo de las muestras no cambie ni un
+   pixel. sin-atlas.txt en la carpeta del juego vuelve al alijo de cajas; en
+   modo diagnostico lo conmuta RGSS_SIN_ATLAS.
+
+2. El primer set_pixel despues de cualquier otra operacion leia la textura
+   entera con glReadPixels, aunque esa operacion fuera clear y se supiera que
+   todo es cero: el hexagono de estadisticas del resumen hace exactamente eso,
+   dos veces por pagina, sobre Bitmaps de 512x384. BitmapPrivate::todoCero
+   recuerda que la textura acaba de borrarse, y la copia en RAM se hace a
+   ceros sin preguntar a la GPU. get_pixel, set_pixel y nx_opaque_bounds
+   comparten ahora aseguraSuperficie(). En modo diagnostico, RGSS_SIN_CEROS
+   vuelve a leer de la GPU, para medir y comparar con el mismo binario.
+
+Se comprueba con runtime/diagnostico/nx-banco-dibujo.rb: los dos caminos de
+cada cosa, mismos bytes.
+
+--- a/src/display/bitmap.cpp
++++ b/src/display/bitmap.cpp
+@@ -72,6 +72,7 @@
+ 
+ extern "C" void nx_cache_imagen(int acierto, unsigned bytes);
+ extern "C" void nx_cache_texto(int acierto, unsigned bytes);
++extern "C" int nx_diagnostico(void);
+ 
+ /* --------------------------------------------------------------------------
+  * Dos alijos de superficies ya cocinadas.
+@@ -119,11 +120,16 @@
+  *
+  *   el Bitmap mide la CAJA, redondeada hacia arriba (ver mas abajo)
+  *   ancho/alto  son los pixeles que de verdad ocupa la cadena dentro
+- *   altoCrudo   es el alto ANTES de sombra y borde, con el que se centra */
++ *   altoCrudo   es el alto ANTES de sombra y borde, con el que se centra
++ *
++ * Y donde esta: en su propio Bitmap, en (0,0), o en una hoja compartida del
++ * atlas de texto, en (x,y) (ver AlijoTexto, mas abajo). */
+ struct Cocida
+ {
+     Bitmap *bmp;
++    int x, y;
+     int ancho, alto, altoCrudo;
++    Bitmap *suelta;     /* solo en el atlas: ver AlijoTexto::suelta() */
+ };
+ 
+ /* Que hacer con cada cosa cuando el alijo la echa. Sobrecargas en vez de un
+@@ -220,6 +226,265 @@
+ Alijo<SDL_Surface *> alijoImagen(192u * 1024u * 1024u);
+ Alijo<Cocida>        alijoTexto(32u * 1024u * 1024u);
+ 
++/* --------------------------------------------------------------------------
++ * El atlas de texto: las cadenas cocidas, muchas por textura.
++ *
++ * El alijo de arriba acierta casi siempre, y cuando acierta dibujar una cadena
++ * cuesta un pegado de 0,04-0,15 ms. Lo que queda caro en la consola es el
++ * FALLO, y los fallos vienen en racimos: abrir una lista nueva es pintar de
++ * golpe cientos de cadenas que nunca se habian visto. El registro de la
++ * consola del 9 de septiembre tiene un fotograma asi:
++ *
++ *   txt 1040x 589 ms | pool 363x 239 ms | nue 349x 229 ms | cad 430/776
++ *
++ * 346 fallos de alijo y 349 Bitmap nuevos: cada cadena cocida era una textura
++ * propia (con su FBO) y el fondo de texturas acerto 2 veces de 363, asi que
++ * casi cada fallo fue una textura creada contra el driver, 0,66 ms de media.
++ * Cuatro de cada diez milisegundos de ese fotograma eran crear texturas para
++ * guardar cadenas de veinte pixeles de alto.
++ *
++ * Aqui las cadenas se guardan en hojas de 512x512, por estantes de la misma
++ * altura (redondeada a 4), con dos pixeles de aire entre una y otra. Un fallo
++ * pasa a ser rasterizar y una subida a un trozo de una hoja que ya existe: una
++ * textura nueva cada cien o doscientas cadenas en vez de una por cadena. Las
++ * hojas son treinta y dos como mucho, los mismos 32 MB de antes; cuando no
++ * cabe nada mas se vacia entera la que hace mas tiempo que no se usa, y sus
++ * cadenas se volveran a cocer si vuelven a pedirse. Hojas de 512 y no de 1024
++ * para que vaciar una tire menos, y porque el emulador cobra algo mas por
++ * pegar desde una textura grande (medido: lo mismo con las dos; ver §5.75).
++ * Una cadena mas ancha que una hoja va al alijo de cajas de antes.
++ *
++ * NI UN PIXEL DISTINTO, y por que. Dibujar sigue siendo el mismo stretchBlt
++ * con el mismo rectangulo de origen, ahora desplazado dentro de la hoja. Sin
++ * estrujar (cadena que cabe en su caja: la inmensa mayoria), cada pixel del
++ * destino lee el centro exacto de un texel del origen, y eso no depende de lo
++ * grande que sea la textura ni de donde este el rectangulo: el mismo texel, el
++ * mismo resultado, por el camino rapido (glBlitFramebuffer) y por el del
++ * sombreador. Estrujando no es asi: las muestras caen entre texels, y a qué
++ * lado de la frontera caen depende del redondeo en coordenadas normalizadas,
++ * que cambia con el tamano de la textura. Para no apostar, una cadena que hay
++ * que estrujar se copia una vez, 1:1, a un Bitmap propio del mismo tamano de
++ * caja que tenia antes (suelta()), y se estruja desde alli: los mismos bytes
++ * en la misma textura que con el alijo de cajas.
++ *
++ * Con sin-atlas.txt en la carpeta del juego se usa el alijo de cajas de
++ * siempre; en modo diagnostico, ademas, la variable RGSS_SIN_ATLAS lo conmuta
++ * en caliente (para comparar los dos caminos en la misma partida).
++ * -------------------------------------------------------------------------- */
++class AlijoTexto
++{
++public:
++    enum { LADO = 512, MAX_HOJAS = 32, AIRE = 2 };
++
++    AlijoTexto() : reloj(0), bytesSueltas(0) {}
++
++    bool busca(const std::string &clave, Cocida **salida)
++    {
++        std::unordered_map<std::string, Entrada>::iterator it = mapa.find(clave);
++        if (it == mapa.end())
++            return false;
++        hojas[it->second.hoja].uso = ++reloj;
++        /* Los elementos de un unordered_map no se mueven al rehacer la tabla:
++         * el puntero vale hasta que se borre la entrada, y eso solo pasa
++         * dentro de guarda(). */
++        *salida = &it->second.c;
++        return true;
++    }
++
++    /* Mete la cadena en una hoja y la sube. NULL si no cabe en ninguna hoja
++     * por tamano (mas ancha que LADO): entonces el que llama va por el camino
++     * de siempre, el alijo de cajas. */
++    Cocida *guarda(const std::string &clave, int ancho, int alto, int altoCrudo,
++                   const void *pixeles)
++    {
++        int h, x, y;
++        if (!reserva(ancho, alto, &h, &x, &y))
++            return NULL;
++
++        Hoja &hoja = hojas[h];
++        TEX::bind(hoja.bmp->getGLTypes().tex);
++        TEX::uploadSubImage(x, y, ancho, alto, pixeles, GL_RGBA);
++
++        Entrada &e = mapa[clave];
++        e.hoja = h;
++        e.c.bmp = hoja.bmp;
++        e.c.x = x;
++        e.c.y = y;
++        e.c.ancho = ancho;
++        e.c.alto = alto;
++        e.c.altoCrudo = altoCrudo;
++        e.c.suelta = NULL;
++        hoja.claves.push_back(clave);
++        hoja.uso = ++reloj;
++        return &e.c;
++    }
++
++    /* La cadena en un Bitmap propio, en (0,0), de la caja redondeada que
++     * usaba el alijo de cajas: lo que hace falta para estrujarla con los
++     * mismos pixeles que antes. Se hace la primera vez que se estruja y se
++     * guarda con la cadena; si las copias ya pasan de 4 MB, no se guarda y el
++     * que llama la suelta (*temporal). */
++    Bitmap *suelta(Cocida &c, bool *temporal)
++    {
++        *temporal = false;
++        if (c.suelta)
++            return c.suelta;
++
++        const int anchoCaja = (c.ancho + 63) & ~63;
++        const int altoCaja = (c.alto + 31) & ~31;
++        Bitmap *b = new Bitmap(anchoCaja, altoCaja);
++        b->stretchBlt(IntRect(0, 0, c.ancho, c.alto), *c.bmp,
++                      IntRect(c.x, c.y, c.ancho, c.alto), 255);
++
++        const size_t peso = (size_t)anchoCaja * altoCaja * 4;
++        if (bytesSueltas + peso > 4u * 1024u * 1024u)
++        {
++            *temporal = true;
++            return b;
++        }
++        bytesSueltas += peso;
++        c.suelta = b;
++        return b;
++    }
++
++    unsigned ocupado() const
++    {
++        return (unsigned)(hojas.size() * (size_t)LADO * LADO * 4 + bytesSueltas);
++    }
++
++private:
++    struct Estante
++    {
++        int y, alto, xLibre;
++    };
++
++    struct Hoja
++    {
++        Bitmap *bmp;
++        std::vector<Estante> estantes;
++        int yLibre;
++        unsigned long long uso;
++        std::vector<std::string> claves;
++    };
++
++    struct Entrada
++    {
++        int hoja;
++        Cocida c;
++    };
++
++    static bool cabeEn(Hoja &hoja, int ancho, int altoE, int *x, int *y)
++    {
++        for (size_t i = 0; i < hoja.estantes.size(); ++i)
++        {
++            Estante &e = hoja.estantes[i];
++            if (e.alto == altoE && e.xLibre + ancho <= LADO)
++            {
++                *x = e.xLibre;
++                *y = e.y;
++                e.xLibre += ancho + AIRE;
++                return true;
++            }
++        }
++        if (hoja.yLibre + altoE > LADO)
++            return false;
++
++        Estante e;
++        e.y = hoja.yLibre;
++        e.alto = altoE;
++        e.xLibre = ancho + AIRE;
++        hoja.estantes.push_back(e);
++        hoja.yLibre += altoE + AIRE;
++        *x = 0;
++        *y = e.y;
++        return true;
++    }
++
++    bool reserva(int ancho, int alto, int *h, int *x, int *y)
++    {
++        const int altoE = (alto + 3) & ~3;
++        if (ancho <= 0 || alto <= 0 || ancho > LADO || altoE > LADO)
++            return false;
++
++        for (size_t i = 0; i < hojas.size(); ++i)
++            if (cabeEn(hojas[i], ancho, altoE, x, y))
++            {
++                *h = (int)i;
++                return true;
++            }
++
++        if (hojas.size() < MAX_HOJAS)
++        {
++            Hoja nueva;
++            nueva.bmp = new Bitmap(LADO, LADO);   /* nace borrada */
++            nueva.yLibre = 0;
++            nueva.uso = ++reloj;
++            hojas.push_back(nueva);
++            *h = (int)hojas.size() - 1;
++            return cabeEn(hojas.back(), ancho, altoE, x, y);
++        }
++
++        /* Todas llenas: se vacia la que hace mas tiempo que no se usa. */
++        size_t vieja = 0;
++        for (size_t i = 1; i < hojas.size(); ++i)
++            if (hojas[i].uso < hojas[vieja].uso)
++                vieja = i;
++        vacia(hojas[vieja]);
++        *h = (int)vieja;
++        return cabeEn(hojas[vieja], ancho, altoE, x, y);
++    }
++
++    void vacia(Hoja &hoja)
++    {
++        for (size_t i = 0; i < hoja.claves.size(); ++i)
++        {
++            std::unordered_map<std::string, Entrada>::iterator it =
++                mapa.find(hoja.claves[i]);
++            if (it == mapa.end())
++                continue;
++            if (it->second.c.suelta)
++            {
++                bytesSueltas -= (size_t)it->second.c.suelta->width() *
++                                it->second.c.suelta->height() * 4;
++                delete it->second.c.suelta;
++            }
++            mapa.erase(it);
++        }
++        hoja.claves.clear();
++        hoja.estantes.clear();
++        hoja.yLibre = 0;
++        /* Lo nuevo se sube encima de lo viejo y solo se lee su rectangulo,
++         * pero el aire entre cadenas tiene que volver a ser cero. */
++        hoja.bmp->clear();
++    }
++
++    std::unordered_map<std::string, Entrada> mapa;
++    std::vector<Hoja> hojas;
++    unsigned long long reloj;
++    size_t bytesSueltas;
++};
++
++AlijoTexto atlasTexto;
++
++/* Como loteActivo() en sprite.cpp: sin-atlas.txt se mira una vez; la variable
++ * de entorno, solo en modo diagnostico y en cada llamada. */
++bool atlasActivo()
++{
++    static int activo = -1;
++    static bool conmutable = false;
++    if (activo < 0)
++    {
++        FILE *f = fopen("sin-atlas.txt", "r");
++        activo = f ? 0 : 1;
++        if (f)
++            fclose(f);
++        conmutable = nx_diagnostico() != 0;
++    }
++    if (conmutable && activo == 1 && getenv("RGSS_SIN_ATLAS"))
++        return false;
++    return activo == 1;
++}
++
+ }  /* namespace */
+ 
+ #else
+@@ -423,6 +688,7 @@
+     {
+         format = SDL_AllocFormat(SDL_PIXELFORMAT_ABGR8888);
+         hayPendiente = false;
++        todoCero = false;
+         
+         animation.width = 0;
+         animation.height = 0;
+@@ -467,6 +733,75 @@
+     IntRect pendiente;
+     bool hayPendiente;
+ 
++    /* ------------------------------------------------------------------
++     * La textura entera es (0,0,0,0) y nadie ha escrito en ella desde
++     * entonces. Lo pone clear() y lo quita cualquier otra cosa.
++     *
++     * El pegado diferido de arriba dejo el set_pixel en una subida por rafaga,
++     * pero no la LECTURA que la precede. Sin copia en RAM, el primer set_pixel
++     * despues de cualquier otra operacion trae la textura entera con
++     * glReadPixels, y eso es una sincronizacion completa con la GPU. Es lo que
++     * hace el hexagono de estadisticas del resumen (Marin Better Bitmaps) cada
++     * vez que se pinta: bitmap.clear y en seguida mil y pico set_pixel sobre
++     * un Bitmap de 512x384, dos veces por pagina. En Ryujinx esa lectura son
++     * 25 ms; en la consola, "pix 1x 1-7 ms" en cada cambio de pagina.
++     *
++     * Y lo que se leia se sabe sin leerlo: acaban de borrarlo. Asi que la
++     * copia en RAM se hace a ceros, que son exactamente los bytes que habria
++     * devuelto la GPU, y la rafaga solo cuesta la subida del final.
++     * ------------------------------------------------------------------ */
++    bool todoCero;
++
++    /* Que haya copia en RAM y diga lo mismo que la textura. Es el paso previo
++     * de get_pixel, set_pixel y nx_opaque_bounds, que antes lo repetian cada
++     * uno a su manera. */
++    void aseguraSuperficie()
++    {
++        if (surface)
++            return;
++
++        allocSurface();
++        if (!surface)
++            throw Exception(Exception::SDLError,
++                            "Error creating Bitmap surface: %s", SDL_GetError());
++
++#ifdef __SWITCH__
++        if (todoCero && !nxSinCeros())
++#else
++        if (todoCero)
++#endif
++        {
++            memset(surface->pixels, 0, (size_t)surface->h * surface->pitch);
++            return;
++        }
++
++        FBO::bind(gl.fbo);
++        glState.viewport.pushSet(IntRect(0, 0, gl.width, gl.height));
++        {
++            NX_MIDE(NX_G_LEERPIX);
++#ifdef __SWITCH__
++            u64 nxPix = armGetSystemTick();
++#endif
++            ::gl.ReadPixels(0, 0, gl.width, gl.height, GL_RGBA, GL_UNSIGNED_BYTE,
++                          surface->pixels);
++#ifdef __SWITCH__
++            nx_pixeles(gl.width, gl.height, armGetSystemTick() - nxPix);
++#endif
++        }
++        glState.viewport.pop();
++    }
++
++#ifdef __SWITCH__
++    /* En modo diagnostico, RGSS_SIN_CEROS hace que la copia se lea de la GPU
++     * aunque se sepa que es cero: para medir el antes y el despues con el
++     * mismo binario, y para comprobar que los dos caminos dan los mismos
++     * bytes. Solo se mira al crear la copia, una vez por rafaga. */
++    static bool nxSinCeros()
++    {
++        return nx_diagnostico() != 0 && getenv("RGSS_SIN_CEROS") != NULL;
++    }
++#endif
++
+     void vuelca()
+     {
+         if (!hayPendiente)
+@@ -496,8 +831,12 @@
+         pendiente = IntRect(x0, y0, x1 - x0, y1 - y0);
+     }
+ 
++    /* Quien pide la textura desde fuera puede escribir en ella sin pasar por
++     * Bitmap (Graphics.snap_to_bitmap compone la pantalla directamente en su
++     * FBO), asi que a partir de aqui ya no se garantiza que sea cero. */
+     TEXFBO &getGLTypes() {
+         vuelca();
++        todoCero = false;
+         return (animation.enabled) ? animation.currentFrame() : gl;
+     }
+     
+@@ -620,6 +959,7 @@
+     
+     void onModified(bool freeSurface = true)
+     {
++        todoCero = false;
+         if (surface && freeSurface)
+         {
+             SDL_FreeSurface(surface);
+@@ -1522,6 +1862,10 @@
+     GUARD_MEGA;
+     GUARD_ANIMATED;
+     
++    /* Lo que set_pixel tuviera pendiente de subir se va a borrar igual: no
++     * se sube para nada. */
++    p->hayPendiente = false;
++
+     p->bindFBO();
+     
+     glState.clearColor.pushSet(Vec4());
+@@ -1533,6 +1877,7 @@
+     p->clearTaintedArea();
+     
+     p->onModified();
++    p->todoCero = true;
+ }
+ 
+ static uint32_t &getPixelAt(SDL_Surface *surf, SDL_PixelFormat *form, int x, int y)
+@@ -1553,27 +1898,7 @@
+     if (x < 0 || y < 0 || x >= width() || y >= height())
+         return Vec4();
+     
+-    if (!p->surface)
+-    {
+-        p->allocSurface();
+-        
+-        FBO::bind(p->gl.fbo);
+-        
+-        glState.viewport.pushSet(IntRect(0, 0, width(), height()));
+-        
+-        {
+-            NX_MIDE(NX_G_LEERPIX);
+-#ifdef __SWITCH__
+-            u64 nxPix = armGetSystemTick();
+-#endif
+-            gl.ReadPixels(0, 0, width(), height(), GL_RGBA, GL_UNSIGNED_BYTE, p->surface->pixels);
+-#ifdef __SWITCH__
+-            nx_pixeles(width(), height(), armGetSystemTick() - nxPix);
+-#endif
+-        }
+-        
+-        glState.viewport.pop();
+-    }
++    p->aseguraSuperficie();
+     
+     uint32_t pixel = getPixelAt(p->surface, p->format, x, y);
+     
+@@ -1615,17 +1940,7 @@
+     if (w <= 0 || h <= 0)
+         return;
+ 
+-    if (!p->surface)
+-    {
+-        p->allocSurface();
+-        FBO::bind(p->gl.fbo);
+-        glState.viewport.pushSet(IntRect(0, 0, w, h));
+-        {
+-            NX_MIDE(NX_G_LEERPIX);
+-            gl.ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, p->surface->pixels);
+-        }
+-        glState.viewport.pop();
+-    }
++    p->aseguraSuperficie();
+ 
+     const SDL_Surface *sf = p->surface;
+     const uint32_t amask = p->format->Amask;
+@@ -1665,21 +1980,11 @@
+     if (x < 0 || y < 0 || x >= width() || y >= height())
+         return;
+ 
+-    /* Sin copia en RAM no hay donde escribir: se trae la textura una vez. Es
+-     * el mismo glReadPixels que hace get_pixel, y se cuenta en "pix". Cuesta
+-     * una sincronizacion, la primera vez, en vez de una por pixel. */
+-    if (!p->surface)
+-    {
+-        p->allocSurface();
+-        FBO::bind(p->gl.fbo);
+-        glState.viewport.pushSet(IntRect(0, 0, width(), height()));
+-        {
+-            NX_MIDE(NX_G_LEERPIX);
+-            gl.ReadPixels(0, 0, width(), height(), GL_RGBA, GL_UNSIGNED_BYTE,
+-                          p->surface->pixels);
+-        }
+-        glState.viewport.pop();
+-    }
++    /* Sin copia en RAM no hay donde escribir: se trae la textura una vez (el
++     * mismo glReadPixels que hace get_pixel, contado en "pix"), o se hace a
++     * ceros si se acaba de borrar (ver todoCero). Una vez por rafaga en vez
++     * de una por pixel. */
++    p->aseguraSuperficie();
+ 
+     uint32_t &surfPixel = getPixelAt(p->surface, p->format, x, y);
+     surfPixel = SDL_MapRGBA(p->format, pixel[0], pixel[1], pixel[2], pixel[3]);
+@@ -2042,54 +2347,121 @@
+         nCab = (int)sizeof(cab) - 1;   /* snprintf devuelve lo que HABRIA escrito */
+     const std::string claveTxt = std::string(cab, nCab) + str;
+ 
++    /* Con el atlas, la cadena vive en una hoja compartida (enAtlas apunta a
++     * su entrada); sin el, o si no cabe en una hoja, en una caja propia como
++     * siempre. "reciente" quiere decir que esa caja propia se acaba de hacer
++     * aqui y hay que decidir de quien es al salir. */
++    const bool conAtlas = atlasActivo();
+     Cocida cocida;
++    Cocida *enAtlas = NULL;
+     bool reciente = false;
+-    const bool hayTexto = alijoTexto.busca(claveTxt, &cocida);
++    bool hayTexto;
+ 
+-    nx_cache_texto(hayTexto ? 1 : 0, alijoTexto.ocupado());
++    if (conAtlas)
++    {
++        hayTexto = atlasTexto.busca(claveTxt, &enAtlas);
++        if (hayTexto)
++            cocida = *enAtlas;
++        else
++            /* Las que no caben en una hoja siguen en el alijo de cajas. */
++            hayTexto = alijoTexto.busca(claveTxt, &cocida);
++        nx_cache_texto(hayTexto ? 1 : 0,
++                       atlasTexto.ocupado() + alijoTexto.ocupado());
++    }
++    else
++    {
++        hayTexto = alijoTexto.busca(claveTxt, &cocida);
++        nx_cache_texto(hayTexto ? 1 : 0, alijoTexto.ocupado());
++    }
+ 
+     if (!hayTexto)
+     {
++        int altoCrudo = 0;
+         SDL_Surface *txtSurf = rasterizaTexto(font, str, p->font, p->format,
+-                                              c, outColor, &cocida.altoCrudo);
++                                              c, outColor, &altoCrudo);
+         if (!txtSurf)
+             return;
+ 
+-        cocida.ancho = txtSurf->w;
+-        cocida.alto = txtSurf->h;
+-
+-        /* La caja se redondea hacia arriba, y esta es la leccion cara del
+-         * intento anterior. El fondo de texturas indexa por medidas EXACTAS, y
+-         * cada cadena tiene un ancho distinto: guardando la textura del tamano
+-         * justo, ninguna se reciclaba jamas y cada fallo de alijo creaba una
+-         * textura nueva contra el driver. Se cambiaron 299 ms de subidas por
+-         * 190 ms de reservas y el fotograma salio peor que antes.
+-         *
+-         * Con la caja redondeada, todas las cadenas caen en un punado de
+-         * tamanos y el fondo las recicla. Se sube solo el trozo de verdad, y el
+-         * clear() que hace el constructor deja a cero lo que sobra, asi que no
+-         * asoman pixeles de la cadena anterior por el borde. */
+-        const int anchoCaja = (cocida.ancho + 63) & ~63;
+-        const int altoCaja = (cocida.alto + 31) & ~31;
+-
+-        try
++        if (conAtlas)
+         {
+-            cocida.bmp = new Bitmap(anchoCaja, altoCaja);
++            try
++            {
++                enAtlas = atlasTexto.guarda(claveTxt, txtSurf->w, txtSurf->h,
++                                            altoCrudo, txtSurf->pixels);
++            }
++            catch (const Exception &)
++            {
++                SDL_FreeSurface(txtSurf);
++                throw;
++            }
+         }
+-        catch (const Exception &)
++
++        if (enAtlas)
+         {
+-            SDL_FreeSurface(txtSurf);
+-            throw;
++            cocida = *enAtlas;
+         }
++        else
++        {
++            cocida.x = cocida.y = 0;
++            cocida.suelta = NULL;
++            cocida.altoCrudo = altoCrudo;
++            cocida.ancho = txtSurf->w;
++            cocida.alto = txtSurf->h;
++
++            /* La caja se redondea hacia arriba, y esta es la leccion cara del
++             * intento anterior. El fondo de texturas indexa por medidas
++             * EXACTAS, y cada cadena tiene un ancho distinto: guardando la
++             * textura del tamano justo, ninguna se reciclaba jamas y cada fallo
++             * de alijo creaba una textura nueva contra el driver. Se cambiaron
++             * 299 ms de subidas por 190 ms de reservas y el fotograma salio
++             * peor que antes.
++             *
++             * Con la caja redondeada, todas las cadenas caen en un punado de
++             * tamanos y el fondo las recicla. Se sube solo el trozo de verdad,
++             * y el clear() que hace el constructor deja a cero lo que sobra,
++             * asi que no asoman pixeles de la cadena anterior por el borde. */
++            const int anchoCaja = (cocida.ancho + 63) & ~63;
++            const int altoCaja = (cocida.alto + 31) & ~31;
++
++            try
++            {
++                cocida.bmp = new Bitmap(anchoCaja, altoCaja);
++            }
++            catch (const Exception &)
++            {
++                SDL_FreeSurface(txtSurf);
++                throw;
++            }
+ 
+-        TEX::bind(cocida.bmp->getGLTypes().tex);
+-        TEX::uploadSubImage(0, 0, cocida.ancho, cocida.alto,
+-                            txtSurf->pixels, GL_RGBA);
+-        cocida.bmp->taintArea(IntRect(0, 0, anchoCaja, altoCaja));
++            TEX::bind(cocida.bmp->getGLTypes().tex);
++            TEX::uploadSubImage(0, 0, cocida.ancho, cocida.alto,
++                                txtSurf->pixels, GL_RGBA);
++            cocida.bmp->taintArea(IntRect(0, 0, anchoCaja, altoCaja));
++            reciente = true;
++        }
+         SDL_FreeSurface(txtSurf);
+-        reciente = true;
+     }
+ 
++    /* La caja propia recien hecha se ofrece al alijo de cajas DESPUES de
++     * dibujar, porque si no la quiere el dueno sigue siendo este de aqui. Con
++     * el atlas puesto, una caja propia es una cadena que no cabia en una
++     * hoja: va al alijo de cajas como iba antes, para no volver a cocerla en
++     * cada fotograma. */
++    struct SueltaCaja
++    {
++        bool reciente;
++        const std::string &clave;
++        Cocida &c;
++        ~SueltaCaja()
++        {
++            if (!reciente)
++                return;
++            if (!alijoTexto.guarda(clave, c, (size_t)c.bmp->width() *
++                                             (size_t)c.bmp->height() * 4))
++                delete c.bmp;
++        }
++    } sueltaCaja = { reciente, claveTxt, cocida };
++
+     const int anchoTxt = cocida.ancho;
+     const int altoTxt = cocida.alto;
+ 
+@@ -2100,14 +2472,7 @@
+      * forma en que este cambio podria colgar la consola sin dejar informe de
+      * fallo, asi que se corta aqui. */
+     if (anchoTxt <= 0 || altoTxt <= 0 || rect.w <= 0 || rect.h <= 0)
+-    {
+-        if (reciente &&
+-            !alijoTexto.guarda(claveTxt, cocida,
+-                               (size_t)cocida.bmp->width() *
+-                               (size_t)cocida.bmp->height() * 4))
+-            delete cocida.bmp;
+         return;
+-    }
+ 
+     int alignX = rect.x;
+ 
+@@ -2142,19 +2507,24 @@
+ 
+     IntRect destino(alignX, alignY, anchoDest, altoTxt);
+ 
++    /* Estrujando, desde la copia en caja propia y no desde la hoja: ver por
++     * que en AlijoTexto. */
++    Bitmap *fuente = cocida.bmp;
++    IntRect origen(cocida.x, cocida.y, anchoTxt, altoTxt);
++    bool fuenteTemporal = false;
++    if (enAtlas && anchoDest != anchoTxt)
++    {
++        fuente = atlasTexto.suelta(*enAtlas, &fuenteTemporal);
++        origen = IntRect(0, 0, anchoTxt, altoTxt);
++    }
++
+     {
+         NX_MIDE(NX_G_PEGA);
+-        stretchBlt(destino, *cocida.bmp, IntRect(0, 0, anchoTxt, altoTxt),
+-                   (int)(txtAlpha * 255.0f + 0.5f));
++        stretchBlt(destino, *fuente, origen, (int)(txtAlpha * 255.0f + 0.5f));
+     }
+ 
+-    /* Se ofrece DESPUES de dibujar, porque si el alijo no lo quiere el dueno
+-     * sigue siendo este de aqui. */
+-    if (reciente &&
+-        !alijoTexto.guarda(claveTxt, cocida,
+-                           (size_t)cocida.bmp->width() *
+-                           (size_t)cocida.bmp->height() * 4))
+-        delete cocida.bmp;
++    if (fuenteTemporal)
++        delete fuente;
+ 
+     return;
+ #else
+@@ -2691,6 +3061,7 @@
+ 
+ void Bitmap::taintArea(const IntRect &rect)
+ {
++    p->todoCero = false;
+     p->addTaintedArea(rect);
+ }
+ 
