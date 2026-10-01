@@ -197,7 +197,14 @@ def subir(ftp, solo):
         destino = REMOTO + "/" + rel
         local_tam = os.path.getsize(abs_)
         local_md5 = resumen(abs_)
-        remoto_tam = tam_remoto(ftp, destino)
+        # El SIZE tambien con reintento. El 1 de octubre de 2026, a los 1.800
+        # ficheros de una subida entera, un SIZE se quedo sin respuesta y el
+        # socket caducado tumbo el guion con un OSError: tam_remoto solo
+        # rescata los errores del protocolo, no los de la red. Y como el
+        # estado solo se guardaba al final, lo ya subido no constaba en
+        # ninguna parte y habia que volver a subirlo todo.
+        remoto_tam = con_reintento(sesion, lambda f, d=destino: tam_remoto(f, d))
+        ftp = sesion["ftp"]
         anotado = estado.get(rel)
 
         # Saltarselo exige las dos cosas: que el servidor diga ese tamano Y que
@@ -224,7 +231,12 @@ def subir(ftp, solo):
             subidos += 1
             bytes_ += local_tam
             # La comprobacion: preguntar al servidor, no dar por hecho.
-            if tam_remoto(ftp, destino) == local_tam:
+            try:
+                tam_subido = con_reintento(sesion, lambda f, d=destino: tam_remoto(f, d))
+            except Exception:
+                tam_subido = None
+            ftp = sesion["ftp"]
+            if tam_subido == local_tam:
                 verificados += 1
                 estado[rel] = [local_tam, local_md5]
             else:
@@ -232,6 +244,9 @@ def subir(ftp, solo):
                 fallos.append("%s: subido pero el tamano remoto no coincide" % rel)
 
         if i % 200 == 0 or i == len(lista):
+            # Cada 200 se apunta lo subido: si la consola se duerme o se cae la
+            # red a mitad, la siguiente vuelta empieza donde se quedo esta.
+            guarda_estado(estado)
             seg = max(time.time() - t0, 0.01)
             print("  %d/%d  subidos %d  iguales %d  %.1f MB a %.2f MB/s"
                   % (i, len(lista), subidos, iguales, bytes_ / 1e6, bytes_ / 1e6 / seg),
