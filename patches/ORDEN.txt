@@ -30,5 +30,6 @@ mkxpz-sharedstate-trazas.patch
 mkxpz-contenedor-zip.patch
 mkxpz-system.h.patch
 mkxpz-systemImpl.cpp.patch
+mkxpz-tactil.patch
 mkxpz-textura-sin-memoria.patch
 mkxpz-vorbis-ov-hole.patch

@@ -1,0 +1,170 @@
+La pantalla tactil llega a Ruby como el boton izquierdo del raton.
+
+mkxp-z guardaba hasta cuatro dedos en EventThread::touchState, pero nada los
+leia: ni Input ni ningun binding los expone. Y los eventos de raton que SDL
+sintetiza a partir de un toque se tiran a proposito (which ==
+SDL_TOUCH_MOUSEID) para que en un portatil con pantalla tactil el toque no
+llegue dos veces. En la consola el resultado era una pantalla tactil muerta:
+el juego no podia enterarse de un toque de ninguna manera.
+
+Ahora, solo en Horizon, el primer dedo que se apoya mueve mouseState y aprieta
+el boton izquierdo hasta que se levanta (un segundo dedo se ignora). Ruby lo ve
+por la API de siempre: Input.mouse_x, Input.mouse_y e
+Input.press?(Input::MOUSELEFT), ya en coordenadas de la pantalla logica del
+juego, porque Input::mouseX les resta screenOffset y les aplica sizeResoRatio.
+
+No se aprovechan los eventos sinteticos de SDL porque vienen en unidades de
+SDL_GetWindowSize, que en devkitPro contesta 1920x1080 tambien en portatil,
+mientras que screenOffset y sizeResoRatio se calculan sobre la superficie de
+verdad (nx_resolucion_pantalla). El dedo llega normalizado de 0 a 1 y se
+multiplica por esa misma medida.
+
+Un toque rapido no se pierde: el hilo RGSS mira el boton una vez por fotograma
+y un toque corto en un fotograma lento cabria entero entre dos miradas. Si el
+dedo se levanta antes de que Input::update lo haya visto apretado, la suelta se
+aplaza a despues de esa lectura (nxRatonVisto). Quien suelta se decide con un
+compare-and-swap entre los dos hilos.
+
+La interpretacion de los toques sobre la interfaz de cada juego es cosa de Ruby:
+runtime/shims/nx-tactil.rb.
+
+--- a/src/eventthread.cpp
++++ b/src/eventthread.cpp
+@@ -89,6 +89,94 @@
+ EventThread::TouchState EventThread::touchState;
+ SDL_atomic_t EventThread::verticalScrollDistance;
+ 
++#ifdef __SWITCH__
++extern "C" void nx_resolucion_pantalla(int *ancho, int *alto);   /* nx/nx_pantalla.c */
++
++/* LA PANTALLA TACTIL, COMO EL BOTON IZQUIERDO DEL RATON.
++ *
++ * mkxp-z ya sabe de dedos: guarda hasta cuatro en touchState. Pero nadie lo
++ * lee —ni Input ni ningun binding de Ruby lo expone—, y los eventos de raton
++ * que SDL sintetiza a partir de los toques se tiran a proposito mas abajo
++ * (which == SDL_TOUCH_MOUSEID), para que en un portatil con pantalla tactil el
++ * mismo toque no llegue dos veces. En la consola eso dejaba la pantalla tactil
++ * muerta: el juego no podia enterarse de un toque de ninguna manera.
++ *
++ * Aqui el primer dedo que se apoya hace de raton: mueve mouseState y aprieta
++ * el boton izquierdo hasta que se levanta. Asi llega a Ruby por la API que ya
++ * existe —Input.mouse_x, Input.mouse_y, Input.press?(Input::MOUSELEFT)—, que es
++ * la misma que usan los scripts de raton de Essentials en el PC, y en
++ * coordenadas de la pantalla logica del juego (512x384 en Anil), porque
++ * Input::mouseX ya les resta el margen negro y les deshace la escala.
++ *
++ * Por que no se usan los eventos sinteticos de SDL: llegan en unidades de
++ * SDL_GetWindowSize, que en devkitPro contesta 1920x1080 tambien en portatil,
++ * mientras que screenOffset y sizeResoRatio se calculan sobre la superficie de
++ * verdad (1280x720 en portatil, ver nx/nx_pantalla.c). El dedo viene
++ * normalizado de 0 a 1 sobre toda la pantalla, asi que basta multiplicarlo por
++ * esa misma medida para caer en el sistema de coordenadas que Input espera.
++ *
++ * Un toque rapido no se pierde. El hilo RGSS solo mira el boton una vez por
++ * fotograma; un toque de 40 ms en un fotograma lento (una carga, un combate)
++ * cabria entero entre dos miradas y el juego no lo veria nunca. Por eso el
++ * boton no se suelta hasta que el hilo RGSS ha leido al menos una vez el
++ * apreton (nxRatonVisto, desde Input::update): si el dedo se levanta antes, la
++ * suelta se aplaza a esa lectura. */
++static bool nxHayDedo = false;
++static SDL_FingerID nxDedo = 0;
++
++/* Quien suelta el boton se decide con un compare-and-swap, porque el hilo de
++ * eventos y el RGSS pueden llegar a la vez: si el dedo se levanta justo cuando
++ * Input::update esta leyendo, uno de los dos tiene que quedarse con la suelta y
++ * solo uno. */
++enum { NX_RATON_NADA = 0, NX_RATON_SIN_VER, NX_RATON_VISTO, NX_RATON_SUELTO_SIN_VER };
++static SDL_atomic_t nxEstadoRaton;
++
++static void nxDedoComoRaton(const SDL_Event &event)
++{
++    const SDL_TouchFingerEvent &f = event.tfinger;
++    EventThread::MouseState &ms = EventThread::mouseState;
++    
++    if (event.type == SDL_FINGERDOWN) {
++        /* Un segundo dedo no mueve el cursor: se ignora hasta que se levante
++         * el primero. */
++        if (nxHayDedo)
++            return;
++        nxHayDedo = true;
++        nxDedo = f.fingerId;
++    } else if (!nxHayDedo || f.fingerId != nxDedo) {
++        return;
++    }
++    
++    int w, h;
++    nx_resolucion_pantalla(&w, &h);
++    ms.x = (int)(f.x * w);
++    ms.y = (int)(f.y * h);
++    ms.inWindow = true;
++    
++    if (event.type == SDL_FINGERDOWN) {
++        SDL_AtomicSet(&nxEstadoRaton, NX_RATON_SIN_VER);
++        ms.buttons[SDL_BUTTON_LEFT] = true;
++    } else if (event.type == SDL_FINGERUP) {
++        nxHayDedo = false;
++        /* Si el hilo RGSS aun no lo ha visto apretado, la suelta es suya. */
++        if (!SDL_AtomicCAS(&nxEstadoRaton, NX_RATON_SIN_VER, NX_RATON_SUELTO_SIN_VER)) {
++            ms.buttons[SDL_BUTTON_LEFT] = false;
++            SDL_AtomicSet(&nxEstadoRaton, NX_RATON_NADA);
++        }
++    }
++}
++
++void EventThread::nxRatonVisto()
++{
++    /* Se llama justo despues de leer los botones: lo que hubiera apretado, este
++     * fotograma ya lo ha visto. */
++    if (SDL_AtomicCAS(&nxEstadoRaton, NX_RATON_SIN_VER, NX_RATON_VISTO))
++        return;
++    if (SDL_AtomicCAS(&nxEstadoRaton, NX_RATON_SUELTO_SIN_VER, NX_RATON_NADA))
++        mouseState.buttons[SDL_BUTTON_LEFT] = false;   /* el siguiente lo vera suelto */
++}
++#endif
++
+ /* User event codes */
+ enum
+ {
+@@ -242,6 +330,11 @@
+             case SDL_FINGERDOWN :
+             case SDL_FINGERUP :
+             case SDL_FINGERMOTION :
++#ifdef __SWITCH__
++                /* Antes del filtro de abajo: Horizon no promete que el
++                 * identificador de un dedo sea menor que MAX_FINGERS. */
++                nxDedoComoRaton(event);
++#endif
+                 if (event.tfinger.fingerId >= MAX_FINGERS)
+                     continue;
+                 break;
+--- a/src/eventthread.h
++++ b/src/eventthread.h
+@@ -114,6 +114,12 @@
+ 	/* RGSS thread calls this once per frame */
+ 	void notifyFrame();
+ 
++#ifdef __SWITCH__
++	/* El hilo RGSS avisa de que ya ha leido el estado del raton en este
++	 * fotograma; ver nxDedoComoRaton en eventthread.cpp. */
++	static void nxRatonVisto();
++#endif
++
+ 	/* Called on game screen (size / offset) changes */
+ 	void notifyGameScreenChange(const SDL_Rect &screen);
+ 
+--- a/src/input/input.cpp
++++ b/src/input/input.cpp
+@@ -1228,7 +1228,12 @@
+     p->mousePos[0] = shState->eThread().mouseState.x;
+     p->mousePos[1] = shState->eThread().mouseState.y;
+     p->mouseInWindow = shState->eThread().mouseState.inWindow;
+-    
++#ifdef __SWITCH__
++    /* pollBindings ya ha leido el boton izquierdo: si era un toque que el dedo
++     * ya habia soltado, desde aqui se suelta (eventthread.cpp, nxDedoComoRaton). */
++    EventThread::nxRatonVisto();
++#endif
++
+     
+     /* Check for new repeating key */
+     if (repeatCand != None && repeatCand != p->repeating)

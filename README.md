@@ -205,6 +205,18 @@ transforma el fuente. `comprobar-ruby18.rb` prueba la capa entera en el PC con
 el Ruby 3.1.4 y su tabla cuadra con el censo línea por línea; los 1.077 scripts
 de los tres juegos de Ruby 3.1 salen intactos, que es el otro criterio.
 
+### (f) La pantalla táctil
+
+El motor no inventa una API: en Horizon, el primer dedo que se apoya hace de
+**botón izquierdo del ratón** (`eventthread.cpp`, parche
+`patches/mkxpz-tactil.patch`), así que Ruby lo lee con `Input.mouse_x`,
+`Input.mouse_y` e `Input.press?(Input::MOUSELEFT)`, ya en coordenadas de la
+pantalla lógica del juego. Lo que significa un toque en cada pantalla lo decide
+`runtime/shims/nx-tactil.rb` (shim `tactil` del catálogo): no reescribe los
+bucles de Essentials, les **inyecta** la pulsación que harían con el mando
+(A, B, una flecha) y les lleva el cursor a donde tocó el dedo. Sirve igual con
+el ratón del PC, que es como se prueba sin consola.
+
 ---
 
 ## 3. Estado por juego

@@ -165,6 +165,9 @@
 # Y la prueba del fallo que motivo el cambio de nx-teclado.rb: la pantalla que
 # pide un teclado que no hay.
 !/docs/capturas/pokemon-vanguard-nombre-teclado.png
+# La pantalla tactil (bitacora 5.73): un Pokemon arrastrado con el dedo de la
+# caja 1 a la 2, y el equipo reordenado arrastrando, en Ryujinx en portatil.
+!/docs/capturas/pokemon-anil-tactil-hito-*.png
 # Las otras 168 capturas son 236 MB de fotogramas de depuracion.
 
 #--- Los simbolos de cada compilacion -----------------------------------------

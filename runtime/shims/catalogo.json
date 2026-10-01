@@ -107,6 +107,14 @@
       "visto-en": "sin encender en ningun perfil (2026-09-11)",
       "origen": "idea de rgss_plugin_stubs.rb de Empo (GPLv2+), escrito aqui de cero"
     },
+    "tactil": {
+      "ficheros": ["nx-tactil.rb"],
+      "carga": "preload", "orden": 68, "en": "shims",
+      "mkxp": {},
+      "arregla": "La pantalla tactil en modo portatil. El motor convierte el primer dedo en el boton izquierdo del raton (Input.mouse_x/mouse_y/MOUSELEFT, en coordenadas de la pantalla logica); esto lo traduce a la interfaz de Essentials: listas (tocar elige, tocar lo elegido confirma, arrastrar desplaza), mensajes, el PC de cajas con arrastrar y soltar, y el equipo. Tambien las Window_Selectable de RPG Maker XP.",
+      "visto-en": "pokemon-anil (Essentials v21.1)",
+      "origen": "propio del porteo (GPLv2+)"
+    },
 
     //--- Gemas de Windows que un `require` del juego no puede dejar de encontrar
     // Estos tres NO se cargan: se copian a lib/, que va delante de gems/ en

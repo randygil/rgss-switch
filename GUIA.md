@@ -67,6 +67,18 @@ mkxp-z). El reparto es siempre éste:
 | L / R | L / R |
 | Cruceta y palanca izquierda | Direcciones |
 
+### La pantalla táctil
+
+En modo portátil se puede tocar la pantalla, en los juegos cuyo perfil enciende
+el shim `tactil` (hoy, Pokémon Añil). Tocar una opción de una lista la
+selecciona y tocar la que ya está seleccionada la confirma, como A; arrastrar
+el dedo arriba o abajo dentro de una lista la desplaza. Mientras un mensaje se
+escribe o espera, tocar en cualquier sitio lo pasa. En el PC de cajas se
+arrastra un Pokémon de una casilla a otra para moverlo (o intercambiarlo), las
+flechas cambian de caja y «Equipo» y «Salir» hacen lo suyo. Lo que no es una
+lista ni el PC —el mapa, los combates, el resumen— sigue siendo de botones, y
+un toque fuera de cualquier cosa no hace nada.
+
 ## Juegos probados
 
 El estado sale de `juegos/<slug>/perfil.json`, y lo actualiza quien lo prueba.

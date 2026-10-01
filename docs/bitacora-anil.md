@@ -3670,6 +3670,156 @@ Queda también, sin tocar:
   emulador, el arreglo es un `draw_line` que junte los píxeles y los pegue de
   una vez, en `bitmap.cpp`.
 
+### 5.73 La pantalla táctil
+
+Randy, jugando en portátil: que el PC de cajas se pueda manejar con el dedo,
+y si se puede el resto de la interfaz. Hasta aquí la pantalla táctil de la
+consola estaba **muerta**, y no por falta de una línea en Ruby.
+
+**Lo que había en el motor.** mkxp-z 2.4.2 sí recibe los dedos: `eventthread.cpp`
+guarda hasta cuatro en `EventThread::touchState`. Pero nadie lo lee —ni `Input`
+ni ningún binding de Ruby lo expone—. Y los eventos de ratón que SDL sintetiza a
+partir de un toque se tiran a propósito (`event.button.which ==
+SDL_TOUCH_MOUSEID`, en el filtro de entrada del bucle de eventos), para que en
+un portátil con pantalla táctil el mismo toque no llegue dos veces. Resultado:
+un juego no podía enterarse de un toque de ninguna manera.
+
+**El motor: un dedo es el botón izquierdo del ratón.** Lo más pequeño que sirve
+es no inventar API: en Horizon, el primer dedo que se apoya mueve `mouseState` y
+aprieta el botón izquierdo hasta que se levanta; un segundo dedo se ignora
+(`nxDedoComoRaton`, `patches/mkxpz-tactil.patch`). Ruby lo lee como lee el ratón
+en el PC —`Input.mouse_x`, `Input.mouse_y`, `Input.press?(Input::MOUSELEFT)`—, y
+ya en coordenadas de la **pantalla lógica** del juego (512×384 en Añil), porque
+`Input::mouseX` les resta `screenOffset` y les aplica `sizeResoRatio`, las
+mismas cuentas del encaje con franjas negras de 43b1bed.
+
+No se aprovechan los eventos sintéticos de SDL por un detalle de unidades: vienen
+en las de `SDL_GetWindowSize`, que en devkitPro contesta 1920×1080 también en
+portátil, mientras que `screenOffset` se calcula sobre la superficie que mide
+`nx_resolucion_pantalla` (§5.46 y `nx_pantalla.c`). El dedo de SDL llega
+normalizado de 0 a 1 sobre la pantalla entera; multiplicado por esa misma medida
+cae en el sistema que `Input` espera. Medido en Ryujinx: un toque mandado al
+píxel lógico (406, 38) llega a Ruby como (402, 44) con el ruido del emulador, y
+con el arreglo de abajo en `jugar.ps1`, exacto.
+
+Un toque rápido tampoco se pierde. El hilo RGSS mira el botón una vez por
+fotograma, y un toque de 40 ms en un fotograma lento (una carga, un combate)
+cabría entero entre dos miradas. Si el dedo se levanta antes de que
+`Input::update` lo haya visto apretado, la suelta se aplaza a justo después de
+esa lectura (`EventThread::nxRatonVisto`). Quién suelta se decide con un
+compare-and-swap, porque el hilo de eventos y el RGSS pueden llegar a la vez.
+
+**Ruby: traducir, no reescribir.** Essentials no sabe de ratones: cada pantalla
+lee la cruceta y A/B. Reescribir sus bucles —y los de cada plugin, que en Añil
+redefinen el PC, la mochila, el menú de pausa, el combate— no acaba nunca.
+`runtime/shims/nx-tactil.rb` (shim `tactil` del catálogo, encendido en el perfil
+de Añil) hace tres cosas:
+
+1. **Decide al principio del fotograma.** En `Input.update`, contra lo que
+   estaba en pantalla en el fotograma anterior: cada lista, cada escena con
+   cursor propio y cada mensaje se *registran* al actualizarse. Así da igual que
+   el bucle de la escena mire los botones antes o después de actualizar sus
+   ventanas, que en Essentials hay de las dos maneras.
+2. **«Pulsar A» es inyectar**: durante ese fotograma `Input.trigger?(Input::USE)`
+   contesta que sí, como si el jugador lo hubiera apretado. El bucle original
+   hace el resto, con sus sonidos y sus reglas. Una inyección que nadie ha
+   mirado sobrevive a un `Input.update` de más en el mismo fotograma (los hay,
+   y se llevaban el toque sin rastro); una que ya se vio, no, que es justo lo
+   que quiere quien vacía la entrada después de aceptar.
+3. **«Llevar el cursor allí»** depende de la pantalla. En las listas se fija el
+   índice dentro de su propio `update`, para que la escena vea el cambio igual
+   que con la cruceta (la mochila repinta la descripción comparando el índice
+   de antes y el de después). En el PC y en el equipo se inyecta una flecha y
+   se intercepta `pbChangeSelection`, que es a quien esos bucles preguntan a
+   dónde va el cursor; la respuesta sólo vale en ese fotograma, para que una
+   flecha de verdad más tarde no salte a un sitio olvidado.
+
+Las clases de Essentials no existen cuando corre el preload, así que los
+módulos se **anteponen** (`Module#prepend`) la primera vez que existe cada una.
+Anteponer y no aliasar: Añil redefine `SpriteWindow_Selectable#update` entero
+en un script suyo (`Bag with interactuable party`) y `pbSelectBoxInternal` en
+otro (`Storage System Utilities`), y lo antepuesto queda delante de cualquier
+`def` posterior.
+
+**Qué responde** (probado en Ryujinx en modo portátil, con la partida de
+Randy):
+
+| Pantalla | Toque |
+|---|---|
+| Cargar partida | tocar un panel lo elige; tocar el elegido carga |
+| Menú de pausa (DP Pause Menu) | tocar un botón lo elige (a pasos, con su animación); tocar el elegido entra |
+| Listas (`SpriteWindow_Selectable` y todas sus hijas: Sí/No, menús de comandos, mochila; la tienda y la Pokédex son de la misma familia, pero no se han abierto en la prueba) | tocar elige, tocar lo elegido confirma, arrastrar en vertical desplaza, deslizar de lado es izquierda/derecha |
+| Mensajes | mientras se escriben o esperan, tocar en cualquier sitio es A |
+| PC de cajas | ver abajo |
+| Equipo | tocar un Pokémon lo elige; tocar el elegido abre su menú; «Salir» igual |
+| Mochila | además de la lista, tocar el icono de un bolsillo va a él |
+| Resumen | deslizar de lado cambia de página; de arriba abajo, de Pokémon |
+| Combate | Luchar/Mochila/Pokémon/Huir y los cuatro movimientos: tocar elige, tocar lo elegido acepta |
+
+**El PC.** Tocar una casilla lleva allí el cursor (y el panel de la izquierda
+enseña el Pokémon); tocar la que ya estaba seleccionada es A, con su menú
+(«Mover», «Datos», «Sacar»...). **Arrastrar** un Pokémon lo coge y soltarlo en
+otra casilla lo deja, sin menú: es el «cambio rápido» del propio juego,
+encendido sólo para ese gesto (`quickswap` contesta que sí justo cuando
+`pbStartScreen` lo mira). Soltarlo encima de otro es, para el juego, un
+intercambio que deja al otro en la mano; con el dedo eso no tiene sentido —el
+gesto era «pon este aquí»—, así que el desplazado vuelve solo a la casilla de
+la que salió el primero (en el equipo, que se compacta al coger, al primer
+hueco). Soltar el dedo mientras el juego aún anima la cogida no se pierde: se
+espera a que la caja vuelva a mirar los botones. Las flechas de la caja cambian
+de caja (también arrastrando un Pokémon encima), el nombre abre el menú de la
+caja, «Equipo» saca la pestaña y «Salir» pregunta. En la pestaña del equipo,
+igual con sus huecos; «Atrás» o tocar fuera de la pestaña la cierra.
+
+**Qué no.** Un toque que no cae sobre nada de lo anterior no hace nada: no hay
+«tocar fuera = B» salvo en la pestaña del equipo del PC. El mapa, el menú de
+objetivos del combate (su índice es el del combatiente y fijarlo a mano podría
+elegir uno que no vale), el teclado de texto y las pantallas propias de cada
+plugin que no son listas siguen siendo de botones.
+
+Todo lo de la tabla se ha visto funcionar en el emulador, con capturas: el
+`Window_CommandPokemon` del menú del PC (de «Mover» a «Cancelar» y aceptar), el
+Sí/No de «¿Desea salir de la caja?», el bolsillo de Medicinas tocando su icono
+y la descripción del objeto cambiando al tocar otro, la página de notas del
+resumen deslizando, y un Arañazo elegido y lanzado contra un Rattata con dos
+toques. En el PC: Bulbasaur arrastrado a una casilla vacía; Pikachu soltado
+encima de Bulbasaur (se cambian y la mano queda vacía); Pikachu llevado de la
+caja 1 a la 2 pasando el dedo por la flecha y dejado allí con un toque; Litten
+arrastrado sobre otro del equipo; las flechas, «Equipo», «Atrás» y «Salir».
+
+**Cómo se probó.** Ryujinx hace de cada clic izquierdo sobre su ventana un dedo
+en la pantalla táctil, pero sólo en modo portátil, y en esta máquina arranca en
+modo base: `jugar.ps1 -Portatil` le pasa `--handheld-mode`. `jugar.ps1` ganó
+`toque:x,y` y `arrastre:x1,y1,x2,y2` en píxeles de la pantalla lógica: mide
+dónde está la imagen del juego dentro del área de cliente (la tira negra más
+larga de la columna izquierda es la franja lateral del 4:3), y antes de apoyar
+el dedo menea el ratón un píxel, porque Ryujinx no se entera de un
+`SetCursorPos` hasta que llega un movimiento de verdad y el dedo se apoyaba
+donde estuviera antes el ratón. De paso, `Enfocar` ya no podía con el primer
+plano (Windows sólo deja cambiarlo a quien recibió la última entrada; se engancha
+la cola de entrada del hilo con `AttachThreadInput`, porque la alternativa de
+pulsar Alt abría la barra de menú de Ryujinx y las teclas siguientes se iban a
+ella) y restaura la ventana si alguien la ha minimizado.
+
+El PC se abrió con un arnés de prueba que no va al repositorio (tocar una
+esquina del mapa rellena la caja 1 y el equipo en memoria y abre
+`PokemonStorageScreen`; otra esquina empieza un combate con un Rattata); la
+partida no se guardó. Con `tactil-traza.txt` en la carpeta del juego el shim
+apunta cada movimiento y cada suelta; sin él, sólo una línea por toque
+(`[tactil] toque en 274,80 -> PokemonStorageScene`), que es lo primero que hay
+que mirar cuando un toque «no hace nada».
+
+**Lo que queda.** No se ha probado en una consola de verdad: el identificador
+de dedo de Horizon no tiene por qué ser pequeño (por eso el dedo se lee antes
+del filtro de `MAX_FINGERS`), y el ruido de un dedo real es mayor que el de un
+ratón (el umbral de arrastre son 10 píxeles lógicos). Las geometrías del PC,
+del menú de pausa y de los bolsillos son las de Añil (v21 con sus plugins); en
+otro Essentials las listas y los mensajes funcionan igual, y el PC depende de
+que la caja siga en (184, 18). Por eso el shim no va «siempre» todavía: lo
+enciende cada perfil.
+
+---
+
 ## 5-bis. Criterio de diseño para los stubs
 
 Auditando `libc.a`, `libsysbase.a` y `libnx.a` con `nm`, el reparto es:
@@ -4257,7 +4407,7 @@ arranca con los 3.264 MB de montón que Horizon reserva a un juego (§5.47). Los
 | `iterate.sh` | Compilar, desplegar, ejecutar y volcar los cuatro registros. Con `NSP=1`, como aplicación instalada |
 | `empaquetar-nsp.sh` | ELF → NSO → NSP instalable, con NPDM, NACP e iconos (§5.47) |
 | `captura.ps1` | Capturas del emulador mientras corre (con DPI, §5.46) |
-| `jugar.ps1` | **Conduce** el juego: manda pulsaciones y toma capturas entre medias (§5.45) |
+| `jugar.ps1` | **Conduce** el juego: manda pulsaciones y toma capturas entre medias (§5.45); con `-Portatil`, `toque:x,y` y `arrastre:...` en píxeles del juego (§5.73) |
 | `tmp/rethread.mk` | Recompila un objeto suelto de Ruby y lo mete en `libruby-static.a` |
 | `nx/nx_excepcion.c` | Manejador de excepciones y `--wrap=fatalThrow`, con traza de pila (§5.43) |
 | `nx/nx_pipe.c` | `pipe()`, `poll()` y `select()` sobre devoptab (§5.42) |
@@ -4281,6 +4431,8 @@ arranca con los 3.264 MB de montón que Horizon reserva a un juego (§5.47). Los
 | `lib/nx-guardado.rb` | Prueba el camino de guardado de Essentials sobre la SD. Tampoco se carga en producción |
 | `lib/nx-guardar-ya.rb` | Guarda la partida en cuanto existe una, sin pasar por el menú (§5.51) |
 | `lib/nx-combate-ya.rb` | Mete al jugador en un combate salvaje para poder medirlo |
+| `patches/mkxpz-tactil.patch` | El primer dedo de la pantalla táctil como botón izquierdo del ratón, sin perder toques cortos (§5.73) |
+| `shims/nx-tactil.rb` | Lo que significa un toque en cada pantalla de Essentials: listas, mensajes, PC, equipo, mochila, combate (§5.73) |
 | `resolver-pila.py` | Convierte las líneas `[exc]` de un registro en nombres de función, con el `.elf` archivado de esa compilación (§5.65) |
 | `triaje.py` | Lee un volcado entero de un jugador y saca el informe: compilación, caídas, fondo, montón y tirones (`TRIAJE.md`) |
 
