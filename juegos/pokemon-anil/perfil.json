@@ -25,7 +25,7 @@
       "r": "Siguiente (R)"
     }
   },
-  "shims": ["tactil"],
+  "shims": ["tactil", "eventos-lejos", "tilemap-v21"],
   "preload": [
     "nx-tira.rb",
     "nx-centro.rb",

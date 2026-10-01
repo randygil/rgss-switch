@@ -107,6 +107,22 @@
       "visto-en": "sin encender en ningun perfil (2026-09-11)",
       "origen": "idea de rgss_plugin_stubs.rb de Empo (GPLv2+), escrito aqui de cero"
     },
+    "eventos-lejos": {
+      "ficheros": ["nx-eventos-lejos.rb"],
+      "carga": "preload", "orden": 66, "en": "shims",
+      "mkxp": {},
+      "arregla": "Essentials v21: Game_Event#should_update? nunca recortaba nada (la linea 'return true if @updated_last_frame' hace que un evento actualizado una vez se actualice siempre), asi que los cincuenta eventos de un pueblo y sus sprites corrian cada fotograma con cinco en pantalla. Recorta solo los QUIETOS fuera de pantalla (fijos, sin ruta, sin intérprete, sin inicio automatico ni paralelo, sin pagina por refrescar) y por fuera de lo que los plugins cuelgan de Game_Event#update y Sprite_Character#update. Los que pasean siguen como en el PC.",
+      "visto-en": "pokemon-anil (Essentials v21.1); en Vanguard (v20.1) sin probar",
+      "origen": "propio del porteo (GPLv2+)"
+    },
+    "tilemap-v21": {
+      "ficheros": ["nx-tilemap-v21.rb"],
+      "carga": "preload", "orden": 67, "en": "shims",
+      "mkxp": {},
+      "arregla": "Essentials v21: TilemapRenderer#update recolocaba los 663 sprites de casilla en cada fotograma de andar, tambien los vacios. El mismo algoritmo sin recolocar las casillas sin bitmap, con bucles while y sin crear dieciocho Array por fotograma. Se instala solo si update y refresh_tile_* son los de Essentials; si no, deja el original.",
+      "visto-en": "pokemon-anil (Essentials v21.1); en Vanguard (v20.1) sin probar",
+      "origen": "propio del porteo (GPLv2+)"
+    },
     "tactil": {
       "ficheros": ["nx-tactil.rb"],
       "carga": "preload", "orden": 68, "en": "shims",

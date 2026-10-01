@@ -485,6 +485,113 @@ static void nx_monton_informe(void)
  * para ver si el resto crece al ritmo de los alijos o por su cuenta. */
 #define NX_PERIODO_MONTON 30ull
 
+/* --------------------------------------------------------------------------
+ * El ritmo: el fotograma NORMAL, no el malo.
+ *
+ * Todo lo de arriba mira los fotogramas de mas de 250 ms, y con eso se
+ * arreglaron los tirones. Pero el informe del 30 de septiembre es otro: andar
+ * por exteriores va lento TODO el rato. Un fotograma de 25 ms no deja ninguna
+ * linea, y con vsync a 60 Hz uno de 17 ms ya cuesta lo mismo que uno de 33: se
+ * pierde el refresco entero y el juego va a 30. Sin medir el fotograma de
+ * siempre no hay forma de saber si la consola va a 60, a 30 o a saltos.
+ *
+ * Cada NX_PERIODO_RITMO segundos sale una linea con la media de la ventana:
+ *
+ *   [ritmo] 15 s: 452 f (30 fps) | 33.2 ms/f | >17 ms 98% >34 ms 3% peor 51 |
+ *           cpu 14.1 | comp 3.0 | esp 0.0 | swap 15.2 | blt 0.1 | txt 0.0 ms/f
+ *
+ * "cpu" es el tiempo de CPU del hilo de Ruby por fotograma (la contabilidad
+ * del planificador, igual que en [tiron]), o sea el interprete MAS lo que el
+ * motor hace en ese hilo: comp es la parte de dibujar la escena, swap la de
+ * entregarla. Si cpu se acerca a 16,7 el que no llega es el procesador; si
+ * cpu es pequeno y swap grande, es la GPU (o el vsync esperando el refresco
+ * siguiente porque el anterior se perdio por poco).
+ *
+ * Cuesta unas sumas por fotograma y una linea cada quince segundos, y va en
+ * produccion por lo mismo que [monton]: lo que hay que explicar pasa en la
+ * consola de un jugador que no va a poner diagnostico.txt. */
+#define NX_PERIODO_RITMO 15ull
+#define NX_RITMO_LENTO_MS 17ull
+#define NX_RITMO_MUY_LENTO_MS 34ull
+
+/* El lote de sprites de sprite.cpp: cuantas llamadas de dibujo hizo y cuantos
+ * sprites metio en ellas. Sin esto no se sabe si en la consola el lote esta
+ * juntando algo o si cada sprite acaba en su propia llamada. */
+static u64 ritmo_lotes, ritmo_lote_sprites;
+
+void nx_lote(unsigned sprites)
+{
+    ritmo_lotes++;
+    ritmo_lote_sprites += sprites;
+}
+
+static u64 ritmo_inicio;
+static u32 ritmo_marcos, ritmo_lentos, ritmo_muy_lentos;
+static u64 ritmo_pared, ritmo_cpu, ritmo_peor;
+static u64 ritmo_g[NX_G_N];
+
+#define MS10(t) ((unsigned long long)(armTicksToNs(t) / 100000ull))
+
+static void nx_ritmo(u64 ahora, u64 transcurrido, u64 cpu_gastado)
+{
+    int i;
+
+    if (ritmo_inicio == 0)
+        ritmo_inicio = ahora;
+
+    /* Un fotograma de mas de un segundo es una carga o la consola dormida:
+     * eso ya lo cuenta [tiron], y meterlo en la media la falsearia entera. */
+    if (MS(transcurrido) < 1000) {
+        ritmo_marcos++;
+        ritmo_pared += transcurrido;
+        ritmo_cpu += cpu_gastado;
+        if (transcurrido > ritmo_peor)
+            ritmo_peor = transcurrido;
+        if (MS(transcurrido) >= NX_RITMO_LENTO_MS)
+            ritmo_lentos++;
+        if (MS(transcurrido) >= NX_RITMO_MUY_LENTO_MS)
+            ritmo_muy_lentos++;
+        for (i = 0; i < NX_G_N; i++)
+            ritmo_g[i] += gasto[i];
+    }
+
+    if (ahora - ritmo_inicio < armNsToTicks(NX_PERIODO_RITMO * 1000000000ull))
+        return;
+
+    if (ritmo_marcos > 0) {
+        char linea[384];
+        u64 n = ritmo_marcos;
+        u64 seg10 = MS10(ahora - ritmo_inicio) / 1000u;   /* decimas de segundo */
+        snprintf(linea, sizeof(linea),
+                 "[ritmo] %llu s: %u f (%llu fps) | %llu.%llu ms/f | >%llu ms %u%% >%llu ms %u%% peor %llu"
+                 " | cpu %llu.%llu | comp %llu.%llu | esp %llu.%llu | swap %llu.%llu"
+                 " | blt %llu.%llu | txt %llu.%llu ms/f"
+                 " | lote %llu dibujos con %llu sprites/f",
+                 (unsigned long long)(seg10 / 10u), (unsigned)n,
+                 seg10 ? (unsigned long long)(n * 10u / seg10) : 0ull,
+                 MS10(ritmo_pared / n) / 10u, MS10(ritmo_pared / n) % 10u,
+                 NX_RITMO_LENTO_MS, (unsigned)(ritmo_lentos * 100ull / n),
+                 NX_RITMO_MUY_LENTO_MS, (unsigned)(ritmo_muy_lentos * 100ull / n),
+                 MS(ritmo_peor),
+                 MS10(ritmo_cpu / n) / 10u, MS10(ritmo_cpu / n) % 10u,
+                 MS10(ritmo_g[NX_G_COMP] / n) / 10u, MS10(ritmo_g[NX_G_COMP] / n) % 10u,
+                 MS10(ritmo_g[NX_G_ESPERA] / n) / 10u, MS10(ritmo_g[NX_G_ESPERA] / n) % 10u,
+                 MS10(ritmo_g[NX_G_SWAP] / n) / 10u, MS10(ritmo_g[NX_G_SWAP] / n) % 10u,
+                 MS10(ritmo_g[NX_G_BLIT] / n) / 10u, MS10(ritmo_g[NX_G_BLIT] / n) % 10u,
+                 MS10(ritmo_g[NX_G_TEXTO] / n) / 10u, MS10(ritmo_g[NX_G_TEXTO] / n) % 10u,
+                 (unsigned long long)(ritmo_lotes / n),
+                 (unsigned long long)(ritmo_lote_sprites / n));
+        nx_boot_trace(linea);
+    }
+
+    ritmo_inicio = ahora;
+    ritmo_marcos = ritmo_lentos = ritmo_muy_lentos = 0;
+    ritmo_pared = ritmo_cpu = ritmo_peor = 0;
+    ritmo_lotes = ritmo_lote_sprites = 0;
+    for (i = 0; i < NX_G_N; i++)
+        ritmo_g[i] = 0;
+}
+
 
 void nx_marco(void)
 {
@@ -513,6 +620,8 @@ void nx_marco(void)
     marco_previo = ahora;
     cpu_gastado = cpu_ahora - cpu_previo;
     cpu_previo = cpu_ahora;
+
+    nx_ritmo(ahora, transcurrido, cpu_gastado);
 
     if (MS(transcurrido) >= NX_UMBRAL_MS && avisos < NX_MAX_AVISOS) {
         char linea[448];

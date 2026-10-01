@@ -19,6 +19,7 @@ mkxpz-httplib.h.patch
 mkxpz-input.cpp.patch
 mkxpz-latido-por-segundo.patch
 mkxpz-lector-contenedor.patch
+mkxpz-lote-sprites.patch
 mkxpz-main.cpp.patch
 mkxpz-me-vuelve-muda.patch
 mkxpz-montaje-ventana.patch

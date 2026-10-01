@@ -1,0 +1,283 @@
+Lote de sprites: los que dibujan igual se dibujan de una vez.
+
+Essentials v20 y v21 dibujan el mapa en Ruby, con un Sprite por casilla y
+capa (TilemapRenderer): 663 sprites a 512x384, de los que en Pueblo Paleta
+se ven entre 390 y 460 en cada fotograma, todos con la misma textura (el
+tileset) y el sombreador sencillo. Cada uno era un dibujo completo contra el
+driver -programa, matriz, textura, tamano, mezcla, VAO, glDrawElements de seis
+indices-, y en Ryujinx eso eran 1,8 ms de "comp" por fotograma en el hilo del
+interprete (bitacora 5.72). En la consola, con Mesa sobre nouveau y el A57,
+cada llamada al driver cuesta mas que en el emulador.
+
+Sprite::draw, para un sprite sin efectos (o solo con tono), opacidad 255,
+mezcla normal, sin onda y sin mega textura, ya no dibuja: pasa sus cuatro
+vertices por su matriz en la CPU (la misma cuenta que hacia sprite.vert) y los
+apila en un QuadArray. El lote se dibuja con una sola llamada cuando llega algo
+que no encaja (otra textura u otro tono), cualquier elemento de la escena que
+no sea un sprite (Scene::composite vacia el lote antes de dibujarlo, para no
+alterar el orden) o el final de la escena (dentro del recorte y antes del
+efecto de un Viewport). Sin tono usa SimpleShader (simple.vert + simple.frag,
+el mismo fragmento que SimpleSpriteShader); con tono, SpriteShader con matriz
+identidad y los mismos uniformes que el camino de siempre.
+
+Medido en Ryujinx, Pueblo Paleta andando: de ~410 sprites salen ~50 dibujos
+por fotograma y "comp" baja de 1,8 a 0,7 ms. nx_lote() lo cuenta para la
+linea [ritmo] de nx_tirones.c. Con sin-lote.txt en la carpeta del juego el
+lote no se usa, para comparar en la consola con el mismo binario. Solo en
+__SWITCH__.
+
+--- a/src/display/sprite.cpp
++++ b/src/display/sprite.cpp
+@@ -35,6 +35,7 @@
+ #include "quadarray.h"
+ 
+ #include <math.h>
++#include <stdio.h>
+ #ifndef M_PI
+ # define M_PI 3.14159265358979323846
+ #endif
+@@ -573,6 +574,128 @@
+     p->wave.dirty = true;
+ }
+ 
++#ifdef __SWITCH__
++/* --------------------------------------------------------------------------
++ * El lote de sprites.
++ *
++ * Essentials v20 y v21 no dibujan el mapa con el Tilemap del motor: lo dibujan
++ * en Ruby, con un Sprite por casilla y capa (TilemapRenderer). A 512x384 eso
++ * son 663 sprites, y con los personajes, en Pueblo Paleta salen entre 390 y
++ * 460 visibles en cada fotograma (medido con runtime/diagnostico/nx-mapa.rb).
++ * Cada uno era un dibujo completo contra el driver: programa, matriz,
++ * textura, tamano de textura, mezcla, VAO y glDrawElements de seis indices.
++ * En Ryujinx eso son 1,8 ms de "comp" por fotograma; en la consola, con Mesa
++ * sobre nouveau y el A57 a 1 GHz, cada llamada al driver cuesta bastante mas
++ * que en el emulador, y la cuenta va en el mismo hilo que el interprete.
++ *
++ * Casi todos esos sprites son iguales a ojos de la GPU: el sombreador sencillo
++ * (sin tono, color, destello, arbusto, patron ni negativo), opacidad 255,
++ * mezcla normal y LA MISMA textura (el tileset). Asi que, mientras vengan
++ * seguidos en el orden de dibujo, se juntan: sus cuatro vertices se pasan por
++ * la matriz del sprite aqui, en la CPU -la misma cuenta que hacia el
++ * sombreador-, se apilan, y se dibujan todos con una sola llamada en cuanto
++ * llega algo que no encaja: otra textura, un sprite con efectos, cualquier
++ * otro elemento de la escena (Scene::composite vacia el lote antes de
++ * dibujarlo) o el final de la escena. El orden de dibujo no cambia, y lo que
++ * se dibuja tampoco: mismos vertices, misma textura, mismo fragmento
++ * (simple.frag, que es el que usaba SimpleSpriteShader).
++ *
++ * Lo que no encaja dibuja como siempre, por el camino de abajo. */
++namespace
++{
++struct LoteSprites
++{
++    QuadArray<Vertex> *qa;
++    TEX::ID tex;
++    Vec2i texSize;
++    /* Con tono (el de dia y noche de Essentials lo pone igual en todas las
++     * casillas) el sombreador es el completo, con el tono como uniforme: se
++     * junta tambien, siempre que el tono sea exactamente el mismo. */
++    bool conTono;
++    Vec4 tono;
++    size_t n;
++
++    LoteSprites() : qa(0), conTono(false), n(0) {}
++};
++
++const float identidad[16] = {
++    1, 0, 0, 0,
++    0, 1, 0, 0,
++    0, 0, 1, 0,
++    0, 0, 0, 1
++};
++
++LoteSprites lote;
++
++/* El indice es de 16 bits: 65535 / 6 quads como mucho por llamada. */
++const size_t LOTE_MAX = 4096;
++}
++
++extern "C" void nx_lote(unsigned sprites);
++
++/* Con sin-lote.txt en la carpeta del juego, el lote no se usa: para medir en
++ * la consola el antes y el despues con el mismo binario. Se mira una vez. */
++static bool loteActivo()
++{
++    static int activo = -1;
++    if (activo < 0)
++    {
++        FILE *f = fopen("sin-lote.txt", "r");
++        activo = f ? 0 : 1;
++        if (f)
++            fclose(f);
++    }
++    return activo == 1;
++}
++
++void spriteBatchFlush()
++{
++    if (lote.n == 0)
++        return;
++
++    if (lote.conTono)
++    {
++        /* Los mismos uniformes que pone Sprite::draw para un sprite que
++         * solo tiene tono, con la matriz ya aplicada a los vertices. */
++        SpriteShader &shader = shState->shaders().sprite;
++        shader.bind();
++        shader.applyViewportProj();
++        shader.setSpriteMat(identidad);
++        shader.setTone(lote.tono);
++        shader.setOpacity(1.0f);
++        shader.setBushDepth(0);
++        shader.setBushOpacity(1.0f);
++        shader.setShouldRenderPattern(false);
++        shader.setInvert(false);
++        shader.setColor(Vec4(0, 0, 0, 0));
++        shader.setTexSize(lote.texSize);
++    }
++    else
++    {
++        SimpleShader &shader = shState->shaders().simple;
++        shader.bind();
++        shader.applyViewportProj();
++        shader.setTranslation(Vec2i());
++        shader.setTexSize(lote.texSize);
++    }
++    TEX::bind(lote.tex);
++
++    glState.blendMode.pushSet(BlendNormal);
++
++    lote.qa->quadCount = lote.n;
++    lote.qa->commit();
++    lote.qa->draw(0, lote.n);
++
++    glState.blendMode.pop();
++
++    nx_lote((unsigned)lote.n);
++
++    lote.qa->vertices.clear();
++    lote.qa->quadCount = 0;
++    lote.n = 0;
++}
++#endif
++
+ /* SceneElement */
+ void Sprite::draw()
+ {
+@@ -591,6 +714,49 @@
+     p->invert             ||
+     (p->pattern && !p->pattern->isDisposed());
+     
++#ifdef __SWITCH__
++    /* Solo tono: ni color, ni destello, ni arbusto, ni negativo, ni patron. */
++    const bool soloTono = renderEffect && p->tone->hasEffect() &&
++        !p->color->hasEffect() && !flashing && p->bushDepth == 0 &&
++        !p->invert && !(p->pattern && !p->pattern->isDisposed());
++
++    if (loteActivo() && (!renderEffect || soloTono) && !(p->opacity != 255) &&
++        p->blendType == BlendNormal && !p->wave.active && !p->bitmap->isMega())
++    {
++        const TEXFBO &t = p->bitmap->getGLTypes();
++        const Vec4 tono = soloTono ? p->tone->norm : Vec4(0, 0, 0, 0);
++
++        if (lote.n > 0 && (lote.tex != t.tex || lote.conTono != soloTono ||
++                           (soloTono && !(lote.tono == tono)) || lote.n >= LOTE_MAX))
++            spriteBatchFlush();
++
++        if (!lote.qa)
++            lote.qa = new QuadArray<Vertex>();
++
++        lote.tex = t.tex;
++        lote.texSize = Vec2i(t.width, t.height);
++        lote.conTono = soloTono;
++        lote.tono = tono;
++
++        /* spriteMat * (x, y, 0, 1), igual que en sprite.vert. */
++        const float *m = p->trans.getMatrix();
++        for (int i = 0; i < 4; ++i)
++        {
++            Vertex v = p->quad.vert[i];
++            const float x = v.pos.x;
++            const float y = v.pos.y;
++            v.pos.x = m[0] * x + m[4] * y + m[12];
++            v.pos.y = m[1] * x + m[5] * y + m[13];
++            lote.qa->vertices.push_back(v);
++        }
++        lote.n++;
++        return;
++    }
++
++    /* Este dibuja de verdad: lo que hubiera en el lote va antes. */
++    spriteBatchFlush();
++#endif
++
+     if (renderEffect)
+     {
+         SpriteShader &shader = shState->shaders().sprite;
+--- a/src/display/sprite.h
++++ b/src/display/sprite.h
+@@ -83,6 +83,9 @@
+ 
+ 	void draw();
+ 	void onGeometryChange(const Scene::Geometry &);
++#ifdef __SWITCH__
++	bool batchable() const { return true; }
++#endif
+ 
+ 	void releaseResources();
+ 	const char *klassName() const { return "sprite"; }
+--- a/src/display/gl/scene.cpp
++++ b/src/display/gl/scene.cpp
+@@ -97,8 +97,22 @@
+ 		SceneElement *e = iter->data;
+ 
+ 		if (e->visible)
++		{
++#ifdef __SWITCH__
++			/* Lo que no es un sprite dibuja de verdad: antes, lo que
++			 * hubiera en el lote, para que salga debajo como debe. */
++			if (!e->batchable())
++				spriteBatchFlush();
++#endif
+ 			e->draw();
++		}
+ 	}
++
++#ifdef __SWITCH__
++	/* Y al acabar la escena, siempre: un Viewport pone su recorte y su
++	 * efecto alrededor de esta llamada, y el lote tiene que caer dentro. */
++	spriteBatchFlush();
++#endif
+ }
+ 
+ 
+--- a/src/display/gl/scene.h
++++ b/src/display/gl/scene.h
+@@ -112,6 +112,13 @@
+ 	 */
+ 	virtual void draw() = 0;
+ 
++#ifdef __SWITCH__
++	/* Sprite lo contesta que si: su draw() puede quedarse en el lote de
++	 * sprite.cpp en vez de dibujar. Todo lo demas dibuja de verdad, y antes
++	 * de que lo haga hay que vaciar el lote para no alterar el orden. */
++	virtual bool batchable() const { return false; }
++#endif
++
+ 	// FIXME: This should be a signal
+ 	virtual void onGeometryChange(const Scene::Geometry &) {}
+ 
+@@ -146,6 +153,12 @@
+ 	int spriteY;
+ };
+ 
++#ifdef __SWITCH__
++/* El lote de sprites (sprite.cpp): dibuja de una vez lo que se haya ido
++ * acumulando. No hace nada si esta vacio. */
++void spriteBatchFlush();
++#endif
++
+ #define ABOUT_TO_ACCESS_NOOP \
+ 	void aboutToAccess() const {}
+ 

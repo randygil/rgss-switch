@@ -3820,6 +3820,150 @@ enciende cada perfil.
 
 ---
 
+### 5.74 El mapa exterior iba lento todo el rato, y ningún registro lo decía
+
+Randy, jugando en la consola: andar por exteriores va con lag *general*, no a
+tirones. Los tirones de cargar un tileset ya estaban tratados (§5.70-ter), y el
+registro de consola del 9 de septiembre no tiene nada que decir de esto, por
+una razón de diseño: `nx_tirones.c` sólo anota fotogramas de más de 250 ms. Uno
+de 25 ms no deja rastro. Y con vsync a 60 Hz, un fotograma de 17 ms ya cuesta lo
+mismo que uno de 33: se pierde el refresco entero y el juego va a 30.
+
+**Primero, medir el fotograma normal.** Dos instrumentos nuevos:
+
+* `[ritmo]` en `nx/nx_tirones.c`, en producción, una línea cada 15 s con la
+  media de la ventana: fotogramas, fps, ms por fotograma, cuántos pasan de 17 y
+  de 34 ms, el peor, y el reparto por fotograma del tiempo de CPU del hilo de
+  Ruby (`cpu`, la contabilidad del planificador, como en `[tiron]`), `comp`
+  (dibujar la escena), `esp` y `swap`. Si `cpu` se acerca a 16,7 el que no
+  llega es el procesador; si es pequeño y `swap` grande, es la GPU.
+* `runtime/diagnostico/nx-mapa.rb`, en Ruby: la media por fotograma de cada
+  trozo del bucle de `Scene_Map` (intérprete, jugador, eventos, spritesets,
+  `TilemapRenderer`, tinte, cada manejador de `:on_frame_update` por su
+  nombre), el recolector, los objetos creados, cuántos eventos se actualizan
+  frente a cuántos se ven y cuántos sprites hay que dibujar. Con
+  `nx-mapa-bot.txt` carga la partida sin pasar por el título, anda en cuadrado
+  y se cierra sola: la misma medida en el PC, en Ryujinx y en la consola, sin
+  nadie al mando.
+
+Medido en Ryujinx, andando por Pueblo Paleta (50 eventos, ~450 sprites
+visibles), con el binario de antes:
+
+```
+[ritmo] 15 s: 902 f (60 fps) | 16.7 ms/f | >17 ms 36% | cpu 10.0 | comp 1.9 | swap 0.1
+[mapa]  ms/f: escena 7.22 | tilemap 2.21 | spr_char 2.14 (52x) | mapas 0.90 | jugador 0.81
+              | spr_global 0.76 | eventos 0.70 (51x) | seguidores 0.50 | spr_picture 0.18 (100x)
+        50 eventos (50 actualizados, 10 en pantalla) | 452 sprites visibles
+```
+
+En el emulador llega a 60 con 10 ms de CPU del hilo de Ruby, y el GC no pinta
+nada (una pasada menor cada cinco segundos). Pero el emulador traduce el ARM a
+un i9; la consola es un A57 a 1 GHz, y lo que en Ryujinx son 10 ms allí pueden
+ser fácilmente más de 16,7: justo el «va lento todo el rato» de 30 fps. No hay
+una fila que se lo lleve todo; hay tres que se pueden quitar y el resto
+repartido. Las tres:
+
+**1. Cincuenta eventos actualizados con cinco en pantalla.** Essentials v21 ya
+recorta: `Game_Event#should_update?` dice que no a los eventos a más de dos
+casillas fuera de la pantalla, y entonces ni el evento ni su sprite hacen nada.
+Pero su primera pregunta es `return true if @updated_last_frame`, y `update`
+pone esa variable a `true` cada vez que actualiza: un evento actualizado una vez
+se actualiza ya siempre, y como al cargar el mapa todos se actualizan una vez
+(`moveto`), el recorte **no recorta nunca**. Es de Essentials, no de Añil, y en
+el PC no se nota porque el PC sobra. Y aunque recortara, en Añil no bastaría:
+los plugins que envuelven `Game_Event#update` y `Sprite_Character#update` (la
+Lente de la Verdad con tres expresiones regulares por evento, las huellas, las
+sombras de Overworld Shadows EX y las dinámicas, la escalada) van **antes** de
+la vuelta temprana del original y corren para los cincuenta igual.
+
+`runtime/shims/nx-eventos-lejos.rb` (catálogo: `eventos-lejos`) recorta sólo los
+eventos **quietos** fuera de pantalla: tipo de movimiento fijo, sin ruta
+forzada, sin moverse ni saltar, sin esperar, sin intérprete en marcha, que no
+sean de inicio automático ni paralelos, que no se llamen `update` y sin página
+por refrescar (un interruptor que cambia fuera de pantalla puede convertir la
+página en una de inicio automático, y tiene que llegar a verse). Los PNJ que
+pasean y los Pokémon de VOE siguen como en el PC, que es como se probó el juego.
+Se instala en el primer `Graphics.update` con escena, cuando ya están todos los
+alias de los plugins, y queda **por fuera** de ellos. Resultado: `50
+actualizados` pasa a 13, y `spr_char` de 2,14 a 0,83 ms.
+
+**2. 663 sprites recolocados en cada paso.** Essentials v20/v21 dibuja el mapa
+en Ruby, con un `Sprite` por casilla y capa: a 512×384, 17×13×3 = 663, y
+`TilemapRenderer#update` los recorre todos en cada fotograma; andando, a todos
+les vuelve a poner `x`, `y` y a veces `z`, también a los de las capas 2 y 3 que
+están vacíos y no se dibujan. `runtime/shims/nx-tilemap-v21.rb` (catálogo:
+`tilemap-v21`) es el mismo algoritmo línea a línea sin recolocar las casillas
+sin bitmap —su sitio se recalcula entero en `refresh_tile` el día que dejan de
+estar vacías, único camino por el que pueden dejar de estarlo—, con bucles
+`while` y las dos funciones de recolocar escritas dentro, y sin crear dieciocho
+`Array` por fotograma. Sólo se instala si `update` y `refresh_tile_*` siguen
+siendo los de Essentials. `tilemap` pasa de 2,21 a 0,98 ms, y los objetos por
+fotograma de 1.854 a 1.231.
+
+**3. Cuatrocientos dibujos para una sola textura.** Esos ~410 sprites visibles
+eran cada uno un dibujo completo contra el driver (programa, matriz, textura,
+tamaño, mezcla, VAO, `glDrawElements` de seis índices), casi todos con el
+sombreador sencillo y **la misma textura**, el tileset. `Sprite::draw` ahora,
+para un sprite sin efectos (o sólo con tono), opacidad 255, mezcla normal, sin
+onda y sin mega textura, no dibuja: pasa sus cuatro vértices por su matriz en
+la CPU —la misma cuenta que hacía `sprite.vert`— y los apila. El lote se dibuja
+de una vez cuando llega algo que no encaja: otra textura, otro tono, cualquier
+elemento de la escena que no sea un sprite (`Scene::composite` vacía el lote
+antes de dibujarlo, para no alterar el orden) o el final de la escena, dentro
+del recorte y antes del efecto de un `Viewport`. Mismos vértices, misma textura,
+mismo fragmento (`simple.frag`, que es el que usaba `SimpleSpriteShader`).
+Comprobado de dos maneras, y conviene decir hasta dónde llega cada una: en la
+ventana de Ryujinx el mapa sale entero y en su orden (agua, rocas con su
+reflejo, valla, flores, árboles por encima); y `Graphics.snap_to_bitmap` en el
+fotograma 600 y 1500 del bot, con el binario de antes y el de ahora, da la misma
+escena, movida sólo lo que el jugador avanzó de más en una vuelta —el bot
+cuenta fotogramas y el paso va por reloj—. Una comparación píxel a píxel exacta
+queda pendiente; esa foto, además, en este motor sólo trae los primeros 128
+píxeles de ancho, con los dos binarios igual. Va en
+`patches/mkxpz-lote-sprites.patch`.
+De ~410 sprites salen ~50 dibujos y `comp` baja de 1,8 a 0,7 ms. Con
+`sin-lote.txt` en la carpeta del juego el lote no se usa, para medir el antes y
+el después **con el mismo binario** en la consola.
+
+**Antes y después**, Ryujinx, Pueblo Paleta andando, CPU del hilo de Ruby por
+fotograma (media de tres ventanas de 15 s):
+
+| | cpu | comp | escena (Ruby) |
+|---|---:|---:|---:|
+| antes | 10,0 ms | 1,9 | 7,2 |
+| + eventos quietos fuera | 8,3 | 1,8 | 5,9 |
+| + TilemapRenderer | 7,1 | 1,8 | 4,6 |
+| + lote de sprites | **6,1** | **0,7** | 4,5 |
+
+Un 39 % menos de CPU en el hilo que decide si se llega al refresco. En el PC,
+donde todo esto es diez veces más barato, la misma cuenta: `escena` de 0,68 a
+0,55 ms.
+
+**Lo que queda, dicho con números.** Lo que sigue en el fotograma está
+repartido: el jugador y su seguidor (0,8 ms, de ellos 0,5 el seguidor), los
+sprites de los ~13 eventos vivos con su cadena de plugins (0,8), el sprite del
+jugador y las cien `Sprite_Picture` vacías (0,7), los eventos vivos (0,6), las
+barras de entrenadores de Añil (una expresión regular por evento y fotograma).
+Ninguna pasa del milisegundo en Ryujinx. **Y la cifra que importa no
+está medida todavía**: cuánto es todo esto en la consola. Para eso está
+`[ritmo]`: la primera partida con esta compilación dirá `cpu` y `comp` en el
+A57, y con `sin-lote.txt` y sin él, cuánto vale el lote allí. Si `cpu` sigue
+por encima de 16,7, lo siguiente es el recolector (`[monton] ruby` lo cuenta:
+una pasada menor cada ~4 s con 940.000 objetos vivos) y la cadena de plugins
+de los sprites vivos; si queda por debajo, el lag de exteriores era esto.
+
+**Dos trampas del banco de pruebas, para quien lo herede.** En el PC, el
+`preload.rb` del juego (el de `MKXP.puts`) dejaba el intérprete sin correr un
+solo `Graphics.update` cuando se carga por `preloadScript` en una copia: la
+copia de medir lo lleva quitado. Y no se puede medir anteponiendo módulos
+(`prepend`) a métodos que los plugins encadenan con `alias`: un alias tomado
+después de anteponer apunta al método del módulo, y la llamada da vueltas hasta
+`stack level too deep`; la sonda envuelve con alias, con el nombre de la clase
+en el alias (si `Game_Event#update` y `Game_Character#update` usaran el mismo,
+el `send` del padre volvería a caer en el hijo).
+
+---
+
 ## 5-bis. Criterio de diseño para los stubs
 
 Auditando `libc.a`, `libsysbase.a` y `libnx.a` con `nm`, el reparto es:
