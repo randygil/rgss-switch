@@ -63,6 +63,17 @@ module NXPokeAPI
   @adelgazada = nil
   @mutex = Mutex.new
 
+  # Lo que puede tirar una descarga. pbDownloadToString falla con MKXPError
+  # ("Couldn't resolve host" sin red, un 404 con una forma que pokeapi.co no
+  # tiene), y MKXPError NO es un StandardError: el motor la cuelga directamente
+  # de Exception (binding-util.cpp). Con solo StandardError y ScriptError el
+  # hilo de la descarga moria con ella, la clave se quedaba en @hilos para
+  # siempre -sin apuntarse en @fallos, asi que esa especie no se volvia a pedir
+  # en toda la partida aunque volviera la red- y Ruby escribia la pila entera en
+  # el registro (report_on_exception). Visto en Ryujinx, que no tiene red.
+  FALLOS = [StandardError, ScriptError] +
+           (Object.const_defined?(:MKXPError) ? [MKXPError] : [])
+
   class << self
     attr_reader :instalado
 
@@ -98,7 +109,11 @@ module NXPokeAPI
     def red?(original)
       t = reloj
       if @red.nil? || (t - @red_t) > (@red ? RED_BIEN : RED_MAL)
-        @red = (original.call rescue false) ? true : false
+        @red = begin
+                 original.call ? true : false
+               rescue *FALLOS
+                 false
+               end
         @red_t = reloj
       end
       @red
@@ -132,7 +147,7 @@ module NXPokeAPI
         datos = nil
         begin
           datos = descarga(species) if network_available?
-        rescue StandardError, ScriptError
+        rescue *FALLOS
           datos = nil
         end
         @mutex.synchronize { @listos[clave] = datos || :fallo }

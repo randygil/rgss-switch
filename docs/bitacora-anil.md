@@ -3962,7 +3962,90 @@ después de anteponer apunta al método del módulo, y la llamada da vueltas has
 en el alias (si `Game_Event#update` y `Game_Character#update` usaran el mismo,
 el `send` del padre volvería a caer en el hijo).
 
----
+### 5.74-bis Las tres cosas juntas, y el lote píxel a píxel
+
+§5.72, §5.73 y §5.74 los hicieron tres sesiones por separado, y cada una probó
+sólo lo suyo. Esta las junta y prueba como lo recibiría un jugador.
+
+**Montaje.** `reconstruir-src.py` cuadra con los dos parches nuevos (y con
+`mkxpz-lote-sprites.patch` regenerado, abajo): 39 ficheros idénticos, ninguno
+desviado. Compila con el bash de MSYS2 de devkitPro —el `make` de WSL no, por las
+rutas `C:/` de los `.d`— y `construir.sh` monta la entrega. `Empaquetar.ps1`
+desde el Añil 4.13 original a la tarjeta de Ryujinx: 22.038 ficheros en
+`datos.zip`, y en el `preloadScript` los seis shims nuevos (`nx-tactil`,
+`nx-eventos-lejos`, `nx-tilemap-v21`, `nx-pokeapi`, `nx-datos`, `nx-fotogramas`)
+con sus ficheros en `lib/` iguales byte a byte a los del repositorio.
+`Partida 1.rxdata` sale intacta (`cmp` contra la copia de antes).
+
+**Recorrido**, en Ryujinx en portátil con `jugar.ps1 -Portatil` y la partida de
+Randy: título, cargar, Pueblo Paleta parado y andando, menú de pausa, equipo,
+resumen (páginas, y cambiar de Pokémon con tres en el equipo), Pokédex (lista,
+entrada, área, formas, página Datos y su A), mochila, PC de cajas (tocar una
+casilla, arrastrar un Pokémon a otra, salir) y un combate contra un Rattata
+hasta el final. Todo responde y no hay `errorlog.txt`. La partida de prueba no
+tiene Pokédex ni PC a mano, así que se llegó a la Pokédex, al PC, al combate y
+a los dos Pokémon de más con un arnés que no va al repositorio (tocar una
+esquina del mapa), en memoria y sin guardar.
+
+**Un fallo, en `nx-pokeapi.rb`.** Sin red (Ryujinx no la da), la página Datos
+dejaba en `mkxp-ruby.log` la pila de un hilo muerto: `pbDownloadToString` falla
+con `MKXPError`, y `MKXPError` **no es un `StandardError`** —el motor la cuelga
+directamente de `Exception` (`binding-util.cpp`)—, así que el `rescue
+StandardError, ScriptError` del hilo de la descarga no la cogía. La página no se
+quedaba esperando, pero la especie se quedaba para siempre en «pidiéndose», sin
+apuntarse como fallo, y no se volvía a pedir en toda la partida aunque volviera
+la red. Ahora se rescata también `MKXPError` (y en `network_available?`, que
+tenía el mismo `rescue` en modificador).
+
+**El lote, píxel a píxel.** Con `sin-lote.txt` no se puede comparar exacto:
+hacen falta dos partidas, y en Essentials v21 el agua, los PNJ, las flechas de
+los menús y los Pokémon que botan van por reloj, así que dos partidas nunca
+enseñan el mismo fotograma. Se compara dentro del mismo: con `diagnostico.txt`,
+la variable de entorno `RGSS_SIN_LOTE` apaga el lote mientras existe
+(`loteActivo` en `sprite.cpp`; fuera del diagnóstico ni se mira, para no pagar
+un `getenv` por sprite), y `runtime/diagnostico/nx-lote-ab.rb` hace, cada 15
+fotogramas, una foto con `Graphics.snap_to_bitmap` sin lote y otra con él, sin
+que corra Ruby entre las dos, y compara los bytes. Que la variable llega al
+motor lo dicen las `[ritmo]`: en el tramo en que la sonda la deja puesta,
+`lote 0 dibujos`. Resultado, en dos vueltas enteras por todo lo de arriba:
+
+* **1.080 comparaciones a pantalla entera, ninguna diferencia**, repartidas por
+  quien llamaba a `Graphics.update` (título, pantalla de carga, mapa, fundidos,
+  equipo, resumen, mochila, Pokédex y su menú de Datos, PC cogiendo y dejando,
+  confirmaciones, la animación de entrada al combate y el combate, éste con 180).
+  Las fotos de control —dos con lote seguidas— salen siempre iguales.
+* **Once montajes sintéticos**, iguales los once: cuadrícula de 48 sprites de una
+  textura, espejo alterno, zoom no entero (1,37; 0,33×2,2), giros de 7,5° a 333°,
+  tonos iguales y distintos intercalados, opacidad 128, mezclas suma y resta,
+  color, destello y arbusto intercalados y solapados, dos texturas alternando z
+  con un `Plane` en medio, tres viewports con desplazamiento, tono, color y
+  destello, una onda en medio de sprites que sí van al lote, recortes que se
+  salen del bitmap y un bitmap tocado con `set_pixel` justo antes de la foto.
+
+No hubo nada que arreglar en el lote. Lo que cambia en el parche es el
+interruptor del diagnóstico.
+
+**Por qué la foto de §5.74 traía 128 píxeles.** No es la foto: es la lectura.
+En Ryujinx, `raw_data` (y `get_pixel`) de un bitmap que vive en la GPU —uno de
+`Bitmap.new`, la foto, uno recién pintado con `fill_rect`— devuelve mal las
+filas cuando el ancho es múltiplo de 16: de 512 llegan 128 columnas, de 256 las
+64, de 640 las 160 (siempre la cuarta parte) y el resto a cero; con 200, 257 o
+511 sale entero. Los bitmaps cargados de un fichero no lo sufren, porque se leen
+de su copia en memoria. La sonda lee las fotos a tiras de 171 columnas
+copiadas con `blt`; sin eso, las primeras 648 comparaciones de la tarde miraron
+sólo la cuarta parte izquierda de la pantalla y no valían. No se ha tocado:
+no se sabe si es del emulador o del motor, y en la consola está sin medir.
+
+**`[ritmo]`**, Ryujinx, despliegue de jugador (sin diagnóstico), Pueblo Paleta
+andando: 60 fps, `cpu` 4,8 ms, `comp` 0,8 ms, 58 dibujos de lote con ~390
+sprites por fotograma. Con el diagnóstico y la sonda, en la misma partida y
+andando por el mismo sitio: sin lote `cpu` 6,0 y `comp` 1,9; con lote 5,0 y
+0,9. Es lo de §5.74 (`comp` de 1,8 a 0,7) en otra partida. `triaje.py` lee ya
+estas líneas: una tabla por sesión (fps, ventanas por debajo de 58, `cpu`,
+`comp`, `swap`, si había lote) y una frase de si el que no llega es el
+procesador o la GPU.
+
+Queda lo mismo que en §5.73 y §5.74: la consola de verdad.
 
 ## 5-bis. Criterio de diseño para los stubs
 

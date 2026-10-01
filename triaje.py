@@ -215,6 +215,15 @@ RE_CENSO = re.compile(r"fallos (\d+) \| con multiplo de 16 serian aciertos (\d+)
 RE_PRESUPUESTO = re.compile(r"presupuesto inicial (\d+) MB")
 RE_MONTADO = re.compile(r"^10a\+ contenedor (.+) montado$")
 RE_INTERPRETE = re.compile(r"^11 SharedState OK")
+# `[ritmo]` (nx_tirones.c, bitacora 5.74): el fotograma NORMAL, una linea cada
+# 15 s. `[tiron]` solo ve los de mas de 250 ms, y el «va lento todo el rato» de
+# exteriores eran fotogramas de 20 a 30 ms que no dejaban rastro. Los campos se
+# leen por su nombre y no con una sola expresion: `blt`, `txt` y `lote` se
+# fueron anadiendo, y un registro de antes tiene que leerse igual.
+RE_RITMO = re.compile(r"^(\d+) s: (\d+) f \((\d+) fps\) \| ([\d.]+) ms/f \| "
+                      r">\d+ ms (\d+)% >\d+ ms (\d+)% peor (\d+)")
+RE_RITMO_CAMPO = re.compile(r"\b(cpu|comp|esp|swap|blt|txt) ([\d.]+)")
+RE_RITMO_LOTE = re.compile(r"lote (\d+) dibujos con (\d+) sprites/f")
 
 RE_EXC_CAB = re.compile(r"^(.*?)\s*desc=(\S+)\s+esr=(\S+)\s+far=(\S+)")
 RE_EXC_BASE = re.compile(r"base=(\S+)\s+pc=(\S+)\s+\(\+(\S+)\)(?:\s+lr=\+(\S+))?"
@@ -254,6 +263,7 @@ class Sesion(object):
         self.montaje = None      # (ms_montado, nombre del contenedor)
         self.interprete_ms = None
         self.malloc_pendiente = None
+        self.ritmo = []          # dicts, una ventana de 15 s cada uno
 
 
 def analiza_boot(texto):
@@ -358,6 +368,10 @@ def analiza_boot(texto):
                 actual.interprete_ms = ms
         elif tag == "me":
             actual.eventos.append((ms, cuerpo))
+        elif tag == "ritmo":
+            r = analiza_ritmo(ms, cuerpo)
+            if r:
+                actual.ritmo.append(r)
         elif tag == "tiron":
             t = analiza_tiron(ms, cuerpo)
             if t:
@@ -397,6 +411,58 @@ def analiza_boot(texto):
                     volcado["pila"].append((int(m.group(1)),
                                             normaliza_hex(m.group(2))))
     return [s for s in sesiones if s.ultimo_ms or s.compilacion]
+
+
+def analiza_ritmo(ms, cuerpo):
+    m = RE_RITMO.match(cuerpo)
+    if not m:
+        return None
+    r = {"ms": ms, "seg": int(m.group(1)), "marcos": int(m.group(2)),
+         "fps": int(m.group(3)), "ms_f": float(m.group(4)),
+         "lentos": int(m.group(5)), "muy_lentos": int(m.group(6)),
+         "peor": int(m.group(7)), "lotes": None, "lote_sprites": None}
+    for k, v in RE_RITMO_CAMPO.findall(cuerpo):
+        r[k] = float(v)
+    m = RE_RITMO_LOTE.search(cuerpo)
+    if m:
+        r["lotes"], r["lote_sprites"] = int(m.group(1)), int(m.group(2))
+    return r
+
+
+def mediana(valores):
+    v = sorted(valores)
+    if not v:
+        return None
+    n = len(v)
+    return v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2.0
+
+
+def resume_ritmo(ventanas):
+    """Lo que cuentan las `[ritmo]` de una sesion, en una docena de cifras.
+
+    Las ventanas de la pantalla de titulo y de las cargas tambien cuentan: son
+    parte de la partida. Pero el «va lento» se juzga con las de juego normal,
+    y por eso se da la mediana de `cpu` ademas del maximo: el maximo casi
+    siempre es una carga."""
+    if not ventanas:
+        return None
+    cpu = [v["cpu"] for v in ventanas if "cpu" in v]
+    comp = [v["comp"] for v in ventanas if "comp" in v]
+    swap = [v["swap"] for v in ventanas if "swap" in v]
+    con_lote = [v for v in ventanas if v["lotes"]]
+    sin_lote = [v for v in ventanas if v["lotes"] == 0 and v["lote_sprites"] == 0]
+    return {
+        "n": len(ventanas),
+        "fps_med": mediana([v["fps"] for v in ventanas]),
+        "fps_min": min(v["fps"] for v in ventanas),
+        "bajo_58": sum(1 for v in ventanas if v["fps"] < 58),
+        "lentos_med": mediana([v["lentos"] for v in ventanas]),
+        "muy_lentos_max": max(v["muy_lentos"] for v in ventanas),
+        "cpu_med": mediana(cpu), "cpu_max": max(cpu) if cpu else None,
+        "comp_med": mediana(comp), "swap_med": mediana(swap),
+        "con_lote": len(con_lote), "sin_lote": len(sin_lote),
+        "lote_sprites_max": max([v["lote_sprites"] or 0 for v in ventanas]),
+    }
 
 
 def normaliza_hex(txt):
@@ -1295,6 +1361,49 @@ def escribe_informe(datos, titulo, relato):
         a("Ninguno por encima del umbral, quitadas las suspensiones.")
         a("")
 
+    # --- 5-bis. el ritmo ---------------------------------------------------
+    con_ritmo = [(i, s, resume_ritmo(s.ritmo)) for i, s in enumerate(ses) if s.ritmo]
+    if con_ritmo:
+        a("## El fotograma normal (`[ritmo]`)")
+        a("")
+        a("Una línea cada 15 s con la media de la ventana. `cpu` es el tiempo "
+          "de procesador del hilo de Ruby por fotograma: por encima de 16,7 ms "
+          "el que no llega al refresco es el procesador; si es pequeño y "
+          "`swap` grande, la GPU. `comp` es dibujar la escena y `lote`, los "
+          "dibujos del lote de sprites (0 con `sin-lote.txt`).")
+        a("")
+        a("| sesión | ventanas | fps (mediana / peor) | <58 fps | >17 ms | cpu (mediana / max) | comp | swap | lote |")
+        a("|---|---|---|---|---|---|---|---|---|")
+        for i, s, r in con_ritmo:
+            if r["con_lote"] and r["sin_lote"]:
+                lote = "%d con, %d sin" % (r["con_lote"], r["sin_lote"])
+            elif r["con_lote"]:
+                lote = "sí (hasta %d sprites/f)" % r["lote_sprites_max"]
+            elif r["sin_lote"]:
+                lote = "apagado"
+            else:
+                lote = "-"
+            a("| %d | %d | %d / %d | %d | %d %% | %.1f / %.1f ms | %.1f ms | %.1f ms | %s |"
+              % (i + 1, r["n"], r["fps_med"], r["fps_min"], r["bajo_58"],
+                 r["lentos_med"], r["cpu_med"] or 0, r["cpu_max"] or 0,
+                 r["comp_med"] or 0, r["swap_med"] or 0, lote))
+        a("")
+        _i, _s, r = con_ritmo[-1]
+        if r["cpu_med"] is not None and r["cpu_med"] > 16.7:
+            a("En la última sesión la mediana de `cpu` pasa de 16,7 ms: el juego "
+              "va a menos de 60 por el procesador, no por la GPU.")
+        elif r["swap_med"] is not None and r["swap_med"] > 8:
+            a("En la última sesión `cpu` cabe en el fotograma pero `swap` es "
+              "grande: lo que no llega es la GPU.")
+        elif r["bajo_58"] == 0:
+            a("En la última sesión todas las ventanas van a 58 fps o más.")
+        else:
+            a("En la última sesión %d de %d ventanas bajan de 58 fps con `cpu` "
+              "por debajo del fotograma: mirar las `[tiron]` de esos momentos "
+              "(cargas, cambios de mapa) antes de hablar de lentitud general."
+              % (r["bajo_58"], r["n"]))
+        a("")
+
     # --- 6. la partida ----------------------------------------------------
     a("## La partida")
     a("")
@@ -1626,6 +1735,15 @@ def resumen_en_pantalla(camino, datos):
                   % len(ult.lentos))
             for _ms, coste, fich in peor:
                 print("  %4d ms  %s" % (coste, fich))
+        r = resume_ritmo(ult.ritmo)
+        if r:
+            print("ritmo: %d ventanas de 15 s | fps mediana %d, peor %d (%d bajo 58) | "
+                  "cpu mediana %.1f ms, max %.1f | comp %.1f | lote %s"
+                  % (r["n"], r["fps_med"], r["fps_min"], r["bajo_58"],
+                     r["cpu_med"] or 0, r["cpu_max"] or 0, r["comp_med"] or 0,
+                     "%d con, %d sin" % (r["con_lote"], r["sin_lote"])
+                     if r["con_lote"] and r["sin_lote"] else
+                     ("si" if r["con_lote"] else ("apagado" if r["sin_lote"] else "-"))))
         if ult.donde:
             print("ultimo sitio: mapa %d %s en (%d,%d)"
                   % (ult.donde[-1][1], ult.donde[-1][2] or "?",

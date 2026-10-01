@@ -23,20 +23,25 @@ identidad y los mismos uniformes que el camino de siempre.
 Medido en Ryujinx, Pueblo Paleta andando: de ~410 sprites salen ~50 dibujos
 por fotograma y "comp" baja de 1,8 a 0,7 ms. nx_lote() lo cuenta para la
 linea [ritmo] de nx_tirones.c. Con sin-lote.txt en la carpeta del juego el
-lote no se usa, para comparar en la consola con el mismo binario. Solo en
-__SWITCH__.
+lote no se usa, para comparar en la consola con el mismo binario. Y con
+diagnostico.txt, la variable de entorno RGSS_SIN_LOTE lo apaga mientras
+exista: runtime/diagnostico/nx-lote-ab.rb la pone y la quita entre dos
+Graphics.snap_to_bitmap del mismo fotograma y compara los bytes, que es la
+unica comparacion exacta posible (dos partidas nunca llegan al mismo
+fotograma). Fuera del diagnostico no se mira. Solo en __SWITCH__.
 
 --- a/src/display/sprite.cpp
 +++ b/src/display/sprite.cpp
-@@ -35,6 +35,7 @@
+@@ -35,6 +35,8 @@
  #include "quadarray.h"
  
  #include <math.h>
 +#include <stdio.h>
++#include <stdlib.h>
  #ifndef M_PI
  # define M_PI 3.14159265358979323846
  #endif
-@@ -573,6 +574,128 @@
+@@ -573,6 +575,144 @@
      p->wave.dirty = true;
  }
  
@@ -98,19 +103,35 @@ __SWITCH__.
 +}
 +
 +extern "C" void nx_lote(unsigned sprites);
++extern "C" int nx_diagnostico(void);
 +
 +/* Con sin-lote.txt en la carpeta del juego, el lote no se usa: para medir en
-+ * la consola el antes y el despues con el mismo binario. Se mira una vez. */
++ * la consola el antes y el despues con el mismo binario. Se mira una vez.
++ *
++ * Y en modo diagnostico (diagnostico.txt), ademas, la variable de entorno
++ * RGSS_SIN_LOTE lo apaga mientras exista. Es lo que permite comparar el lote
++ * pixel a pixel: con sin-lote.txt hacen falta dos partidas, y dos partidas
++ * nunca llegan al mismo fotograma (el agua, los PNJ y los menus de Essentials
++ * v21 van por reloj, no por fotogramas), asi que cualquier diferencia se
++ * confunde con una animacion. Con la variable, una sonda de Ruby
++ * (runtime/diagnostico/nx-lote-ab.rb) hace ENV["RGSS_SIN_LOTE"] = "1",
++ * Graphics.snap_to_bitmap, lo quita, otra foto, y compara las dos: la misma
++ * escena, en el mismo instante, dibujada por los dos caminos. Fuera del
++ * diagnostico no se mira, para no pagar un getenv por sprite. */
 +static bool loteActivo()
 +{
 +    static int activo = -1;
++    static bool conmutable = false;
 +    if (activo < 0)
 +    {
 +        FILE *f = fopen("sin-lote.txt", "r");
 +        activo = f ? 0 : 1;
 +        if (f)
 +            fclose(f);
++        conmutable = nx_diagnostico() != 0;
 +    }
++    if (conmutable && activo == 1 && getenv("RGSS_SIN_LOTE"))
++        return false;
 +    return activo == 1;
 +}
 +
@@ -165,7 +186,7 @@ __SWITCH__.
  /* SceneElement */
  void Sprite::draw()
  {
-@@ -591,6 +714,49 @@
+@@ -591,6 +731,49 @@
      p->invert             ||
      (p->pattern && !p->pattern->isDisposed());
      
