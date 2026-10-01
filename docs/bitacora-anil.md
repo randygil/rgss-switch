@@ -4213,6 +4213,58 @@ descarga de `nx-actualiza` desde un hilo con red de verdad está probada en el P
 (con un `PokeUpdater` de mentira) y en Ryujinx sin red, no en Horizon con Wi-Fi.
 Y `findCenter` queda como estaba.
 
+### 5.75-bis Lo de §5.75 junto con lo de §5.74-bis, en una entrega
+
+§5.74-bis probó todo junto con un motor anterior a `mkxpz-atlas-texto.patch` y
+`mkxpz-recolector.patch` y sin `nx-actualiza.rb`. Esto es la misma vuelta con
+lo de HEAD. `reconstruir-src.py --orden`: 39 ficheros idénticos, `ORDEN.txt`
+sin cambios. Compila con el bash de MSYS2 de devkitPro (**0.2.0 b47**) y
+`construir.sh` monta `release/rgss-switch-0.2.0/`. Antes la entrega salía sin
+símbolos archivados, con un «el .nro no lleva sello legible»: ese bash no trae
+`strings`. Ahora, si no lo encuentra, usa `aarch64-none-elf-strings`, y el b47
+queda en `release/simbolos/0.2.0-b47/`. `Empaquetar.ps1` de esa entrega, desde
+el Añil 4.13 original: 22.038 ficheros y 653 MB en `datos.zip`, 13 shims en el
+`preloadScript` y en `lib/`, iguales byte a byte a los del repositorio, y el NSP
+junto a `switch/`, en la raíz de la tarjeta de Ryujinx. `Partida 1.rxdata`
+sale intacta antes y después (`cmp`).
+
+**Recorrido**, `jugar.ps1 -Portatil` y la partida de Randy, en Pueblo Paleta.
+Título, pantalla de carga, mapa parado y andando, menú de pausa, equipo,
+resumen (las cuatro páginas, el hexágono y EV/IV, cambiando entre tres
+Pokémon), Pokédex (lista, entrada, Área, Formas, Datos y su A), mochila con
+dos bolsillos, PC de cajas (tocar «Equipo», arrastrar un Pokémon dentro del
+equipo, tocar «Atrás», «Salir» y «Sí») y un combate contra un Rattata hasta
+el final, con un «Luchar» tocado. Todo responde, el texto se lee bien en todas
+las capturas y no sale `errorlog.txt`. En `mkxp-ruby.log` no hay ninguna pila
+ni ningún error. La pregunta de `nx-actualiza` contesta en 424 ms («sin
+datos»: Ryujinx no tiene red), antes de que se llegue a la pantalla de carga,
+y la pantalla sale sin esperar. La Pokédex, los dos Pokémon de más, el PC y el
+combate se consiguieron con un arnés temporal en memoria y sin guardar, igual
+que en §5.74-bis. Esta vez lee órdenes de un fichero de la carpeta del juego
+desde `Scene_Map#update`. Se quitó de la tarjeta al terminar.
+
+**`[ritmo]`** (ventanas de 15 s, despliegue de jugador sin diagnóstico):
+
+| tramo | fps | `cpu` ms/f | `comp` ms/f | lote |
+|---|---|---:|---:|---|
+| título y carga | 58–60 | 1,0–2,0 | 0,1–0,4 | 6–7 dibujos |
+| Pueblo Paleta andando | 56–60 | 4,0–6,6 | 0,7–1,4 | 55–91 dibujos, 285–400 sprites |
+| menús (pausa, equipo, resumen, Pokédex, mochila, PC) | 59–60 | 2,2–4,3 | 0,9–1,6 | 72–128 dibujos |
+| combate | 56–60 | 1,7–2,2 | 0,5–0,6 | 14–22 dibujos |
+
+Con el recolector ajustado, al título se llega con 8 pasadas, como en §5.75, y
+en el mapa las vivas rondan 1.640.000 casillas. Sólo hubo cuatro `[tiron]`, y
+todos al cambiar de escena: el arranque (329 ms), la pantalla de carga
+(393 ms, con `txt 120x 50 ms` y `mid 150x 152 ms`), la entrada al mapa
+(784 ms, casi todo descodificar y abrir ficheros) y la entrada al combate
+(1.023 ms, `resto 850 ms`: es Ruby montando el combate, no el motor). Ningún
+`[tiron]` en los menús.
+
+Mientras se esperaba el foco, Randy abrió el NSP desde la interfaz de Ryujinx
+con este mismo b47 («aplicación instalada (NSO)»). Fue del título a Ciudad
+Verde y entró en su Centro Pokémon: 56–60 fps, `cpu` 2,1–4,7, sin errores y
+sin guardar. Así que el camino del NSP también arranca con esta entrega.
+
 ---
 
 ## 5-bis. Criterio de diseño para los stubs

@@ -184,7 +184,13 @@ paso "5. Simbolos"
 # Asi que cada compilacion deja aqui su .elf, su .nro y un SELLO.txt con los
 # hashes: el .nro archivado es byte a byte el que se entrega, de modo que el
 # hash empareja sin dudas un registro de jugador con su compilacion.
-SELLO_NRO=$(strings -a "$ENT/motor/rgss-switch.nro" | grep -m1 '^\[build\] ' | sed 's/^\[build\] //')
+# El bash de MSYS2 que trae devkitPro no tiene `strings` (no lleva binutils
+# del anfitrion), y sin el la entrega salia sin simbolos archivados con un
+# "no lleva sello legible" que parecia culpa del binario. El de devkitA64 lee
+# el .nro igual: es una cadena ASCII, no importa la arquitectura.
+STRINGS=strings
+command -v strings >/dev/null || STRINGS=aarch64-none-elf-strings
+SELLO_NRO=$($STRINGS -a "$ENT/motor/rgss-switch.nro" | grep -m1 '^\[build\] ' | sed 's/^\[build\] //')
 BNUM=$(printf '%s\n' "$SELLO_NRO" | awk '{print $2}')
 if [ -z "$BNUM" ]; then
   echo "AVISO: el .nro no lleva sello legible; no se archivan simbolos"
