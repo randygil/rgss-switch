@@ -3479,6 +3479,197 @@ escribe sola en cuanto la reconstrucción cuadre.
 
 ---
 
+### 5.72 La Pokédex esperaba a internet, y cada Pokémon se recortaba cien veces
+
+Tres quejas de Randy jugando en la consola: que en la Pokédex, «si pulso A sin
+querer en la barra se congela unos segundos»; que los menús tardan al cambiar
+de Pokémon (equipo, resumen); y que los menús en general van a tirones.
+
+**El banco.** Ninguna de las tres se puede medir con `nx-metodos.rb` en la
+consola sin alguien delante pulsando, y conducir el juego del PC con
+`keybd_event` pide el foco de teclado, que comparten tres agentes y otra sesión.
+Así que `runtime/diagnostico/nx-banco-menus.rb` no pulsa nada: carga una
+partida, abre cada pantalla con las mismas llamadas que el menú de pausa
+(`PokemonPokedexScreen`, `pbPokemonScreen`, `PokemonSummaryScreen`,
+`PokemonBagScreen`) y le da una **entrada de mentira**: `Input.trigger?`,
+`repeat?`, `press?` y `dir4` devuelven lo que diga un guion de pasos («A en la
+lista», «derecha hasta Datos», «A», «abajo»...), y el ratón no existe. Por cada
+fotograma mide el tiempo de Ruby entre dos `Graphics.update` y, si pasa de
+30 ms, apunta el paso y los métodos envueltos que más tardaron. Corrió sobre
+una copia del Añil 4.13 de PC en `tmp/pc-anil/` (los `Graphics/` y `Audio/` son
+uniones de directorio al original, que no se toca), con una partida del PC de
+diez vistos y el equipo rellenado a seis en memoria. El PC es varias veces más
+rápido que la consola; lo que vale es el reparto.
+
+**1. «A en la barra» es la red.** La entrada de la Pokédex tiene cuatro
+páginas y la última, Datos, es la del plugin *[MUI] Pokedex Data Page*. Pulsar
+A ahí abre su menú, y lo primero que hace `pbDataPageMenu` —antes de pintar
+nada— es `PokeAPI.get_data`, un plugin propio de Añil que compara las
+estadísticas del juego con las oficiales:
+
+```
+[lento] 1204 ms | datos: A (menu de datos) | API#get_data 1x/1186ms  HTTP#get 2x/1180ms
+        network_available? 1x/501ms  pbDownloadData 1x/679ms
+```
+
+`network_available?` es un GET por HTTPS a google.com para saber si hay red
+(y si falla, otro a 1.1.1.1, otro a 8.8.8.8 y otro a api.github.com), y después
+viene el JSON entero de `pokeapi.co/api/v2/pokemon/<especie>`. **1,2 segundos
+con fibra en el PC**, en el mismo fotograma. Hasta la 0.1.x esto no existía en
+la consola porque `HTTPLite` fallaba al instante; desde que el motor tiene red
+(0.2.0, libcurl con el TLS del servicio `ssl`) se hace de verdad, por Wi-Fi.
+Sin red es peor: cada intento son hasta 10 s de plazo de conexión, cuatro
+intentos, y el fallo no se recuerda. Y no sólo con A: llevar el cursor del menú
+a «estadísticas» o a «movimientos» también llama a `get_data` si esa especie no
+está en la caché.
+
+`juegos/pokemon-anil/lib/nx-pokeapi.rb`: `get_data` devuelve lo que haya en
+caché **en ese momento**, y si no hay, lanza la descarga en un hilo de Ruby y
+devuelve `nil` —lo mismo que el original sin red, que el plugin ya sabe
+pintar—. `HTTPLite` suelta el GVL mientras espera, así que el juego sigue
+dibujando. El resultado pasa a la caché desde el hilo principal (en `pbUpdate`
+de la escena, nunca desde el hilo, porque esa caché vive en `$PokemonGlobal` y
+se guarda con la partida); si la escena sigue en el menú de esa especie, recibe
+`@api_data`, se repinta la nota y el botón Especial empieza a funcionar.
+`network_available?` recuerda su respuesta (10 min si había red, 2 si no) y una
+especie que falló no se reintenta en 2 minutos.
+
+**Y de paso, la partida.** Cada entrada de esa caché guardaba el JSON entero de
+PokeAPI: todos los movimientos con sus versiones, los sprites de todas las
+generaciones. En la partida del PC, **dos especies vistas eran 455.440 bytes de
+los 782.176 de la partida: el 58 %**, y cada especie mirada en Datos la
+engordaba unos 190 KB más, que se escriben en cada guardado. El shim guarda
+sólo lo que el juego vuelve a leer (`species`, `form`, `stats`, `abilities`,
+`types`, `sprite_urls` y los sprites sin `versions`): **193.777 bytes por
+entrada pasan a 2.376**, y las que ya trae una partida se adelgazan la primera
+vez que se usa la caché.
+
+**2. La página Datos recorría la Pokédex 4.556 veces.** Entrar en Datos, y
+cada arriba/abajo dentro de ella, regenera las listas de «especies parecidas»:
+
+```
+drawPageData 1x/90ms  pbGenerateDataLists 1x/78ms  Sp#display_species? 4556x/77ms
+```
+
+`pbGenerateDataLists` recorre todas las especies y formas, y por cada una llama
+hasta tres veces a `display_species?`, cuya primera línea es
+`dexlist.any? { |dex| dex[:species] == @species }`: un recorrido lineal de las
+1.027 entradas de la Pokédex **por llamada**, dos millones de vueltas de bloque
+por especie mirada. `nx-datos.rb` responde a «¿está en la lista?» con un `Hash`
+que se hace una vez por lista (y vive en la propia lista), y luego llama al
+original con una lista de un elemento, para que el resto del método —lo que de
+verdad decide— quede intacto. Comprobado contra el original en el banco:
+**24.304 comparaciones, 0 diferencias.** Sólo se instala si
+`display_species?` tiene la firma de cuatro argumentos de la versión de Añil
+(la de Vanguard, por ejemplo, ya trae esa línea comentada).
+
+**3. Cada Pokémon se recortaba entero para enseñar un fotograma.** Es la
+firma de los tirones de menú en la consola —cientos de texturas nuevas en un
+fotograma, `nue 393x` en §5.70— y en el banco tiene nombre:
+
+```
+pbUpdateDummyPokemon 1x/99ms  DeluxeBitmapWrapper#refresh 3x/68ms  Bmp.new(wxh) 276x/46ms
+```
+
+*[DBK] Animated Pokemon System* guarda cada Pokémon como una hoja con todos sus
+fotogramas en fila, y `DeluxeBitmapWrapper#refresh` la recorta **entera** al
+crearse: un `Bitmap.new` y un `stretch_blt` por fotograma, unos cien por
+Pokémon, cada uno una textura. En la Pokédex son tres a la vez; en el resumen,
+uno por cada cambio de Pokémon, y además `compile_strip` (que
+`sprite_bitmap_from_pokemon` llama siempre) **tira ese recorte y lo rehace**
+para pintar las manchas de Spinda, lo tenga o no la especie. `nx-tira.rb` ya
+evitaba rehacerlo al cambiar de pestaña del mismo Pokémon; esto es el caso
+general. `nx-fotogramas.rb` guarda la hoja y recorta cada fotograma la primera
+vez que se pide: al abrir la pantalla cuesta uno, y los demás llegan de uno en
+uno mientras la animación avanza; cuando están todos, la hoja se suelta. El
+segundo recorte de `compile_strip` se omite cuando la especie no tiene función
+`alterBitmap` (para Spinda se hace el original), y `hue_change` se recuerda
+para los fotogramas que falten. Comprobado píxel a píxel contra el recorte
+entero, con el tono de súper shiny aplicado: **979 fotogramas de 10 especies,
+0 distintos.** En el recorrido del banco, de 2.301 fotogramas que el original
+habría recortado se recortaron 806.
+
+**Antes y después** (PC, peor fotograma de cada paso, ms). «Antes» lleva lo
+que ya iba en la consola (`nx-rutas`, `nx-centro`, `nx-tira`, `nx-bolas`), y
+para que `nx-centro` pueda instalarse en el PC el banco le da un
+`nx_opaque_bounds` de mentira hecho sobre `raw_data`, con las mismas reglas que
+el de `bitmap.cpp`:
+
+| Paso | antes | después |
+|---|---:|---:|
+| Pokédex: A en la lista (abre la entrada) | 64 | 39 |
+| entrada: derecha hasta Datos | 90 | 22 |
+| **Datos: A (menú de datos)** | **952** | **20** |
+| Datos: abajo/arriba (otra especie) | 150–172 | 45–80 |
+| resumen: abrir | 71 | 24 |
+| resumen: cambiar de Pokémon (cinco cambios) | 55–94 | 14–47 |
+| resumen: volver al anterior (tres) | 50 | 17 |
+| Suma del tiempo de Ruby en todo el recorrido | 3.203 | 1.887 |
+
+Lo que sube un poco en algunos pasos (`entrada: derecha (área)`, de 14 a 43 ms
+de total en 31 fotogramas) es el coste repartido a propósito: los fotogramas
+del Pokémon que se van recortando mientras la animación avanza, uno por
+fotograma; el peor fotograma de esos pasos no cambia.
+
+**Por qué esto pesa tanto más en la consola.** En el registro de la sesión del
+9 de septiembre (`docs/consola/20260909-180525-pokemon-anil/`) hay fotogramas
+con `resto` —Ruby ejecutando, nada de E/S ni GPU— de 1,2 y hasta 1,9 s, y una
+familia que se repite con la forma exacta de tres Pokémon recortados a la vez:
+
+```
+marco 252 ms | txt 44x 1 ms | pool 344x 175 ms | nue 344x 179 ms | resto 29 ms
+```
+
+344 texturas nuevas en un fotograma son tres hojas de unos 115 fotogramas: la
+entrada de la Pokédex, o la página Datos al cambiar de especie. Y el Ruby de la
+consola va del orden de diez a veinte veces más despacio que el del PC, así que
+los 78 ms de `pbGenerateDataLists` del PC son más de un segundo allí, antes de
+contar la red.
+
+**En el emulador.** El banco corrió también en Ryujinx con el `.nro` de la
+tarjeta y los tres shims en `preloadScript` (la partida de la tarjeta, Litten y
+151 especies en su Pokédex regional, con el equipo rellenado en memoria). Las
+dos comprobaciones de equivalencia salen igual que en el PC —**0 diferencias en
+24.304 comparaciones y 0 fotogramas distintos de 979**—, así que los shims se
+instalan y hacen lo mismo en el binario de la consola. Los tiempos del
+emulador no se pueden leer como los de la consola —Ryujinx traduce cada
+operación de GPU, y la lectura de una textura (`get_pixel`, `nx_opaque_bounds`
+sobre un sprite recién pintado) le cuesta 30–55 ms—, pero el microbanco del
+mismo fichero dejó dos cosas que mirar en la consola de verdad: `set_pixel`
+alternado con cualquier otra operación de dibujo cuesta 25 ms por pareja (el
+pegado diferido tiene que volcarse cada vez), y eso es lo que hace el hexágono
+de estadísticas de Marin Better Bitmaps en las páginas 3–5 del resumen, con
+100–190 `set_pixel` por dibujo; y `draw_text` va a 1,7 ms, que en la lista de la
+Pokédex son 180 llamadas al abrirla. En la consola, el registro da `draw_text`
+a ~0,4–0,6 ms (`txt 1040x 589 ms`) y el `set_pixel` sin coste visible (`pix 1x
+1–7 ms`), así que ninguna de las dos se ha tocado aquí.
+
+**Lo que no está resuelto ni medido aquí.** Que «la barra» sea la página Datos
+es la lectura más probable —es la última página, A ahí no hace nada visible y
+es lo único de la Pokédex que tarda segundos—, pero no se le ha preguntado a
+Randy. El banco no ha corrido en una consola de verdad: los números son del PC
+y del emulador, y el emulador tiene la red apagada (`enable_internet_access`),
+así que la descarga en segundo plano por Wi-Fi —`HTTPLite` desde un hilo que no
+es el principal— está probada en el PC pero no en Horizon. Para medirlo allí:
+`nx-banco-menus.rb` en `lib/` y en `preloadScript` detrás de los shims, y en la
+carpeta del juego `banco-menus.flujo` con `dex` y `banco-menus.sincache`; deja
+`banco-menus.log` y sale sin guardar.
+
+Queda también, sin tocar:
+
+* Otra espera a la red en el hilo principal, que no es de menús: la pantalla de
+  carga llama a `PokeUpdater.check_for_updates`, que es `network_available?`
+  más una descarga de pastebin. Desde la 0.2.0 eso se espera de verdad, una vez
+  por arranque (con este shim, el «hay red» que deja le sirve luego a la
+  Pokédex).
+* La lista de la Pokédex: abrirla son ~50 ms de Ruby en el PC
+  (`pbRefreshDexList` y el `Window_Pokedex` pintando sus filas con
+  `draw_text`), el orden de medio segundo en la consola.
+* El hexágono de estadísticas del resumen (`set_pixel` uno a uno) y el texto,
+  que son del motor y no de un plugin: si la consola confirma lo que dice el
+  emulador, el arreglo es un `draw_line` que junte los píxeles y los pegue de
+  una vez, en `bitmap.cpp`.
+
 ## 5-bis. Criterio de diseño para los stubs
 
 Auditando `libc.a`, `libsysbase.a` y `libnx.a` con `nm`, el reparto es:

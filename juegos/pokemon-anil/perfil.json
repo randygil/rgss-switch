@@ -29,10 +29,13 @@
   "preload": [
     "nx-tira.rb",
     "nx-centro.rb",
-    "nx-bolas.rb"
+    "nx-bolas.rb",
+    "nx-pokeapi.rb",
+    "nx-datos.rb",
+    "nx-fotogramas.rb"
   ],
   "sueltos": [],
   "excluir": [],
   "rubyLoadpath": [],
-  "notas": "El primer juego del port y el unico jugable de punta a punta hoy (2026-09-09). El slug se fija a mano -del Title= saldria igual, pero hay instalaciones en tarjetas ajenas que no se pueden mover- y el title id 05414E494C000000 (ANIL en hexadecimal) es el que ya llevan los NSP instalados. SESourceCount 12 porque con 6 los sonidos se cortaban en los combates con el Deluxe Battle Kit. Los tres shims de lib/ son optimizaciones de plugins suyos: comprueban que la clase exista antes de instalarse, asi que no estorbarian en otro juego, pero solo sirven en este. No declara midiSoundFont: el juego no usa ningun MIDI y asi fluidsynth no es una dependencia."
+  "notas": "El primer juego del port y el unico jugable de punta a punta hoy (2026-09-09). El slug se fija a mano -del Title= saldria igual, pero hay instalaciones en tarjetas ajenas que no se pueden mover- y el title id 05414E494C000000 (ANIL en hexadecimal) es el que ya llevan los NSP instalados. SESourceCount 12 porque con 6 los sonidos se cortaban en los combates con el Deluxe Battle Kit. Los shims de lib/ son optimizaciones de plugins suyos (nx-pokeapi ademas saca de la pantalla la espera a pokeapi.co de la pagina Datos, ver bitacora 5.72): comprueban que la clase exista antes de instalarse, asi que no estorbarian en otro juego, pero solo sirven en este. No declara midiSoundFont: el juego no usa ningun MIDI y asi fluidsynth no es una dependencia."
 }
