@@ -74,6 +74,8 @@ unsigned nx_texturas_informe(unsigned *n_vivas, unsigned *pico_mb,
                              unsigned *n_pico, unsigned *n_perdidas);
 unsigned nx_pool_censo(unsigned *rep16, unsigned *repp2,
                        unsigned *dist16, unsigned *distp2, unsigned *lleno);
+/* texpool.cpp: lo que el fondo ha entregado y no le han devuelto (§5.76). */
+unsigned nx_texturas_entregadas_mb(void);
 
 static void nx_pool_informe(unsigned bytes, unsigned objetos);
 
@@ -432,15 +434,22 @@ static void nx_monton_informe(void)
         unsigned n = 0, pico = 0, n_pico = 0, sin_contar = 0;
         unsigned mb = nx_texturas_informe(&n, &pico, &n_pico, &sin_contar);
 
+        /* "en manos del juego" es lo que tienen los objetos de Ruby: lo que el
+         * recolector sabe desde §5.76 y lo unico que una pasada puede soltar.
+         * Va al final para no mover lo que triaje.py ya lee. */
+        unsigned juego = nx_texturas_entregadas_mb();
+
         if (sin_contar)
             snprintf(linea, sizeof(linea),
                      "[monton] texturas vivas: %u MB en %u | pico %u MB en %u"
-                     " | %u sin contar (la tabla no crecio)",
-                     mb, n, pico, n_pico, sin_contar);
+                     " | %u sin contar (la tabla no crecio)"
+                     " | en manos del juego %u MB",
+                     mb, n, pico, n_pico, sin_contar, juego);
         else
             snprintf(linea, sizeof(linea),
-                     "[monton] texturas vivas: %u MB en %u | pico %u MB en %u",
-                     mb, n, pico, n_pico);
+                     "[monton] texturas vivas: %u MB en %u | pico %u MB en %u"
+                     " | en manos del juego %u MB",
+                     mb, n, pico, n_pico, juego);
         nx_boot_trace(linea);
     }
 

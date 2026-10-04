@@ -1,0 +1,401 @@
+El recolector de Ruby se entera de la memoria de las texturas.
+
+Un jugador perdio dos horas: "No hay memoria de video para una textura de
+512x384" en el snap_to_bitmap del plugin Map Zoom, que mientras el zoom esta
+puesto cambia el Bitmap de su sprite cada fotograma sin disponer el anterior.
+768 KB de textura por fotograma que solo vuelven cuando el recolector recoge el
+objeto, y el recolector no sabia nada de ellos: para el un Bitmap son 40 bytes.
+Texturas vivas de 650 a 1.169 MB a 46 MB/s y el contador de recogidas quieto.
+
+Tres cosas, solo en __SWITCH__ (bitacora §5.76):
+
+- TexPool suma con rb_gc_adjust_memory_usage los bytes de cada textura que
+  entrega (acierto o nueva) y los resta al devolverla. Lo entregado y no
+  devuelto cuenta para malloc_limit como si fueran cadenas: pasados 16-32 MB,
+  una pasada. Se cuenta en el fondo y no en glTexImage2D porque una textura
+  guardada en el fondo no la puede soltar ninguna pasada.
+- Si una textura no cabe ni con el fondo vacio, request() pasa GC.start
+  (con finalizadores: un Bitmap devuelve su textura en su dfree diferido) y
+  reintenta una vez antes de lanzar. Nunca dentro de ScreenScene::composite,
+  donde una pasada desharia la lista de la escena por debajo del recorrido
+  (NxEnDibujo).
+- Las dos puertas a Ruby viven en binding-mri.cpp y no hacen nada sin maquina
+  virtual (antes de ruby_init, durante ruby_cleanup).
+
+NX_TECHO_MAQUETA y NX_SIN_CUENTA, en texpool.cpp, simulan un techo de memoria
+de video para ver la red de seguridad en Ryujinx; a 0 en el motor de verdad.
+
+--- a/binding/binding-mri.cpp
++++ b/binding/binding-mri.cpp
+@@ -1274,9 +1274,37 @@
+  * Lo que cuesta en memoria: cada casilla son 40 bytes, y lo que se pide de mas
+  * son del orden de un millon, 40 MB, en una consola con 3.200 MB de monton de
+  * los que el juego usa entre 640 y 900 (bitacora §5.53, §5.66).
++ *
++ * Desde que el fondo de texturas le cuenta al recolector lo que ocupan los
++ * Bitmap (§5.76, texpool.cpp), las pasadas ya no llegan solo cuando se acaban
++ * las casillas: con texturas que van y vienen, llegan por malloc_limit, con el
++ * monton a medio llenar. Y con 1.500.000 y 1.000.000 eso era una pasada MAYOR
++ * cada cinco segundos, de 270-470 ms en Ryujinx, con el plugin Map Zoom puesto:
++ * despues de cada pasada CRuby exige un millon de casillas libres contando las
++ * que aun no ha pedido, y con 640.000 vivas en un monton de 1.500.000 quedan
++ * 860.000; "no hay sitio" (major_by :nofree), pasada mayor, y como el monton
++ * nunca llega a crecer -la siguiente pasada vuelve a llegar antes-, otra.
++ * Asi que la exigencia baja a 500.000: 1.500.000 menos lo vivo deja 860.000
++ * en Ryujinx y unas 740.000 con lo que la consola tiene vivo, por encima de lo
++ * que se pide. Se probo tambien a agrandar el monton a 2.000.000, y no: las
++ * pasadas por casillas se espacian, pero cada una deja mas basura por barrer, y
++ * cuando algo obliga a terminar el barrido de golpe (ObjectSpace.each_object, o
++ * pasarse de malloc_limit a medio barrer) el fotograma se lleva 310-390 ms en
++ * vez de 120-150.
++ *
++ * Y el limite de oldmalloc. Los bytes de textura cuentan tambien para el
++ * contador que decide las pasadas mayores, y lo que hay en vuelo con Map Zoom
++ * -fotos ya tiradas y aun sin recoger- ronda los 100 MB. CRuby empieza ese
++ * limite en 16 MB y lo sube un 20 % cada vez que lo pasan: seis pasadas
++ * mayores en el primer minuto hasta llegar a 128, y 128 deja poco margen sobre
++ * esos 100. Se empieza en 128 y el techo se sube a 256: una textura de un
++ * Bitmap viejo que nadie dispone sigue disparando la mayor, pero mas tarde, y
++ * la red de seguridad de TexPool::request esta detras si la GPU dice que no.
+  * -------------------------------------------------------------------------- */
+-#define NX_GC_INIT   "1500000"
+-#define NX_GC_LIBRES "1000000"
++#define NX_GC_INIT        "1500000"
++#define NX_GC_LIBRES      "500000"
++#define NX_GC_OLDMALLOC   "134217728"   /* 128 MB */
++#define NX_GC_OLDMALLOC_M "268435456"   /* 256 MB */
+ 
+ static void nxAjustaRecolector()
+ {
+@@ -1292,12 +1320,69 @@
+      * cargar sus scripts y su primer mapa: las pasadas de la carga desaparecen
+      * casi todas. */
+     setenv("RUBY_GC_HEAP_INIT_SLOTS", NX_GC_INIT, 0);
+-    /* Despues de cada pasada, al menos esto libre; si no, el monton crece. Es
+-     * lo que espacia las pasadas: a 1.500 objetos por fotograma, un millon de
+-     * casillas libres son once segundos a 60 fps en vez de cinco. */
++    /* Despues de cada pasada, al menos esto libre; si no, el monton crece y la
++     * siguiente es mayor. Por debajo de lo que deja libre el monton inicial
++     * (ver §5.76): lo que espacia las pasadas es ya su tamano, no esto. */
+     setenv("RUBY_GC_HEAP_FREE_SLOTS", NX_GC_LIBRES, 0);
++    /* Las pasadas mayores por malloc: empezar donde CRuby acabaria llegando, y
++     * con mas techo, porque ahora cuentan las texturas (§5.76). */
++    setenv("RUBY_GC_OLDMALLOC_LIMIT", NX_GC_OLDMALLOC, 0);
++    setenv("RUBY_GC_OLDMALLOC_LIMIT_MAX", NX_GC_OLDMALLOC_M, 0);
+     Debug() << "[gc] RUBY_GC_HEAP_INIT_SLOTS" << NX_GC_INIT
+-            << "RUBY_GC_HEAP_FREE_SLOTS" << NX_GC_LIBRES;
++            << "RUBY_GC_HEAP_FREE_SLOTS" << NX_GC_LIBRES
++            << "RUBY_GC_OLDMALLOC_LIMIT" << NX_GC_OLDMALLOC
++            << "RUBY_GC_OLDMALLOC_LIMIT_MAX" << NX_GC_OLDMALLOC_M;
++}
++
++/* --------------------------------------------------------------------------
++ * Lo que el fondo de texturas le cuenta al recolector (texpool.cpp, §5.76).
++ *
++ * TexPool no sabe nada de Ruby y no debe: estas dos son su unica puerta. Las
++ * dos miran antes si hay una maquina virtual a la que hablarle, porque el fondo
++ * existe antes de ruby_init (SharedState se construye primero) y sigue
++ * soltando texturas durante ruby_cleanup, cuando los finalizadores del cierre
++ * liberan los Bitmap que quedaban. rb_gc_adjust_memory_usage sobre una maquina
++ * que no existe es un nulo: rb_objspace sale de GET_VM().
++ * -------------------------------------------------------------------------- */
++extern "C" int ruby_thread_has_gvl_p(void);
++
++static volatile bool nxRubyVivo = false;
++
++/* Bytes de textura que entran (+) o salen (-) de manos de los objetos de Ruby.
++ * Solo toca contadores atomicos del recolector, asi que vale desde cualquier
++ * sitio, tambien desde el dfree de un Bitmap en plena pasada. */
++extern "C" void nx_rb_memoria_texturas(long bytes);
++extern "C" void nx_rb_memoria_texturas(long bytes)
++{
++    if (nxRubyVivo && bytes)
++        rb_gc_adjust_memory_usage((ssize_t)bytes);
++}
++
++static VALUE nxGCStart(VALUE)
++{
++    return rb_funcall(rb_mGC, rb_intern("start"), 0);
++}
++
++/* GC.start: pasada completa, barrido inmediato y finalizadores pendientes. El
++ * GC.start de Ruby y no rb_gc(), que no corre los finalizadores diferidos, y
++ * un Bitmap -su tipo de datos no lleva RUBY_TYPED_FREE_IMMEDIATELY- devuelve la
++ * textura justo ahi. Devuelve 1 si ha pasado. No pasa sin el GVL, ni dentro de
++ * otra pasada, ni sin maquina virtual; y si algo lanza dentro, se traga: quien
++ * llama va a lanzar su propio error de memoria de video. */
++extern "C" int nx_rb_recoge_todo(void);
++extern "C" int nx_rb_recoge_todo(void)
++{
++    if (!nxRubyVivo || rb_during_gc() || !ruby_thread_has_gvl_p())
++        return 0;
++
++    int estado = 0;
++    rb_protect(nxGCStart, Qnil, &estado);
++    if (estado)
++    {
++        rb_set_errinfo(Qnil);
++        return 0;
++    }
++    return 1;
+ }
+ #endif
+ 
+@@ -1317,7 +1402,10 @@
+     
+     RUBY_INIT_STACK;
+     ruby_init();
+-    
++#ifdef __SWITCH__
++    nxRubyVivo = true;
++#endif
++
+     std::vector<const char*> rubyArgsC{"mkxp-z"};
+     rubyArgsC.push_back("-e ");
+     void *node;
+@@ -1366,6 +1454,9 @@
+          #endif
+          */
+         showMsg("An error occurred while initializing Ruby. (Invalid JIT settings?)");
++#ifdef __SWITCH__
++        nxRubyVivo = false;
++#endif
+         ruby_cleanup(state);
+         shState->rtData().rqTermAck.set();
+         return;
+@@ -1436,6 +1527,11 @@
+     if (!NIL_P(exc) && !rb_obj_is_kind_of(exc, rb_eSystemExit))
+         showExc(exc, btData);
+     
++#ifdef __SWITCH__
++    /* Desde aqui el fondo ya no le cuenta nada al recolector: ver
++     * nx_rb_memoria_texturas. */
++    nxRubyVivo = false;
++#endif
+     ruby_cleanup(0);
+     
+     shState->rtData().rqTermAck.set();
+--- a/src/display/gl/texpool.h
++++ b/src/display/gl/texpool.h
+@@ -63,6 +63,26 @@
+ GLenum nxReservaTextura(TEX::ID tex, int width, int height);
+ GLenum nxReservaTexturaFBO(TEXFBO &obj, int width, int height);
+ 
++#ifdef __SWITCH__
++/* ------------------------------------------- dentro del dibujo (§5.76)
++ *
++ * Cuando una textura no cabe ni con el fondo vacio, TexPool::request pasa el
++ * recolector de Ruby entero antes de rendirse: los Bitmap que el juego ya ha
++ * tirado y que todavia no se han recogido sueltan la suya. Eso solo se puede
++ * hacer fuera del dibujo. Dentro de la senal prepareDraw y del compuesto se
++ * esta recorriendo la lista de la escena, y una pasada que libere un Sprite o
++ * una Window la deshace por debajo del recorrido. ScreenScene::composite pone
++ * uno de estos en la pila y mientras viva TexPool::request no recoge: lanza
++ * como antes. */
++extern int nxDibujando;
++
++struct NxEnDibujo
++{
++	NxEnDibujo()  { ++nxDibujando; }
++	~NxEnDibujo() { --nxDibujando; }
++};
++#endif
++
+ struct TexPoolPrivate;
+ 
+ class TexPool
+--- a/src/display/gl/texpool.cpp
++++ b/src/display/gl/texpool.cpp
+@@ -137,6 +137,86 @@
+ {
+ 	return nxFondo ? (unsigned)nxFondo->priorityQueue.size() : 0u;
+ }
++
++/* ------------------------------------- el recolector y las texturas (§5.76)
++ *
++ * Un jugador perdio dos horas de partida por esto: "No hay memoria de video
++ * para una textura de 512x384", en el snap_to_bitmap del plugin Map Zoom. Ese
++ * plugin, mientras el zoom esta puesto, hace en cada fotograma
++ *
++ *   @sprites["map"].bitmap = Graphics.snap_to_bitmap
++ *
++ * sin disponer el Bitmap de antes. Cada uno son 768 KB de textura que solo se
++ * sueltan cuando el recolector de Ruby recoge el objeto, y el recolector no
++ * sabia nada de esa memoria: para el, un Bitmap son 40 bytes de casilla y un
++ * puntero. En el registro de la consola las texturas vivas pasaban de 650 a
++ * 1.169 MB a 46 MB/s, con el contador de recogidas quieto (668, 670) durante
++ * minutos. Y el monton grande de mkxpz-recolector.patch, que espacia las
++ * pasadas a proposito, lo empeoraba.
++ *
++ * Asi que se le cuenta. Cada textura que el fondo ENTREGA -acierto o nueva-
++ * suma sus bytes al contador de malloc de Ruby con rb_gc_adjust_memory_usage,
++ * y cada una que le DEVUELVEN los resta. Cuando lo entregado y no devuelto
++ * desde la ultima pasada pasa de malloc_limit (16-32 MB), la siguiente
++ * peticion de memoria de Ruby dispara una pasada, igual que si esos bytes
++ * fueran cadenas. Es aqui y no en glTexImage2D por el fondo: una textura que
++ * el fondo guarda ya no la tiene nadie que el recolector pueda soltar, y una
++ * que sale del fondo como acierto si vuelve a estar en manos de un objeto de
++ * Ruby aunque el driver no haya visto nada. Lo que se cuenta es justo lo que
++ * una pasada puede devolver.
++ *
++ * Las dos llamadas van por el enlace (binding-mri.cpp), que es quien sabe si
++ * hay una maquina virtual de Ruby viva: antes de ruby_init o durante el cierre
++ * no hacen nada. */
++extern "C" void nx_rb_memoria_texturas(long bytes);
++extern "C" int  nx_rb_recoge_todo(void);
++
++/* ---------------------------------------------------------------- maqueta
++ *
++ * La red de seguridad de request() solo se ve cuando el driver dice que no, y
++ * en Ryujinx la memoria de video es la del PC: no lo dice nunca. Dos
++ * interruptores para verla igual, como los de NX_FONDO_MAQUETA:
++ *
++ *   NX_TECHO_MAQUETA   un techo de memoria de video, en MB, contado sobre lo
++ *                      entregado y no devuelto. Por encima, nxReservaTextura
++ *                      contesta GL_OUT_OF_MEMORY como lo haria la consola.
++ *   NX_SIN_CUENTA      no le cuenta nada al recolector, para que sea la red de
++ *                      seguridad -y no la cuenta- quien tenga que recoger.
++ *
++ * Los dos a 0 para compilar el motor de verdad. */
++#define NX_TECHO_MAQUETA 0
++#define NX_SIN_CUENTA    0
++
++/* Bytes de textura entregados por el fondo y no devueltos: lo que tienen los
++ * objetos del juego en la mano, que es lo que una pasada del recolector puede
++ * soltar. Solo lo leen el registro y la maqueta. */
++static long long nxEntregados = 0;
++
++static void nxEntrega(long bytes)
++{
++	nxEntregados += bytes;
++#if !NX_SIN_CUENTA
++	nx_rb_memoria_texturas(bytes);
++#endif
++}
++
++extern "C" unsigned nx_texturas_entregadas_mb(void);
++extern "C" unsigned nx_texturas_entregadas_mb(void)
++{
++	return nxEntregados > 0 ? (unsigned)(nxEntregados >> 20) : 0u;
++}
++
++int nxDibujando = 0;
++
++/* La red de seguridad de request() recoge una sola vez por peticion: durante el
++ * reintento esto vale true, y si tampoco cabe se lanza sin volver a recoger. */
++static bool nxReintentando = false;
++
++struct NxReintento
++{
++	NxReintento()  { nxReintentando = true; }
++	~NxReintento() { nxReintentando = false; }
++};
+ #endif
+ 
+ #ifdef __SWITCH__
+@@ -307,6 +387,11 @@
+ 	TEX::allocEmpty(width, height);
+ 
+ 	GLenum err = gl.GetError();
++#if NX_TECHO_MAQUETA
++	if (err == GL_NO_ERROR && nxEntregados + (long long)width * height * 4
++	                          > (long long)NX_TECHO_MAQUETA * 1024 * 1024)
++		err = GL_OUT_OF_MEMORY;
++#endif
+ 
+ 	if (err == GL_NO_ERROR)
+ 		return GL_NO_ERROR;
+@@ -325,6 +410,11 @@
+ 	TEX::bind(tex);
+ 	TEX::allocEmpty(width, height);
+ 	err = gl.GetError();
++#if NX_TECHO_MAQUETA
++	if (err == GL_NO_ERROR && nxEntregados + (long long)width * height * 4
++	                          > (long long)NX_TECHO_MAQUETA * 1024 * 1024)
++		err = GL_OUT_OF_MEMORY;
++#endif
+ 
+ 	if (err == GL_NO_ERROR)
+ 	{
+@@ -475,6 +565,7 @@
+ #ifdef __SWITCH__
+ 		nx_pool_acierto();
+ 		nx_pool_tamano(p->memSize, p->objCount);
++		nxEntrega((long)byteCount(size));
+ #endif
+ 
+ //		Debug() << "TexPool: <?+> (" << width << height << ")";
+@@ -511,6 +602,36 @@
+ 			TEXFBO::fini(cnode.obj);
+ #ifdef __SWITCH__
+ 			nx_sale(NX_G_POOL, nxT0);
++
++			/* La red de seguridad (§5.76). El guardian ya ha soltado el fondo
++			 * entero y no ha bastado, pero puede quedar mucha memoria de video
++			 * en Bitmap que el juego ya no tiene y que el recolector todavia no
++			 * ha visto: con Map Zoom, cientos de megas. GC.start -pasada
++			 * completa, barrido inmediato y finalizadores, que es donde un
++			 * Bitmap muerto devuelve su textura- y se vuelve a pedir una vez.
++			 * Lo devuelto cae en el fondo, asi que el reintento suele salir
++			 * como acierto; si no, el guardian lo vuelve a vaciar y crea.
++			 *
++			 * Solo fuera del dibujo (ver NxEnDibujo en texpool.h), y solo una
++			 * vez: el reintento lleva nxReintentando puesto y, si tampoco
++			 * cabe, lanza el error de siempre. */
++			if (!nxReintentando && nxDibujando == 0)
++			{
++				NxReintento reintento;
++
++				Debug() << "[fondo] tampoco cabe" << width << "x" << height
++				        << "con el fondo vacio y" << (unsigned)(nxEntregados >> 20)
++				        << "MB en manos del juego -> recolector entero y se reintenta";
++
++				if (nx_rb_recoge_todo())
++				{
++					TEXFBO otra = request(width, height);
++					Debug() << "[fondo] tras el recolector," << width << "x"
++					        << height << "si cabe (" << (unsigned)(nxEntregados >> 20)
++					        << "MB en manos del juego)";
++					return otra;
++				}
++			}
+ #endif
+ 			throw Exception(Exception::MKXPError,
+ 			                "No hay memoria de video para una textura de "
+@@ -522,6 +643,7 @@
+ #ifdef __SWITCH__
+ 	nx_sale(NX_G_POOL, nxT0);
+ 	nx_pool_tamano(p->memSize, p->objCount);
++	nxEntrega((long)byteCount(size));
+ #endif
+ 
+ //	Debug() << "TexPool: <?-> (" << width << height << ")";
+@@ -537,6 +659,13 @@
+ 		return;
+ 	}
+ 
++#ifdef __SWITCH__
++	/* Lo que se sumo al entregarla en request() (§5.76). Se resta con las
++	 * medidas declaradas, que son las mismas que se sumaron aunque detras haya
++	 * acabado un 1x1 del guardian. */
++	nxEntrega(-(long)obj.width * obj.height * 4);
++#endif
++
+ 	if (p->disabled)
+ 	{
+ 		/* If we're disabled, delete without caching */
+--- a/src/display/graphics.cpp
++++ b/src/display/graphics.cpp
+@@ -508,7 +508,11 @@
+     void composite() {
+         const int w = geometry.rect.w;
+         const int h = geometry.rect.h;
+-        
++
++#ifdef __SWITCH__
++        /* Mientras dure, TexPool::request no pasa el recolector (§5.76). */
++        NxEnDibujo dibujando;
++#endif
+         shState->prepareDraw();
+         
+         pp.startRender();

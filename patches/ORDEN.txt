@@ -35,4 +35,5 @@ mkxpz-system.h.patch
 mkxpz-systemImpl.cpp.patch
 mkxpz-tactil.patch
 mkxpz-textura-sin-memoria.patch
+mkxpz-recolector-texturas.patch
 mkxpz-vorbis-ov-hole.patch

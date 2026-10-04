@@ -123,6 +123,14 @@
       "visto-en": "pokemon-anil (Essentials v21.1); en Vanguard (v20.1) sin probar",
       "origen": "propio del porteo (GPLv2+)"
     },
+    "cache-gc": {
+      "ficheros": ["nx-cache-gc.rb"],
+      "carga": "preload", "orden": 69, "en": "shims",
+      "mkxp": {},
+      "arregla": "Cada cambio de mapa (entrar o salir de una casa) congelaba el juego de medio segundo a cinco en la consola: Scene_Map#transfer_player llama a RPG::Cache.clear, y el de mkxp-z hace GC.start, una pasada MAYOR con marcado y barrido inmediatos de todo el monton, que crece con la sesion. La deja en una pasada menor con barrido perezoso: el cache se vacia igual y la basura del mapa viejo se recoge en las pasadas normales. Si el juego trae su propio RPG::Cache.clear, manda el suyo.",
+      "visto-en": "pokemon-anil (Essentials v21.1); vale para cualquier juego de RPG Maker XP sobre mkxp-z",
+      "origen": "propio del porteo (GPLv2+)"
+    },
     "tactil": {
       "ficheros": ["nx-tactil.rb"],
       "carga": "preload", "orden": 68, "en": "shims",

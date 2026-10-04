@@ -4267,6 +4267,628 @@ sin guardar. Así que el camino del NSP también arranca con esta entrega.
 
 ---
 
+### 5.76 El recolector no sabía lo que pesa un `Bitmap`, y Map Zoom se comía la GPU
+
+Un jugador perdió dos horas de partida. `errorlog.txt` (`tmp/consola-1003/`):
+`MKXPError` «No hay memoria de video para una textura de 512x384 (GL error
+1285)» en `[Map Zoom] Map Zoom.rb:31`, `snap_to_bitmap`; y otra vez antes, una
+de 512x16384 en `TilesetWrapper`. Al final de `b47-larga.log`, en el momento de
+la caída:
+
+```
+[monton] texturas vivas: 649 MB en 1580 | pico 818 MB en 2361
+[monton] ruby: 667 recogidas | 760027 slots vivos (28 MB) | ...
+  ... dos minutos ...
+[mem] pico del monton 1658, 1703, 1749 ... 2296 MB   (uno por segundo, +46 MB)
+[monton] texturas vivas: 1169 MB en 2400 | pico 1169 MB en 2400
+[monton] ruby: 670 recogidas | ...
+```
+
+Dos recogidas en dos minutos, y 46 MB por segundo de textura. El plugin Map
+Zoom, mientras el zoom está puesto, hace en cada fotograma
+`@sprites["map"].bitmap = Graphics.snap_to_bitmap` sin disponer el anterior:
+512×384×4 = 768 KB por fotograma que sólo vuelven cuando el recolector recoge
+el `Bitmap`. Y el recolector no sabía nada de esa memoria: para él un `Bitmap`
+son 40 bytes de casilla. Lo que lo decide son las casillas, y con el montón de
+§5.75 (`mkxpz-recolector.patch`, un millón libres tras cada pasada) y un juego
+casi parado —una escena con el zoom puesto— eso son minutos. En el PC no pasa
+porque hay memoria de video de sobra.
+
+**1. Que el recolector se entere.** `TexPool` suma con
+`rb_gc_adjust_memory_usage` los bytes de cada textura que **entrega**
+(acierto del fondo o nueva) y los resta cuando se la **devuelven**. Lo
+entregado y no devuelto cuenta para `malloc_limit` (16–32 MB) como si fueran
+cadenas, y pasado eso la siguiente petición de memoria de Ruby dispara una
+pasada. Se cuenta en el fondo y no en `glTexImage2D` (donde ya cuenta
+`nx_texturas.c`) a propósito: una textura guardada en el fondo no la puede
+soltar ninguna pasada, y una que sale del fondo como acierto vuelve a estar en
+manos de un objeto de Ruby aunque el driver no vea nada. Lo que se suma es
+justo lo que una pasada puede devolver. Las dos puertas a Ruby
+(`nx_rb_memoria_texturas`, `nx_rb_recoge_todo`) viven en `binding-mri.cpp` y no
+hacen nada sin máquina virtual: el fondo existe antes de `ruby_init` y suelta
+texturas durante `ruby_cleanup`, y `rb_objspace` sale de `GET_VM()`.
+
+**2. La red de seguridad.** Si una textura no cabe ni con el fondo vacío (el
+guardián de §5.64 ya lo ha soltado y ha reintentado), `TexPool::request` pasa
+`GC.start` —completa, barrido inmediato y finalizadores: el tipo de datos de
+`Bitmap` no lleva `RUBY_TYPED_FREE_IMMEDIATELY` y la textura se devuelve en el
+`dfree` diferido, que `rb_gc()` no corre— y reintenta una vez. Lo devuelto cae
+en el fondo, así que el reintento suele salir como acierto. Si tampoco, el
+`MKXPError` de siempre. Nunca dentro de `ScreenScene::composite` (la señal
+`prepareDraw` y el compuesto recorren la lista de la escena y una pasada que
+libere un `Sprite` la desharía por debajo): un `NxEnDibujo` en la pila lo
+impide, y ahí se lanza como antes. Tampoco sin el GVL ni dentro de otra pasada.
+
+**3. El montón de §5.75, retocado.** Con las texturas contadas, las pasadas ya
+no llegan sólo con el montón lleno, y con `INIT 1.500.000 / FREE 1.000.000`
+eso salió mal: con Map Zoom puesto, una pasada **mayor** cada 5 s, de
+270–470 ms en Ryujinx, 57 fps. `GC.latest_gc_info(:major_by)` decía `:nofree`:
+tras cada pasada CRuby exige un millón libres contando las casillas que aún no
+ha pedido; con 640.000 vivas en 1.500.000 quedan 860.000, «no hay sitio»,
+mayor, y el montón nunca llega a crecer porque la siguiente pasada vuelve a
+llegar antes. Ahora `RUBY_GC_HEAP_FREE_SLOTS=500000` (el montón inicial sigue
+en 1.500.000). Se probó también 2.000.000 / 600.000: sin mayores, pero cada
+pasada deja más basura por barrer y cuando algo termina el barrido de golpe el
+fotograma se lleva 310–390 ms en vez de 120–150; se descartó. Y
+`RUBY_GC_OLDMALLOC_LIMIT` 128 MB, `_MAX` 256 MB: los bytes de textura también
+cuentan para el contador que decide las mayores, lo que hay en vuelo con Map
+Zoom ronda 100–130 MB, y CRuby empieza ese límite en 16 MB y lo sube un 20 %
+cada vez: seis mayores en el primer minuto hasta 128. `sin-gc.txt` sigue
+volviendo al recolector de fábrica. Todo en `mkxpz-recolector-texturas.patch`;
+`mkxpz-recolector.patch` no se toca.
+
+**4. Y el juego, que devuelva lo suyo.** `juegos/pokemon-anil/lib/nx-zoom.rb`
+(en `preload` del perfil) envuelve `ZoomMap#update` y `#dispose`: tras el
+`update` original, si el sprite tiene otra foto, la vieja se dispone. Se
+instala tarde, la primera vez que existe `ZoomMap`; en un juego sin Map Zoom no
+hace nada.
+
+**Medido**, en Ryujinx con `runtime/diagnostico/nx-zoom-bucle.rb` (nuevo: pone
+`pbZoomMap(1.5, …)` y no lo quita, o `crudo`, sin plugin) sobre el bot de
+`nx-mapa.rb` andando por Pueblo Paleta con `Partida 1`. Sin `nx-zoom.rb` en
+todas menos la última fila:
+
+| | texturas vivas | pasadas | fps (`[ritmo]`) | peor fotograma |
+|---|---|---|---|---|
+| b47, 150 s | sube a **731 MB** (955 texturas) y baja a 269 cuando pasa el recolector, cada ~15 s; hasta 914 `Bitmap` sin disponer | 1 menor / 15 s | 58–59 | 125–310 ms |
+| contadas, montón de §5.75 | 167 MB fijos | 3 menores + **1 mayor `:nofree`** cada 5 s | 56–57 | 270–470 ms |
+| contadas, 2.000.000 / 600.000 | 193–224 MB | 2–4 menores / 5 s, 2 mayores `:oldmalloc` en 5 min | 60 | 290 ms (las 2 mayores), si no 48–69 |
+| **final** (1.500.000 / 500.000 / 128–256 MB), 240 s | **217–219 MB** de 4 min en adelante, pico 219 | 2 menores / 5 s (6–7 ms cada una), 1 mayor `:oldmalloc` a los 20 s | **60** | 292 ms (esa mayor), luego 42–44 |
+| final + `nx-zoom.rb` | 67 MB, lo mismo que sin zoom | las de siempre (1 cada ~20 s) | 58–60 | — |
+
+En la consola el b47 llegó a 1.169 MB; aquí el pico ya no crece con el tiempo.
+
+**Sin zoom** (b47 frente a 2.000.000/600.000 y a 1.500.000/600.000, 80–150 s
+andando): al título 7–8 pasadas en los tres; en el mapa una menor cada
+600–1.200 fotogramas de 3–8 ms; 59–60 fps. Los `[tiron]` de 300–390 ms que
+salían cada ~20 s con el montón de 2.000.000 eran de la sonda: el informe de
+`nx-mapa.rb` hace `ObjectSpace.each_object(Sprite)`, que termina de golpe el
+barrido perezoso; con el informe apagado no queda ninguno (peor 32–55 ms), y
+con 1.500.000 el mismo efecto son 120–150 ms, igual que en el b47 (su `[ritmo]`
+ya decía «peor 115–148»).
+
+**La red de seguridad**, con una maqueta: `NX_TECHO_MAQUETA 400` (contesta
+`GL_OUT_OF_MEMORY` cuando lo entregado pasa de 400 MB) y `NX_SIN_CUENTA 1` (no
+le cuenta nada al recolector, para que sea la red y no la cuenta quien recoja),
+modo `crudo`, 150 s. 17 veces en `mkxp-debug.log`:
+
+```
+[fondo] tampoco cabe 512 x 384 con el fondo vacio y 399 MB en manos del juego -> recolector entero y se reintenta
+[fondo] tras el recolector, 512 x 384 si cabe ( 47 MB en manos del juego)
+```
+
+sin `errorlog.txt` y con el juego andando; cada una es un `GC.start` (mayor,
+`:force`) de ~330 ms en Ryujinx. Los dos interruptores están a 0 en el motor.
+
+`[monton] texturas vivas` lleva ahora al final «| en manos del juego N MB» (lo
+entregado y no devuelto); `triaje.py` lee la línea igual. `reconstruir-src.py
+--orden`: 39 ficheros idénticos, `ORDEN.txt` con el parche nuevo detrás de
+`mkxpz-textura-sin-memoria.patch`. Compila con el bash de MSYS2 (b55).
+
+**No comprobado.** Nada de esto ha corrido en la consola: ni lo que cuesta allí
+una pasada menor cada 2–3 s con el zoom puesto (en Ryujinx 6–7 ms), ni la mayor
+`:oldmalloc` del principio (292 ms aquí), ni si la red de seguridad recupera la
+memoria a tiempo con el driver de verdad (aquí el `GL_OUT_OF_MEMORY` es
+simulado y la textura borrada se da por devuelta en el acto). La escena real
+del jugador —el zoom de un evento con el personaje quieto— no se ha reproducido:
+el bot anda, y andando el b47 ya recogía cada 15 s; parado recoge mucho menos,
+que es justo lo que la cuenta nueva deja de necesitar. Tampoco se probaron
+combates, menús ni cambios de mapa con el motor final más allá del mapa.
+
+### 5.77 Cada puerta era una pasada mayor del recolector
+
+El jugador: «al entrar o salir de una casa o al pasar de escenarios se
+congela unos segundos». El registro de la consola (`b47-larga.log`, una
+sesión larga del b47) lo confirma y dice dónde no está el problema: cada
+`[donde] mapa N` va seguido de un `[tiron]` de 0,7 a 5 s en el que casi todo es
+`cpu` del hilo de Ruby y casi nada cae bajo las sondas de C++:
+
+```
+[54684877] [donde] mapa 19 Ciudad Carmín en (29,12)
+[54684895] [tiron] marco 5204 ms | cpu 5049 ms | io 58x 20 ms | sub 30x 62 ms | ... | blt 7856x 67 ms | ... | resto 4955 ms
+```
+
+Y crece con la sesión: el mismo traslado del Centro Pokémon a Ciudad Carmín
+costó 1142 ms al empezar, 3962 un rato después y 5204 horas más tarde. Lo que
+sí cambia a lo largo de esa sesión es la generación vieja del recolector:
+456.000 objetos viejos al principio, 618.000 al final (`[monton] ruby`).
+
+**El instrumento.** `runtime/diagnostico/nx-traslado.rb` envuelve
+`Scene_Map#transfer_player` por fuera de los alias de los plugins y, por cada
+traslado, apunta los ms de Ruby sin contar la transición en negro, las pasadas
+mayores y menores del recolector con su motivo (`GC.latest_gc_info`), cuántos
+objetos se crearon y el estado del montón; cronometra directamente las piezas
+(`MapFactory#setup`, los spritesets, `RPG::Cache.clear`, los seguidores...) y
+cada manejador de `EventHandlers` por su nombre; y lleva un muestreador de pila
+que sólo corre dentro del traslado (`Thread.main.backtrace_locations` cada
+5 ms, cada muestra pesada por su intervalo). §5.70-bis apagó el muestreador de
+`nx-perfil.rb` porque mentía cuando el hilo medido suelta el GVL en cada llamada
+al sistema; dentro del traslado el hilo hace Ruby puro casi todo el rato, sólo
+cede el GVL cuando el planificador se lo quita, y ahí las muestras caen donde
+caen. Aun así no se le pide más que confirmar lo que dicen los cronómetros.
+Con `nx-traslado-bot.txt` carga la partida sin pasar por el título y va y viene
+solo entre dos puntos, como el bot de `nx-mapa.rb`: la misma medida en el PC,
+en Ryujinx y en la consola. Para buscar algo que se acumule hay además un censo
+(objetos vivos por clase, y los Array y Hash colgados de globales y de clases
+que crecen).
+
+Con la partida del jugador (`tmp/consola-1003/partidas/Partida 1.rxdata`, en
+el Centro Pokémon de Pueblo Lavanda), cuarenta idas y vueltas entre el Centro
+Pokémon de Ciudad Carmín (48) y la ciudad (19).
+
+**En el PC** (mkxp-z de Windows) el traslado son 80-170 ms y el primer trozo es
+`rpg_cache.clear`, 36-39 ms; la pila propia más frecuente, `<internal:gc>`. El
+`RPG::Cache.clear` que se ejecuta no es de Essentials: es el de mkxp-z
+(`binding/module_rpg1.rb`, compilado en el binario), y es esto:
+
+```ruby
+def self.clear
+  @cache = {}
+  GC.start
+end
+```
+
+`GC.start` sin argumentos es la pasada más cara que tiene Ruby: mayor, con el
+marcado y el barrido inmediatos. Su coste es lo que hay vivo, no lo que se
+tira, y por eso crece con la sesión.
+
+**En Ryujinx**, binario b47 tal cual (lo que tiene el jugador):
+
+| | Centro Pokémon (→48) | Ciudad Carmín (→19) |
+|---|---:|---:|
+| Ruby del traslado, mediana (máx.) | 319 ms (334) | 494 ms (538) |
+| de eso, `RPG::Cache.clear` | ~250 ms | ~250 ms |
+| pasadas mayores dentro del traslado | 40 de 40 | |
+
+La pila propia lo confirma: 277 ms por traslado en `<internal:gc>`. Lo demás,
+en Carmín: crear los spritesets ~130 ms (de ellos ~45 son el letrero del mapa,
+que lee un píxel de la GPU para elegir el color del texto: caro en el emulador,
+2-7 ms en la consola, `pix` en `[tiron]`), `MapFactory#setup` ~20,
+`Game_Map#setup` ~20.
+
+**No se acumula nada.** Como cada traslado hace una pasada mayor completa, el
+`heap_live_slots` justo después es un recuento exacto de lo vivo: 590.192 en el
+primero, 594.455 en el noveno, 594.614 en el trigésimo noveno. Quince objetos
+por traslado. Ni listas de eventos, ni sombras, ni luces, ni cachés de plugins:
+el traslado no cuesta más porque algo crezca con cada puerta, sino porque cada
+puerta recorre una generación vieja que engorda con todo lo demás que se juega.
+
+**El arreglo.** `runtime/shims/nx-cache-gc.rb` (catálogo: `cache-gc`, encendido
+en el perfil de Añil) cambia ese `GC.start` por
+`GC.start(full_mark: false, immediate_sweep: false)`: una pasada menor, que
+recorre lo joven y lo que apuntó la barrera de escritura, con barrido perezoso.
+El caché se vacía igual. La basura del mapa viejo se recoge igual: la joven en
+esa misma pasada, la vieja en la próxima mayor que Ruby decida por su cuenta
+(por generación vieja, o por oldmalloc, que desde §5.76 cuenta las texturas).
+Va en `preloadScript`, antes que los scripts del juego, así que sólo puede
+pisar el de mkxp-z: un juego que traiga su propio `RPG::Cache.clear` lo define
+después y manda el suyo. `nx-sin-cache-gc.txt` en la carpeta del juego lo
+apaga. El jugador no ve nada distinto.
+
+Lo que **no** sirvió: dejarla mayor pero incremental
+(`immediate_mark: false`). En Ruby 3.1 el marcado incremental sólo avanza
+cuando se agotan las páginas libres; con el montón holgado se queda a medias
+cientos de fotogramas, todo el juego paga la barrera de escritura mientras, y
+el `GC.start` del siguiente traslado lo termina de golpe (`gc_rest`): en el PC
+el traslado a Carmín pasó de ~150 a ~240 ms. Tampoco hacía falta medir más el
+«sin pasada ninguna»: la menor cuesta 0,7 ms en el PC.
+
+**La segunda mitad la puso §5.76.** Con el binario b47 y el shim, el Centro
+bajaba a 80 ms pero Carmín seguía en ~500 cada dos veces: una de cada cuatro
+pasadas, también la menor que pide el shim, salía mayor con
+`major_by: :nofree`. Era `RUBY_GC_HEAP_FREE_SLOTS=1000000` de
+`mkxpz-recolector.patch`: con el montón real en ~740.000 casillas más ~150.000
+por crear, Ruby nunca tiene un millón libre y pide una mayor cada cuatro
+pasadas (`RVALUE_OLD_AGE`). En la consola, con el montón en ~1,65 millones, la
+cuenta va justa al principio de la sesión y deja de salir en cuanto lo viejo
+pasa de ~650.000: otra forma de crecer con las horas, y probablemente los
+tirones de 1-2 s de `cpu` que el registro tiene **lejos** de cualquier puerta
+(`[54574408] marco 2349 ms | cpu 2289 ms`, `[54893462] marco 1815 | cpu 1763`).
+El arreglo de las texturas (§5.76, `mkxpz-recolector-texturas.patch`) ya baja
+esa exigencia a 500.000 y sube el límite de oldmalloc; no se ha tocado aquí, se
+ha medido con él (compilación b55):
+
+| Ryujinx, 40 traslados | b47 | b47 + shim | b55 | b55 + shim |
+|---|---:|---:|---:|---:|
+| →Centro Pokémon, mediana (máx.) | 319 (334) | 80 (91) | 328 (362) | **89 (123)** |
+| →Ciudad Carmín, mediana (máx.) | 494 (538) | 502 (588) | 515 (582) | **295 (343)** |
+| traslados con pasada mayor | 40 | 10 | 40 | **0** |
+| pasadas mayores desde el arranque | — | — | 43 | 3 |
+| media de los 10 primeros / 10 últimos | 452 / 414 | 283 / 261 | 466 / 425 | 237 / 188 |
+| peor fotograma en los 180 siguientes | 27 | 27 | 43 | 47 |
+| Bitmap sin liberar al final | 46 MB | 46 MB | 46 MB | 55 MB |
+| texturas vivas (`[monton]`) | 68 MB | 68 MB | 68 MB | 76 MB |
+
+Lo que cuesta: nueve megas más de Bitmap a la espera de que pase la siguiente
+mayor, y la generación vieja creciendo de 578.000 a 672.000 en los cuarenta
+traslados (lo que antes se recogía en cada puerta ahora envejece); con
+`old_objects_limit` en 1,14 millones, la mayor por generación vieja llegará
+cuando le toque, como en cualquier Ruby, y no con la pantalla parada en una
+puerta.
+
+**Lo que no está.** Nada de esto ha corrido en la consola: los números son de
+Ryujinx, donde el traslado cuesta de dos a cuatro veces menos que en la
+consola. El caso de 5 s no se ha reproducido: el bot hace cuarenta traslados en
+tres minutos y la generación vieja no llega a engordar como en una sesión de
+horas; que fuera la misma pasada mayor con más vivo detrás es la explicación
+que cuadra con el registro, no una medida. La mayor por generación vieja que
+queda pendiente (natural, incremental en 3.1) no se ha cronometrado en la
+consola. Para medirlo allí con el mismo binario: `nx-sin-cache-gc.txt` en la
+carpeta del juego apaga el shim, y `[tiron]` tras cada `[donde] mapa`; o
+`nx-traslado.rb` en `lib/` y en `preloadScript` con `nx-traslado-bot.txt`
+(`Partida 1|48 10 16|19 29 12|40|200|0`), que deja todo en `mkxp-ruby.log` y
+sale sola.
+
+### 5.78 Guardar esperaba a la nube
+
+Randy: «hasta se me congelo por completo en un punto y perdi 2 horas de
+juego». Parte de eso fue esto (la otra parte, §5.76), y el registro de la
+consola del 3 de octubre lo confirma. Justo detrás de cada guardado desde el
+menú viene un fotograma enorme en el que el hilo principal no gasta CPU:
+
+```
+b47-larga.log
+[185009] [tiron] marco 807 ms | cpu 81 ms | io 28782x 2 ms ...      el guardado
+[186074] [me] fanfarria terminada
+[188861] [tiron] marco 2441 ms | cpu 272 ms | io 21x 2 ms ... | resto 2431 ms
+mkxp-boot.log
+[174307] [tiron] marco 523 ms | cpu 45 ms | io 28781x 1 ms ...      el guardado
+[175187] [me] fanfarria terminada
+[245622] [tiron] marco 70612 ms | cpu 74 ms | io 25x 2 ms ... | resto 70600 ms
+```
+
+`io 28781x` es `Marshal.dump` escribiendo la partida a trozos; la fanfarria es
+el «Randy guardó la partida» de Multi Save; y lo siguiente es el plugin **Cloud
+Save Sync** del juego. Su `Hooks.hook_save_screen` envuelve
+`PokemonSaveScreen#pbSaveScreen` y, en cuanto la partida está en disco, llama a
+`UI.after_manual_save` → `do_upload` → `busy("Subiendo…") { Sync.upload }`: leer
+el fichero, `Marshal.load`, CRC32 y base64 en Ruby (los 270 ms de `cpu`) y un
+POST por HTTPS con la partida entera, por Wi-Fi, en el hilo principal. Con buena
+red, dos o tres segundos de juego parado; con la del segundo registro (esa misma
+sesión `nx-actualiza` tardó 35.652 ms en no conseguir nada), 70 s. El
+`cloud_sync.json` de la tarjeta lo remata: `Partida 1` con `crc32` 259528629,
+que es exactamente el CRC32 de la `Partida 1.rxdata` que había al lado. La
+subida que se comió esos 70 s fue la de ese guardado.
+
+Los plazos del propio plugin (`HTTP_TIMEOUT = 30`, `TRANSFER_TIMEOUT = 120`)
+solo se aplican en el port web; en la consola mandan los de `net.cpp`: 10 s de
+conexión y 60 s en total, que con el TLS por delante y un reintento de DNS dan
+los 70.
+
+**`juegos/pokemon-anil/lib/nx-nube.rb`**, el mismo patrón que
+`nx-actualiza.rb`: se cambia *cuándo* se espera a la red, no lo que se sube ni lo
+que se hace con la respuesta.
+
+- `UI.after_manual_save` se sustituye. Mismas condiciones que el original
+  (`take_auto_uploads`, `available?`, `backoff?`) y la misma preparación con el
+  código del plugin (`Sync.local_info`: el fichero recién escrito, su resumen,
+  su CRC), más el base64. Eso sigue en el hilo principal porque `Meta.summary`
+  pregunta el nombre del mapa al juego (`pbLoadMapInfos`), y no es cosa de un
+  hilo. Es sólo lectura: la partida ya está escrita y aquí no se toca.
+- El POST va en un hilo de Ruby y **el hilo sólo llama a `HTTPLite`**. Lo que
+  hay alrededor de la red en `Sync.upload` —la revisión base sacada del estado,
+  el cuerpo JSON, y después `Api.handle_response` (que con un 401 borra el
+  token y escribe `cloud_sync.json`), `State.set_slot` y `State.save`— se hace
+  en el hilo principal, desde `Graphics.update`, cuando el hilo ha terminado.
+  `HTTPLite` suelta el GVL mientras curl espera
+  (`http-binding.cpp`, `rb_thread_call_without_gvl`, sin tocar el intérprete
+  dentro), y `Graphics.update` también lo suelta mientras dibuja, así
+  que el hilo recoge su respuesta en el hueco de un fotograma.
+- `do_upload` no se llama nunca desde el hilo: hace `busy` (dos
+  `Graphics.update` y una ventana) y mensajes. Lo que el jugador ve sale de lo
+  mismo que decidía `do_upload` con `auto = true`:
+  - subida buena: un cartel arriba, «Partida 1 subida a la nube (revisión N).»,
+    que se va solo en 2,5 s y no coge el mando (el original enseñaba un mensaje
+    que se cerraba solo pero paraba el juego);
+  - fallo: el mismo mensaje del plugin («No se pudo subir a la nube (sin
+    conexión). Tu partida está guardada en este dispositivo.», o el del token
+    caducado), pero esperando a estar en el mapa con medio segundo seguido de
+    tranquilidad: ni mensaje, ni menú, ni evento, ni combate, ni traslado, ni
+    pantalla fundida, y el jugador quieto. Se engancha al final de
+    `Scene_Map#update`, que es donde un evento enseñaría el suyo;
+  - conflicto (409): `UI.resolve_conflict` del plugin, en ese mismo momento
+    tranquilo. Ahí sí puede esperar a la red, porque es el jugador quien elige
+    «Subir la mía».
+- **Cola**: una subida a la vez y, de cada ranura, sólo la última preparada.
+  La siguiente sale cuando la anterior ya ha puesto su revisión en el estado,
+  así que lleva la base buena y el servidor no ve un conflicto que no existe.
+- `backoff?`, `network_failed!` y `clear_backoff!` como antes: un fallo de red
+  vacía la cola y los guardados de los 300 s siguientes no suben.
+- El menú «Nube» (`UI.main_menu`) espera a la subida en curso con el cartel del
+  plugin, «Subiendo Partida 1 a la nube…», antes de abrirse: ahí el jugador ha
+  pedido la nube y lo que haga no debe cruzarse con una subida a medias.
+
+La otra espera a la red del juego normal es **`CHECK_ON_LOAD`**: la pantalla de
+carga, antes de dejar elegir, pide a la nube la lista de partidas (8 s de plazo
+en la web; en la consola, el de curl). Se hace como con PokeUpdater: la pregunta
+sale en un hilo mientras se está en el título (cada 30 fotogramas se mira si
+`check_due?` y si no hay subidas por medio), y `UI.check_on_load` usa la
+respuesta si ya está, con los mismos diálogos (`plan_on_load`, `run_plan`, y su
+«Sin conexión con la nube.» si la pregunta falló); si no está, este arranque no
+espera y la comprobación no se da por hecha. Una respuesta pedida antes de una
+subida se tira.
+
+Se instala en el primer `Graphics.update` con escena (ya están todos los
+scripts), sólo si existen todas las constantes y métodos del plugin que usa —la
+lista está en `NXNube.falta`—; si falta algo, lo dice una vez en el registro y no
+toca nada. Los alias van con `method_defined?` y el estado del módulo con `||=`:
+cargarlo dos veces no engancha dos veces ni pierde la cola.
+
+**El banco del PC** (`tmp/nube/prueba-nube.rb`, con el Ruby 3.1 del repositorio):
+los nueve ficheros del plugin extraídos de `PluginScripts.rxdata`, tal cual,
+sobre un Essentials de mentira; `Graphics.update` duerme hasta el siguiente
+1/60 s soltando el GVL, como el motor, y un `HTTPLite` falso que tarda 10 s
+(durmiendo, o por sockets contra `tmp/nube/servidor-lento.rb`).
+
+| red lenta, 10 s | sin `nx-nube` | con `nx-nube` |
+|---|---:|---:|
+| `pbSaveScreen` vuelve en | 11.159–11.353 ms | 16–18 ms |
+| fotogramas en los 10 s siguientes | 13–17 | 355–391 |
+| peor hueco entre fotogramas | 10.029–10.162 ms | 32–40 ms |
+| desde qué hilo se hace el POST | principal | otro |
+| cuerpo del POST (sin `savedAt`) | `6309ca27644ea54d` | `6309ca27644ea54d` |
+| `Game.rxdata` (SHA-256) | `adb19f39…a808` | `adb19f39…a808` |
+| `cloud_sync.json` tras la respuesta | rev-1, mismo `crc32` y `profileKey` | igual |
+
+`savedAt` sale del `mtime` del fichero y cambia de una pasada a otra; todo lo
+demás del cuerpo, base64 incluido, es idéntico, igual que la partida.
+
+- **Red caída** (el `HTTPLite` lanza `MKXPError` a los 10 s), guardando con el
+  menú abierto: ningún mensaje con el menú abierto, ninguno mientras el jugador
+  anda, y el del plugin a los 0,8 s de pararse. `backoff?` queda puesto y el
+  guardado siguiente vuelve en 1 ms sin POST.
+- **401**: «La vinculación con la nube ya no es válida…» en el mapa tranquilo;
+  `cloud_sync.json` se escribe una vez, desde el hilo principal, sin token.
+- **409**: el diálogo de conflicto del plugin, en el mapa tranquilo.
+- **Cola**: tres guardados en dos segundos con una red de 5 s → dos POST, nunca
+  dos a la vez: el primero (base `nil`) y luego el del tercer guardado (base
+  `rev-1`, el base64 del tercero). El segundo no sube porque ya no es el último.
+- **Pantalla de carga**, la nube tardando 10 s: sin el shim, `pbChoose` espera
+  10.094 ms; con él, 0 ms si la respuesta no ha llegado y 62 ms (la ventana de
+  «Comparando…») si llegó en el título.
+- Sin el plugin: «no se instala: falta CloudSync», y nada enganchado.
+
+**En Ryujinx**, con el b47 de la tarjeta, el plugin de verdad dentro de
+`datos.zip`, la partida de Randy (`Partida 1`, Pueblo Paleta), un
+`cloud_sync_config.json` que apunta a `servidor-lento.rb` en el PC
+(`http://127.0.0.1:18787`, que Ryujinx alcanza) y un arnés temporal en `lib/` que
+abre la pantalla de guardado de Multi Save de verdad (el guion pulsa «Guardar en
+Partida 1»):
+
+| | sin `nx-nube` | con `nx-nube` |
+|---|---|---|
+| pantalla de carga | `[tiron] marco 10145 ms` | sin tirón; usa la respuesta pedida en el título |
+| tras guardar | «Subiendo Partida 1 a la nube…» quieto en las fotos de +1,5 s y +4,5 s; `[ritmo] 22 s: 729 f` | 903–904 fotogramas en los 15 s siguientes, peor hueco 22–42 ms; el NPC se mueve en todas las fotos |
+| preparar la subida | — | 59–63 ms (CRC, Marshal, base64 de 190 KB) |
+| subida buena | — | la red contesta a los 10.090–10.136 ms; el cartel se lee entero en la foto de +12 s |
+| servidor cortando sin contestar | — | `MKXPError (52: Empty reply from server)` a los 10.155 ms, «aviso en el mapa: breve», 904 fotogramas, peor hueco 22 ms |
+
+El `crc32` que llegó al servidor, el de `cloud_sync.json` y el de la
+`Partida 1.rxdata` escrita son el mismo número (2412794626 en la primera
+vuelta). La carpeta de Ryujinx quedó como estaba: `mkxp.json` y la partida
+iguales byte a byte a la copia de antes, sin `nx-nube.rb` ni el arnés en
+`lib/`, sin `cloud_sync*.json`.
+
+Una cosa que salió en Ryujinx: el cartel, con 28 px de alto, cortaba por arriba
+la fuente del sistema; con 36 px y 4 de margen se lee entero.
+
+**Lo que no está.** Nada de esto ha corrido en una consola de verdad con Wi-Fi.
+En la consola, preparar la subida serán unos 250 ms (los 59 ms de Ryujinx por lo
+que suele costar allí la CPU, y casi los 272 de `cpu` del registro), en el mismo
+fotograma en que se cierra la pantalla de guardado, que ya trae su propio tirón:
+se ha quedado en el hilo principal a propósito, porque `Meta.summary` lee del
+juego, y un hilo con 250 ms de CPU le quitaría al principal tajadas de hasta
+100 ms cada vez que coincidieran. Tampoco se ha visto con la red de Randy el
+respiro del plugin (300 s) ni un conflicto de verdad entre dos dispositivos; sí
+en el banco del PC. Y si se apaga la consola con una subida a medias, esa subida
+se pierde —la partida no: ya estaba en disco— y sale con el siguiente guardado,
+que es lo que el plugin hacía sin red.
+
+### 5.79 Lo de §5.76, §5.77 y §5.78 junto, en una entrega (b56)
+
+Los tres arreglos de los fallos que el jugador vio con el b47 —la fuga de
+texturas de Map Zoom, la pasada mayor de cada puerta y la subida a la nube en
+el hilo principal— se hicieron y se midieron por separado. Esto es la vuelta
+de §5.75-bis con los tres a la vez, sobre la entrega montada desde el árbol y
+con la partida del jugador.
+
+**Montaje.** `reconstruir-src.py --orden`: 39 ficheros idénticos, ninguno
+desviado, `ORDEN.txt` sin cambios (`mkxpz-recolector-texturas.patch` el 35,
+detrás de `mkxpz-textura-sin-memoria.patch`). `construir.sh` con el bash de
+MSYS2 de devkitPro y `flock /tmp/rgss-make.lock`: **0.2.0 b56** (03/10 22:43;
+el b55 de §5.76 era el mismo código, el número sube en cada `make`), entrega en
+`release/rgss-switch-0.2.0/` y su zip, símbolos en
+`release/simbolos/0.2.0-b56/` (`.nro` sha256 `48467ced…c424`, 17.676.729
+bytes). El `.nro` lleva la línea nueva de `[monton]` («en manos del juego») y
+los dos mensajes del `[fondo]` de la red de seguridad.
+
+**Despliegue en la tarjeta de Ryujinx**, con el `Empaquetar.ps1` de esa entrega
+en modo `--solo-motor` desde el Añil 4.13 original (antes, copia de la carpeta
+entera menos `datos.zip`, y del NSP de la raíz):
+
+- `pokemon-anil.nro` b56 con `romfs:/juego.txt`, y el NSP rehecho junto a
+  `switch/` (había `prod.keys`).
+- `mkxp.json`: 16 shims en `preloadScript` antes de `preload.rb`;
+  `nx-cache-gc.rb` detrás de `nx-tactil.rb` (los del catálogo), `nx-nube.rb`
+  detrás de `nx-actualiza.rb` y `nx-zoom.rb` el último, como pide el perfil.
+- `lib/`: los 105 ficheros de la entrega iguales byte a byte, y los 13 shims
+  (4 del catálogo, 9 del perfil) iguales byte a byte a los del repositorio.
+- `datos.zip` ya era el de Cloud Save Sync: las mismas 22.189 entradas, con el
+  mismo CRC y tamaño, que `out/sdcard/switch/pokemon-anil/datos.zip`, y
+  `PluginScripts.rxdata` con el plugin dentro. No se tocó (mismo sha256 antes y
+  después).
+
+En la tarjeta había dos partidas: `Partida 1.rxdata` (y su `.bak`), la de las
+pruebas de Randy en Ryujinx, y `Partida jugador.rxdata`, que es exactamente la
+`Partida 1.rxdata` de `tmp/consola-1003/partidas/` (Centro Pokémon de Pueblo
+Lavanda, mapa 52). Para cada vuelta se puso la del jugador como `Partida 1`; al
+final se devolvieron las tres y su sha256 coincide con el de antes.
+
+**1. Traslados**, bot de `nx-traslado.rb` con
+`Partida 1|48 10 16|19 29 12|40|200|0`, lo mismo que en §5.77:
+
+| Ryujinx, 40 traslados | b47 (§5.77) | b55 + shim (§5.77) | **b56, todo junto** |
+|---|---:|---:|---:|
+| →Centro Pokémon, mediana (máx.) | 319 (334) | 89 (123) | **96 (117)** |
+| →Ciudad Carmín, mediana (máx. sin el primero) | 494 (538) | 295 (343) | **340 (366)** |
+| traslados con pasada mayor | 40 | 0 | **0** |
+| pasadas mayores desde el arranque | 43 | 3 | 3 |
+| `rpg_cache.clear` por traslado | ~250 ms | 5,5 | 5,9 |
+| peor fotograma en los 180 siguientes | 27 | 47 | 23 |
+| Bitmap sin liberar al final | 46 MB | 55 MB | 55 MB |
+| texturas vivas (`[monton]`) | 68 MB | 76 MB | 74–76 MB (en manos del juego 53–55) |
+
+Carmín sale 45 ms por encima de la vuelta de §5.77. Los cronómetros dicen
+dónde: el letrero del mapa (`show_location_window`, que lee un píxel de la GPU)
+65 ms frente a 50 —`pix 1x` de 96 a 124 ms en los `[tiron]`, lo caro del
+emulador que en la consola son 2–7 ms— y crear los spritesets 164 frente a 143;
+lo demás (`mapfactory.setup`, `game_map.setup`, los eventos, el caché) igual al
+milisegundo. `nx-nube.rb` aparece en la pila sólo como quien llama a
+`Scene_Map#update`. Ni mayores, ni nada que crezca de traslado en traslado: la
+generación vieja pasa de 575.000 a 672.000 en los cuarenta, lo mismo que en
+§5.77 (578.000 a 672.000), lo que antes se recogía en cada puerta y ahora
+envejece.
+
+**2. Exterior y Map Zoom.** Bot de `nx-mapa.rb` en Ciudad Carmín (19, en
+(29,12)) andando en cuadrado 300 s, y `nx-zoom-bucle.rb` en modo `plugin`
+(`pbZoomMap(1.5)` del juego, con `nx-zoom.rb` puesto) desde el segundo 120.
+Las dos sondas, en una copia de la vuelta sin su `ObjectSpace.each_object` de
+cada 300 fotogramas (el de sprites fuera; el de Bitmap cada 900), porque ese
+recorrido termina de golpe el barrido perezoso y se ve como un tirón que no es
+del juego.
+
+| | fps | `cpu` ms/f | peor | texturas vivas | pasadas |
+|---|---|---:|---:|---|---|
+| andando, sin zoom | 60 | 6,9–7,4 | 30–31 | 52 → 68 MB | 1 menor cada ~10 s |
+| andando, zoom puesto, 180 s | 58–60 | 7,4–12,9 | 64–190 | **68–69 MB fijos** (en manos del juego 47–48) | 1–2 menores / 15 s, **0 mayores** |
+
+Los Bitmap sin disponer, 51–55 todo el rato; `oldmalloc` quieto en 48 de
+128 MB. En la consola el b47 llegó aquí a 1.169 MB. Hubo un `[tiron]` de 425 ms
+con el zoom puesto con `cpu 7 ms` y `resto 424`: el hilo no estaba haciendo
+nada nuestro. En el último tercio el `cpu` por fotograma subió de ~7 a ~12 ms y
+lo hizo a la vez en todas las piezas de `[mapa]` (escena 7 → 10,8, spritesets
+4 → 6,4, el propio Map Zoom 0,8 → 1,3) sin que creciera nada —ni texturas, ni
+casillas, ni Bitmap—, que es la forma que tiene el PC cargado por otra cosa; se
+apunta, no se explica.
+
+Y con el **jugador quieto** dentro del Centro Pokémon, que es la escena de la
+caída de §5.76 que no se había reproducido (el zoom puesto tras guardar, 105 s):
+60 fps, **253 MB** de texturas vivas fijos (con el fondo lleno de los menús de
+antes; 45 MB en manos del juego), 1 menor cada 30 s, 0 mayores, 53 Bitmap sin
+disponer. En la ventana el mapa sale ampliado y entero.
+
+**3. Menús, PC y guardado**, con la partida del jugador cargada desde la
+pantalla de carga con el mando (`jugar.ps1`: título, Z, pantalla de carga, Z) y
+un arnés temporal (`scratchpad/v579/sondas/nx-vuelta579.rb`, no va al
+repositorio) que a los 600 fotogramas de mapa abre, con las llamadas del menú
+de pausa y una entrada de mentira, el menú de pausa, la Pokédex (lista,
+entrada, Área, Formas, Datos), el equipo, el resumen (tres páginas y otro
+Pokémon), la mochila (dos bolsillos), el PC de cajas (un Pokémon y su menú,
+«¿Continuar operaciones?», salir) y la pantalla de Multi Save («Guardar en
+Partida 1»). Tres vueltas: el b56 con `servidor-lento.rb` (10 s), el b56 sin red
+(la configuración de la nube apuntando a un puerto donde no escucha nadie) y,
+de control, el b47 de la tarjeta con su `mkxp.json` de antes, también sin red.
+
+| ms de la pantalla (peor fotograma) | b56, nube lenta | b56, sin red | b47, sin red |
+|---|---:|---:|---:|
+| menú de pausa | 1537 (121) | 1553 (125) | 1495 (111) |
+| Pokédex | 7989 (134) | 8039 (150) | 7898 (136) |
+| equipo | 2550 (201) | 2549 (205) | 2500 (184) |
+| resumen | 4632 (157) | 4666 (169) | 4532 (122) |
+| mochila | 2850 (229) | 2900 (254) | 2849 (239) |
+| PC | 5000 (218) | 5199 (249) | 5217 (227) |
+| **guardar** (`pbSaveScreen`) | **2687 (86)** | **2654 (90)** | **7983 (2182)** |
+| 15 s tras guardar | 904 f, peor 52 | 904 f, peor 21 | 901 f, peor 24 |
+| pantalla de carga | sólo su `[tiron]` de siempre (437 ms, `cpu 371`): usa la respuesta pedida en el título hace 21,7 s | el de siempre (496 ms); respuesta de hace 13,2 s | el de siempre (528 ms) **y otro de 2227 ms** con `cpu 119`: esperando a la red |
+
+Los menús son lo mismo en los tres (las pantallas duran lo que dura el guion;
+lo que cuenta es el peor fotograma, de 10 a 45 ms más en el b56 en una sola
+vuelta de cada, dentro de lo que se mueve Ryujinx de una a otra). En la vuelta
+con la nube lenta no hubo ni un `[tiron]` en los menús; sin red, dos de
+262–269 ms al abrir la mochila y el PC, y en el b47 uno de 253 al abrir la
+mochila (`txt 1047x`: es pintar su lista).
+
+**Guardar no congela.** Con el b47 y sin red, guardar es un `[tiron]` de
+2196 ms con `cpu 80 ms`: el POST esperando en el hilo principal a que le
+rechacen la conexión. Con el b56, `[nube] Partida 1 preparada en 52 ms; la
+subida no se espera`, la red contesta a los 10.099 ms (`200`), el cartel
+«Partida 1 subida a la nube (revisión 1).» se lee entero arriba, en la ventana
+(foto de +12 s), y en los 15 s siguientes salen 904 fotogramas. Sin red:
+«la red falló a los 2132 ms» (`Failed to connect … 10061`), «aviso en el mapa:
+breve», 904 fotogramas y peor hueco 21 ms.
+
+**La partida que se escribe se lee.** En las tres, tras guardar el arnés relee
+el fichero con `SaveData.read_from_file`: 19 claves, Randy, el mismo equipo
+(Araquanid, Floette, Torracat, Corvisquire, Piloswine, Sneasel), mapa 52 y el
+mismo dinero que en memoria. Y con la nube lenta, el `crc32` que llegó al
+servidor (3339283613), el de `cloud_sync.json` y el CRC32 del
+`Partida 1.rxdata` escrito (148.366 bytes) son el mismo número.
+
+Se vio además, en las fotos de la ventana, el texto bien en el menú, la mochila
+y el PC, y en `mkxp-ruby.log` los tres shims nuevos instalados en cada vuelta:
+`[cache-gc] RPG::Cache.clear recoge sin parar el juego`, `[zoom] Map Zoom
+devuelve la foto de cada fotograma`, `[nube] la subida tras guardar y la
+comprobacion de la pantalla de carga no esperan a la red`.
+
+**Registros.** En ninguna de las cinco vueltas del b56 hay `errorlog.txt`, ni
+una pila, ni un error en `mkxp-ruby.log` (sólo el aviso de siempre de la versión
+de mkxp-z que espera Essentials). `[ritmo]` en el mapa del Centro tras los
+menús: 59–60 fps, `cpu` 4,1–4,5 ms/f (4,7–5,7 con el zoom puesto). Los `[tiron]` que quedan son los de
+siempre al cambiar de escena: arranque (720–796 ms), pantalla de carga
+(437–496), entrada al mapa (651–668).
+
+**No hubo nada que arreglar por la combinación.** Una cosa de las fotos, que no
+es nueva: las que hace el motor (`snap_to_bitmap` + `to_file`) salen con sólo
+las 128 columnas de la izquierda; es lo de §5.74-bis (la lectura de un bitmap
+de la GPU en Ryujinx devuelve la cuarta parte cuando el ancho es múltiplo de
+16). El Map Zoom de la pantalla no lo sufre —no lee a la CPU— y se comprobó con
+las fotos de la ventana. La primera vuelta de menús hizo un `GC.start` antes de
+empezar y no contaba el fotograma de abrir cada pantalla; se tiró para la tabla
+y se repitió.
+
+**Lo que no está.** Todo es Ryujinx: nada ha corrido en la consola, ni con la
+Wi-Fi de Randy. No se jugó un combate, ni horas seguidas (la mayor por
+generación vieja que deja pendiente §5.77 no ha llegado en ninguna vuelta), ni
+la escena exacta del jugador (el zoom de un evento: aquí lo puso la sonda con el
+`pbZoomMap` del juego). La red de seguridad del `GL_OUT_OF_MEMORY` no se
+disparó: no hubo maqueta y la memoria no se acercó al techo. El 401 y el 409 de
+la nube no se repitieron (están en §5.78, en el banco del PC). El NSP rehecho no
+se abrió. Y la diferencia de 10–45 ms en el peor fotograma de los menús entre
+el b56 y el b47 es de una vuelta de cada: no basta para decir que existe.
+
+**Para la consola**, sólo el motor y sin tocar las partidas: rehacer
+`out/sdcard/switch/pokemon-anil/` con `--solo-motor` y subir el grupo `motor`
+de `subir-ftp.py` (el `.nro`, `mkxp.json` y `lib/`; ni las partidas, ni
+`datos.zip`, ni nada fuera de esa lista):
+
+```bash
+cd /c/rgss-switch
+RAIZ=/c/rgss-switch/release/rgss-switch-0.2.0 ./empaquetar.sh \
+  "/c/Users/Usuario/Downloads/RPG MAKERS POKEMONS FANS/Pokemon Anil V4.13" \
+  /c/rgss-switch/out/sdcard --solo-motor
+python subir-ftp.py subir <ip-de-la-consola> --juego pokemon-anil --solo motor
+```
+
 ## 5-bis. Criterio de diseño para los stubs
 
 Auditando `libc.a`, `libsysbase.a` y `libnx.a` con `nm`, el reparto es:
