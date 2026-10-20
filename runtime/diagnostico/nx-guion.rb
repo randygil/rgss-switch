@@ -27,6 +27,12 @@
 # Cada orden deja una linea [guion] en mkxp-ruby.log con el mapa y la casilla
 # del jugador. Sin nx-guion.txt no hace nada y el mando funciona normal.
 #
+# EXCEPCIONES. Mientras hay guion, cada excepcion que se LANZA queda apuntada
+# la primera vez que sale desde cada sitio ([excepcion] clase, mensaje, linea y
+# quien llamo), aunque el juego la rescate despues. Essentials se traga muchas
+# con un `rescue` pelado, y una diferencia de Ruby 1.8 que acaba ahi no cierra
+# el juego: deja una pantalla a medias sin decir nada. Al salir, el recuento.
+#
 # Solo para diagnostico: no se carga en produccion.
 
 module NXGuion
@@ -70,9 +76,18 @@ module NXGuion
 
   def self.activo? = !@cola.empty? || @boton || @pausa > 0 || @hasta
 
+  # Quien llamo a Input.update en este fotograma. El menu de pausa, la mochila o
+  # el equipo corren su propio bucle DENTRO de Scene_Map#update, con $scene
+  # todavia en Scene_Map: lo unico que los distingue del mapa es que Input.update
+  # no lo llama el bucle de Scene_Map#main.
+  def self.llamador=(etiqueta)
+    @llamador = etiqueta.to_s
+  end
+
   # Lo que en RPG Maker XP quiere decir que el jugador se puede mover.
   def self.control?
     return false unless defined?(Scene_Map) && $scene.is_a?(Scene_Map)
+    return false unless @llamador.to_s.end_with?("main")
     return false if $game_temp.message_window_showing
     return false if $game_temp.player_transferring || $game_temp.transition_processing
     return false if $game_system.map_interpreter.running?
@@ -137,6 +152,7 @@ module NXGuion
     when "FOTO"
       foto(arg || @n.to_s)
     when "SALIR"
+      resumen_excepciones
       log("[guion] fin")
       exit
     else
@@ -151,6 +167,29 @@ module NXGuion
         log("[guion] orden desconocida: #{nombre}")
       end
     end
+  end
+
+  VISTAS = Hash.new(0)   # "Clase en sitio" => veces
+
+  def self.vigila_excepciones
+    @vigia = TracePoint.new(:raise) do |tp|
+      e = tp.raised_exception
+      next if e.is_a?(SystemExit)
+      clave = "#{e.class} en #{tp.path}:#{tp.lineno}"
+      VISTAS[clave] += 1
+      next if VISTAS[clave] > 1
+      # El mensaje de un NoMethodError lleva el inspect del receptor entero.
+      msj = (e.message.to_s rescue "?")[0, 150].gsub(/\s+/, " ")
+      pila = (e.backtrace || [])[1, 3].to_a.join(" <- ")
+      log("[excepcion] #{clave}: #{msj}#{pila.empty? ? '' : ' <- ' + pila}#{donde}")
+    end
+    @vigia.enable
+  end
+
+  def self.resumen_excepciones
+    return if VISTAS.empty?
+    log("[excepcion] resumen: #{VISTAS.size} distintas, #{VISTAS.values.sum} en total")
+    VISTAS.sort_by { |_, n| -n }.each { |k, n| log("[excepcion]   #{n.to_s.rjust(6)}x #{k}") }
   end
 
   def self.empieza_hasta(sim)
@@ -196,6 +235,7 @@ module NXGuion
   module Entrada
     def update
       super
+      NXGuion.llamador = caller_locations(1, 1).first&.label
       NXGuion.avanza
     end
     def press?(k)   = NXGuion.activo? ? NXGuion.press?(k)   : super
@@ -207,4 +247,7 @@ module NXGuion
 end
 
 NXGuion.carga
-Input.singleton_class.prepend(NXGuion::Entrada) if NXGuion.activo?
+if NXGuion.activo?
+  Input.singleton_class.prepend(NXGuion::Entrada)
+  NXGuion.vigila_excepciones
+end

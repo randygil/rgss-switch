@@ -109,7 +109,7 @@ Get-ChildItem "$dir\nx-guion-*.t*.png" -ErrorAction SilentlyContinue |
     }
 
 # 4. Lo que dijo la sonda en esta vuelta.
-(Nuevo $log $desde) -split "`n" | Where-Object { $_ -match "\[guion\] (=>|control|TOPE|orden desconocida|fin|foto .*:)" } |
+(Nuevo $log $desde) -split "`n" | Where-Object { $_ -match "\[guion\] (=>|control|TOPE|orden desconocida|fin|foto .*:)|\[excepcion\]" } |
     ForEach-Object { Write-Output "  $($_.TrimEnd())" }
 $errores = (Nuevo $dbg $desdeDbg) -split "`n" | Where-Object { $_ -match "Error|from Section" } | Select-Object -First 8
 if ($errores) { Write-Output "mkxp-debug.log:"; $errores | ForEach-Object { Write-Output "  $($_.TrimEnd())" } }

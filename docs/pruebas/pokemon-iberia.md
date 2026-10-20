@@ -305,3 +305,29 @@ Section134:187:in `getKeyName': undefined method `index' for {"Backspace"=>8, ..
 por no usado. Está en las pantallas de Controles de Iberia, Z y Titán. Repuesto
 en `nx-ruby18.rb`. Con `guion.ps1`: menú, Controles, bajar por la lista y salir,
 sin un error.
+
+### Recorrido de pantallas con la sonda de excepciones
+
+`nx-guion.rb` apunta ahora cada excepción que se LANZA mientras corre un guion,
+aunque el juego la rescate, y al salir el recuento. Recorrido con la partida del
+jugador más dos Pokémon, Pokédex, objetos y dinero dados por el guion: menú de
+pausa, equipo, resumen (tres páginas), Pokédex y una entrada, mochila y sus
+bolsillos, ficha, opciones (cambiando una), controles, guardar (escribe
+`Game.rxdata`), PC, tienda (comprar) y combates salvajes en la casa, en Albacete
+(`Pradera`) y con el fondo `Otoño`. Ni un cierre.
+
+Lo que dijo la sonda:
+
+| Veces | Excepción | Qué es |
+|---|---|---|
+| 345 | `NameError` `PBMoves` en `fromSymbol` | el juego registra manejadores antes de cargar sus constantes y lo rescata; igual en el PC |
+| 117 | `Errno::ENOENT` en `pbGetFileChar` | `pbResolveBitmap` probando extensiones |
+| 16 | `RangeError` "recycled object" en su `WeakRef` | caché de bitmaps; rescatado |
+| 11 | `SyntaxError` en `nx-ruby18.rb` | `NXFuente` probando y arreglando secciones |
+| 1 | `Errno::ENOENT` `Data/Constants.rxdata` | `pbSafeLoad` intenta BORRAR el fichero suelto si hay `Game.rgssad`; en el contenedor no hay suelto. Ojo con `-Contenedor carpetas` |
+| 1 | `NoMethodError` `Audio.bgm_position` | **de 1.8**: rescatado con `rescue 0`, pero la música del mapa volvía a empezar tras cada combate. Repuesto en `nx-ruby18.rb` (`bgm_pos`) |
+
+El combate en la casa sale sin fondo: el mapa 17 no tiene `MetadataBattleBack` y
+el juego busca `battlebgIndoorA`, que Iberia no trae. Igual en el PC. En
+exteriores y con nombres con `ñ` el fondo y las bases salen bien
+(`pokemon-iberia-hito-14-combate-pradera.png`, `-15-combate-otono.png`).

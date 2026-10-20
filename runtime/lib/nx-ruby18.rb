@@ -903,6 +903,21 @@ unless Hash.method_defined?(:index)
   NX.log("[1.8] Hash#index = Hash#key")
 end
 
+# Audio.bgm_position: el Game.exe de estos juegos lo tenia; mkxp-z 2.4.2 lo
+# llama bgm_pos (segundos, que es lo que el juego luego pasa a Audio.bgm_play).
+# Game_System#bgm_pause hace `pos = Audio.bgm_position rescue 0` al entrar en
+# cada combate (pbBattleAnimation): no se cerraba nada, pero la musica del
+# mapa volvia a empezar desde el principio al acabar el combate.
+if defined?(Audio) && Audio.respond_to?(:bgm_pos) && !Audio.respond_to?(:bgm_position)
+  def Audio.bgm_position
+    bgm_pos
+  end
+  def Audio.bgs_position
+    bgs_pos
+  end
+  NX.log("[1.8] Audio.bgm_position/bgs_position = bgm_pos/bgs_pos")
+end
+
 # Lo que se busco y NO se encontro en ninguno de los cinco juegos, y por eso no
 # esta definido: Array#indexes / Array#indices (0), Array#choice (0),
 # Hash#indexes (0), Object#to_a (los 9 `.to_a` del corpus son
