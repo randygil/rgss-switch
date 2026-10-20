@@ -186,6 +186,11 @@ module NXGuion
       next if e.is_a?(SystemExit)
       clave = "#{e.class} en #{tp.path}:#{tp.lineno}"
       VISTAS[clave] += 1
+      # Cada excepcion es un longjmp, y Ryujinx 1.3.3 se cae tras unos 400
+      # dentro de la misma llamada (docs/pruebas/pokemon-titan.md): el total
+      # dice si un cierre del emulador cuadra con eso.
+      @total = (@total || 0) + 1
+      log("[excepcion] van #{@total}") if @total % 50 == 0
       next if VISTAS[clave] > 1
       # El mensaje de un NoMethodError lleva el inspect del receptor entero.
       msj = (e.message.to_s rescue "?")[0, 150].gsub(/\s+/, " ")
@@ -226,6 +231,25 @@ module NXGuion
       log("[guion] elige #{w.commands[i].inspect} (#{i} de #{w.commands.size}) en #{w.class}")
       return
     end
+    # El menu de pausa del plugin "DP Pause Menu" (Pokemon Z) no es una ventana:
+    # @options es [[nombre, grafico, grafico, proc], ...] y @option el cursor.
+    # Cada X crea un DP_PauseMenu nuevo y los de antes siguen vivos hasta que
+    # pasa el recolector: se mueve el cursor de todos, que el viejo no estorba.
+    if defined?(::DP_PauseMenu)
+      elegida = nil
+      ObjectSpace.each_object(::DP_PauseMenu) do |m|
+        ops = m.instance_variable_get(:@options)
+        next unless ops.is_a?(Array)
+        i = ops.index { |o| o.is_a?(Array) && alternativas.any? { |a| limpio.(o[0]).start_with?(a) } }
+        next unless i
+        m.instance_variable_set(:@option, i)
+        elegida = "#{ops[i][0].inspect} (#{i} de #{ops.size})"
+      end
+      if elegida
+        log("[guion] elige #{elegida} en DP_PauseMenu")
+        return
+      end
+    end
     vistas = ventanas.map { |w| w.commands.map { |c| limpio.(c) } }
     log("[guion] elige: NO HAY #{texto.inspect}; listas activas: #{vistas.inspect}")
   rescue StandardError => e
@@ -247,7 +271,9 @@ module NXGuion
   TIRA = 171
 
   def self.foto(nombre)
-    b = Graphics.snap_to_bitmap
+    # La del motor: Pokemon Z pone una suya que en el titulo devuelve nil.
+    nativa = defined?(NX18Tarde::NATIVO_GFX) && NX18Tarde::NATIVO_GFX[:snap_to_bitmap]
+    b = nativa ? nativa.call : Graphics.snap_to_bitmap
     (0...b.width).step(TIRA).each_with_index do |x0, i|
       cw = [TIRA, b.width - x0].min
       t = Bitmap.new(cw, b.height)
@@ -273,22 +299,49 @@ module NXGuion
   # Antepuesto y no con alias: el juego reescribe Input entero y
   # NX18Tarde.entrada lo repone con define_method en cada seccion, y un modulo
   # antepuesto sigue delante de todo eso.
+  # Los metodos de Input del motor, tal y como estan al cargar la sonda.
+  NATIVO = {}
+  DENTRO = {}
+
+  # Un juego que hace `class << Input; alias viejo_update update; end` DESPUES
+  # de la sonda se lleva una copia de ESTE metodo, y el `super` de esa copia
+  # vuelve a caer en el update del juego: recursion sin fin (Pokemon Z,
+  # PSystem_System, alias update_KGC_ScreenCapture). Si un metodo de la sonda
+  # se ve llamado desde dentro de si mismo, es la copia del juego, y va directo
+  # al del motor: la cadena del juego se conserva y el lazo se corta.
   module Entrada
     def update
-      super
+      return NXGuion::NATIVO[:update].call if NXGuion::DENTRO[:update]
+      NXGuion::DENTRO[:update] = true
+      begin
+        super
+      ensure
+        NXGuion::DENTRO[:update] = false
+      end
       NXGuion.llamador = caller_locations(1, 1).first&.label
       NXGuion.avanza
     end
-    def press?(k)   = NXGuion.activo? ? NXGuion.press?(k)   : super
-    def trigger?(k) = NXGuion.activo? ? NXGuion.trigger?(k) : super
-    def repeat?(k)  = NXGuion.activo? ? NXGuion.repeat?(k)  : super
-    def dir4        = NXGuion.activo? ? NXGuion.dir         : super
-    def dir8        = NXGuion.activo? ? NXGuion.dir         : super
+    def press?(k)   = NXGuion.activo? ? NXGuion.press?(k)   : NXGuion.sigue(:press?, k)   { super }
+    def trigger?(k) = NXGuion.activo? ? NXGuion.trigger?(k) : NXGuion.sigue(:trigger?, k) { super }
+    def repeat?(k)  = NXGuion.activo? ? NXGuion.repeat?(k)  : NXGuion.sigue(:repeat?, k)  { super }
+    def dir4        = NXGuion.activo? ? NXGuion.dir         : NXGuion.sigue(:dir4)        { super }
+    def dir8        = NXGuion.activo? ? NXGuion.dir         : NXGuion.sigue(:dir8)        { super }
+  end
+
+  def self.sigue(nombre, *args)
+    return NATIVO[nombre].call(*args) if DENTRO[nombre]
+    DENTRO[nombre] = true
+    begin
+      yield
+    ensure
+      DENTRO[nombre] = false
+    end
   end
 end
 
 NXGuion.carga
 if NXGuion.activo?
+  [:update, :press?, :trigger?, :repeat?, :dir4, :dir8].each { |m| NXGuion::NATIVO[m] = Input.method(m) }
   Input.singleton_class.prepend(NXGuion::Entrada)
   NXGuion.vigila_excepciones
 end

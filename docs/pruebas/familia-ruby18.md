@@ -368,3 +368,51 @@ Y de paso queda dicho por qué Añil nunca se vio así: su perfil trae
 `mkxp.json`), así que su pantalla lógica ya nacía del tamaño correcto. Los
 cuatro de Ruby 1.8 y Uranium no los traen, y el valor por omisión de mkxp-z para
 RGSS1 es 640×480 (`src/config.cpp`).
+
+---
+
+## 20 de octubre de 2026 — recorrido de los cinco con `guion.ps1`
+
+Partida nueva que empieza en la casa del jugador (el guion cambia el mapa de
+inicio de `Data/System` por `MetadataHome`) y recorrido del menú de pausa REAL
+con `elige`: equipo y resumen, Pokédex, mochila, ficha, opciones, controles,
+guardar, PC, tienda y dos combates (huir; luchar hasta ganar). Con la sonda de
+excepciones de `nx-guion.rb` apuntando todo lo que se lanza aunque se rescate.
+
+| Juego | Resultado |
+|---|---|
+| Iberia | Completo, sin cierres (ver `pokemon-iberia.md`). Salieron y se arreglaron `Hash#index` (Controles), `Audio.bgm_position` y las constantes con tildes (`PBTrainers::Sofía1`) |
+| Titán | Completo desde la casa del mapa 12. En exteriores con agua animada **Ryujinx se cae** (ver `pokemon-titan.md`) |
+| Z | Completo, con su menú propio (`DP_PauseMenu`): Craft, Feats, opciones, guardar (167.405 bytes), PC, combates |
+| Ópalo | **No arranca en Ryujinx** desde septiembre; en la consola sí (`pokemon-opalo.md`) |
+| Uranium | Ahora arranca en Ryujinx (en septiembre no). Pasa la pantalla de idioma y llega al mapa; el recorrido quedó a medias (el guion daba Pikachu, que Uranium no tiene, y la máquina se quedó sin memoria) |
+
+### El fallo de Ryujinx, con nombre
+
+`break` (y `raise`/`rescue`) que sale de un bloque llamado desde C es un
+`longjmp`. ARMeilleure traduce cada llamada del juego a una llamada nativa del
+PC, y un `longjmp` del juego deja esos marcos en la pila del PC: unos **407**
+dentro de la misma llamada la agotan y `Ryujinx.exe` muere con `0xc0000005`.
+Reproducido sin datos del juego (tres líneas en `pokemon-titan.md`). Explica a
+la vez Ópalo (la carga de scripts es una sola llamada, y la sección 212 hace
+cientos), el pueblo de Titán y lo que se vio de Uranium en septiembre.
+
+### Lo que cambió en `nx-ruby18.rb`
+
+- `HandlerHash#fromSymbol` pregunta con `const_defined?` en vez de rescatar un
+  `NameError`: unas 350 excepciones menos en cada arranque (en la consola cada
+  una cuesta), y en Ryujinx es lo que deja arrancar a Uranium.
+- `FontInstaller.install` se tapa en el momento en que el juego lo define: en
+  Uranium se definía y se llamaba en la misma sección y los avisos salían igual.
+- `SpriteWrapper#width/height` preguntan a su `@sprite`: mkxp-z añade
+  `Sprite#width`, el RGSS de Enterbrain no, y el ratón de Uranium se lo
+  preguntaba al Sprite nativo vacío de los paneles de la pantalla de carga
+  (`MKXPError: No instance data for variable`).
+
+### Lo que cambió en la sonda
+
+`nx-guion.rb`: `mapa`, `elige` (listas de Essentials y `DP_PauseMenu`), el
+recuento de excepciones cada 50, la foto con el `snap_to_bitmap` del motor, y
+el corte del lazo cuando un juego hace `alias` de `Input.update` después de la
+sonda (Z: `update_KGC_ScreenCapture`). `guion.ps1 -Visible` muestra la ventana
+sin activarla.

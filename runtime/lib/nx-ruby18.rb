@@ -1115,6 +1115,8 @@ module NX18Tarde
     datos unless @hecho[:datos]
     plano unless @hecho[:plano]
     tilemap unless @hecho[:tilemap]
+    manejadores unless @hecho[:manejadores]
+    envoltorio unless @hecho[:envoltorio]
     fuentes unless @hecho[:fuentes]
     audio unless @hecho[:audio]
     entrada                     # los juegos reabren Input en 4 o 5 secciones
@@ -1684,6 +1686,77 @@ module NX18Tarde
     NX.log("[1.8] CustomTilemap recorta los tiles de un tileset mega en vez de pasarlo entero a un Sprite")
   end
 
+  # --- HandlerHash#fromSymbol: preguntar antes de pedir ---------------------
+  #
+  # Los cinco juegos traen la misma clase (PBEvent.rb / Event.rb):
+  #
+  #     def fromSymbol(sym)
+  #       if sym.is_a?(Symbol) || sym.is_a?(String)
+  #         mod=Object.const_get(@mod) rescue nil
+  #         return nil if !mod
+  #         return mod.const_get(sym.to_sym) rescue nil
+  #
+  # y la llaman cientos de veces al cargar -cada ItemHandlers/MoveHandlers.add
+  # de los scripts, ANTES de que pbSetUpSystem defina PBMoves y PBItems- y en
+  # cada busqueda de manejador durante el juego. Cada vez que la constante no
+  # existe se lanza y se rescata un NameError: unas 350 al arrancar Iberia, mas
+  # de 400 en Opalo.
+  #
+  # Ademas de lo que cuesta cada excepcion, Ryujinx 1.3.3 se cae tras unos 400
+  # longjmp dentro de la misma llamada (docs/pruebas/pokemon-titan.md), y la
+  # carga de los scripts es una sola llamada: Opalo ya no arrancaba en el
+  # emulador. Aqui se pregunta con const_defined? y no se lanza nada. El
+  # resultado es el mismo; con un nombre con tildes se sigue por const_get, que
+  # pasa por NXConstanteCodificada.
+  def self.manejadores
+    return unless Object.const_defined?(:HandlerHash)
+    clase = Object.const_get(:HandlerHash)
+    return unless clase.method_defined?(:fromSymbol) && clase.method_defined?(:toSymbol) &&
+                  clase.method_defined?(:addIf)
+    @hecho[:manejadores] = true
+    clase.class_eval do
+      def fromSymbol(sym)
+        return sym unless sym.is_a?(Symbol) || sym.is_a?(String)
+        return nil unless (Object.const_defined?(@mod) rescue false)
+        mod = Object.const_get(@mod)
+        s = sym.to_sym
+        return mod.const_get(s) if (mod.const_defined?(s) rescue false)
+        return nil if s.to_s.ascii_only?
+        mod.const_get(s) rescue nil
+      end
+    end
+    NX.log("[1.8] HandlerHash#fromSymbol pregunta con const_defined? en vez de rescatar NameError")
+  end
+
+  # --- SpriteWrapper#width/height: el Sprite nativo que nunca se construye --
+  #
+  # SpriteWrapper hereda de Sprite y dibuja con un @sprite propio, sin llamar a
+  # super (como LargePlane, mas arriba). En el RGSS de Enterbrain un Sprite no
+  # tiene width ni height; mkxp-z si se los anade. Asi que el raton de Uranium
+  # (Game_Mouse#objectParams?, "Mouse Input"), que hace
+  #
+  #     w = (object.width) if object.respond_to?(:width)
+  #
+  # y que en el PC no entraba nunca, aqui le pregunta el ancho al Sprite nativo
+  # vacio de un panel de la pantalla de carga:
+  #
+  #   MKXPError: No instance data for variable (missing call to super?)
+  #     Section179:131 objectParams? <- over? <- PScreen_Load pbUpdate
+  #
+  # Se le pregunta al @sprite de dentro, que es el que dibuja.
+  def self.envoltorio
+    return unless Object.const_defined?(:SpriteWrapper)
+    clase = Object.const_get(:SpriteWrapper)
+    return unless clase < ::Sprite
+    @hecho[:envoltorio] = true
+    [:width, :height].each do |m|
+      next unless ::Sprite.method_defined?(m)
+      next if clase.instance_method(m).owner != ::Sprite
+      clase.send(:define_method, m) { @sprite ? @sprite.send(m) : 0 }
+    end
+    NX.log("[1.8] SpriteWrapper#width/height preguntan a su @sprite (el Sprite nativo no se construye)")
+  end
+
   # --- FontInstaller: instalar fuentes en Windows ---------------------------
   #
   # La pantalla de carga de Essentials clasico (PokemonLoad.rb en Iberia y
@@ -1859,4 +1932,19 @@ end
 NX18Tarde.guarda_nativos
 NX18Tarde.guarda_graficos
 NX18Tarde.blt_mega
+
+# FontInstaller.install, sin efecto DESDE QUE SE DEFINE. NX18Tarde.fuentes lo
+# hace entre seccion y seccion, y llega tarde para Uranium: su PSystem_System
+# lo define y lo llama en la misma seccion, y los avisos de fuentes salian
+# igual. Aqui el modulo ya existe cuando el juego lo abre (los cinco lo
+# declaran `module FontInstaller`), y en cuanto define `install` se tapa.
+module FontInstaller
+  def self.singleton_method_added(nombre)
+    return unless nombre == :install
+    return if @nx_tapando
+    @nx_tapando = true
+    define_singleton_method(:install) { |*_a| nil }
+    @nx_tapando = false
+  end
+end
 
