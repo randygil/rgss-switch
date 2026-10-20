@@ -887,9 +887,25 @@ module Kernel
 end
 NX.log("[1.8] Kernel#proc devuelve el proc de 1.8: `return` dentro sale del proc")
 
+# Hash#index(valor): en 1.8, la clave de ese valor (en 3.x es Hash#key; index
+# se retiro). El censo de abajo lo dio por no usado, y se le escapo: la pantalla
+# de Controles de Iberia, Z y Titan hace `CONTROLSLIST.index(keyCode)` sobre un
+# Hash constante, y abrirla desde el menu cerraba el juego:
+#
+#   Section134:187:in `getKeyName': undefined method `index' for {...}:Hash
+#     from Section134:218:in `keyName' ... pbStartPokemonMenu
+unless Hash.method_defined?(:index)
+  class Hash
+    def index(valor)
+      key(valor)
+    end
+  end
+  NX.log("[1.8] Hash#index = Hash#key")
+end
+
 # Lo que se busco y NO se encontro en ninguno de los cinco juegos, y por eso no
 # esta definido: Array#indexes / Array#indices (0), Array#choice (0),
-# Hash#index (0), Hash#indexes (0), Object#to_a (los 9 `.to_a` del corpus son
+# Hash#indexes (0), Object#to_a (los 9 `.to_a` del corpus son
 # Range#to_a y String#bytes.to_a, que 3.1 tiene), Kernel#getc (los 2 usos son
 # metodos `getc` que los propios juegos definen en File_Mixins y SpriteWindow),
 # String#each y String#to_a (0 usos localizables), Symbol#to_proc (ya existe).

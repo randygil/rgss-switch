@@ -290,3 +290,18 @@ excepción, 50–55 fps.
   motor ya carga las de `Fonts/` y lo dice en el registro (`el motor ve las 6
   fuentes del juego`).
 - Lo de `KleinBitmap.dll` y los `.mid`, como estaba.
+
+### Después de publicar la 0.2.1: la pantalla de Controles
+
+Randy, jugando a mano, abrió Menú → Controles y el juego se cerró:
+
+```
+Section134:187:in `getKeyName': undefined method `index' for {"Backspace"=>8, ...}:Hash
+  from Section134:218:in `keyName' ... pbStartPokemonMenu
+```
+
+`CONTROLSLIST.index(keyCode)`: en 1.8 `Hash#index` daba la clave de un valor; en
+3.x es `Hash#key` y `index` ya no existe. El censo de la familia lo había dado
+por no usado. Está en las pantallas de Controles de Iberia, Z y Titán. Repuesto
+en `nx-ruby18.rb`. Con `guion.ps1`: menú, Controles, bajar por la lista y salir,
+sin un error.
