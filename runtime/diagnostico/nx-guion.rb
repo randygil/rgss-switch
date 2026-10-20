@@ -19,6 +19,9 @@
 #                  pantalla de carga y las escenas, sin contar las cajas
 #   esperar n      n fotogramas sin tocar nada
 #   hasta          sin tocar nada, hasta que el jugador tenga el control
+#   mapa, Z mapa   como hasta, pero basta con que haya mapa cargado
+#   elige A|B      pone el cursor de la lista activa en la opcion que empiece
+#                  por A o por B (la siguiente Z la elige)
 #   foto nombre    nx-guion-<nombre>.t<i>.png en la carpeta del juego
 #   ruby codigo    evalua el resto de la linea y apunta lo que devuelve
 #   salir          cierra el juego
@@ -121,7 +124,7 @@ module NXGuion
     end
     if @hasta
       @tope += 1
-      @quieto = control? ? @quieto + 1 : 0
+      @quieto = (@modo == :mapa ? mapa? : control?) ? @quieto + 1 : 0
       if @quieto >= ESTABLE || @tope >= TOPE_HASTA
         log("[guion] #{@quieto >= ESTABLE ? 'control' : 'TOPE sin control'} tras #{@tope} fotogramas#{donde}")
         @hasta = false
@@ -143,6 +146,10 @@ module NXGuion
       @pausa = arg.to_i
     when "HASTA"
       empieza_hasta(nil)
+    when "MAPA"
+      empieza_hasta(nil, :mapa)
+    when "ELIGE"
+      elige(orden[1..].join(" "))
     when "RUBY"
       begin
         log("[guion] => #{TOPLEVEL_BINDING.eval(arg).inspect}")
@@ -159,6 +166,8 @@ module NXGuion
       sim = BOTONES[nombre.upcase]
       if sim && arg && arg.upcase == "HASTA"
         empieza_hasta(sim)
+      elsif sim && arg && arg.upcase == "MAPA"
+        empieza_hasta(sim, :mapa)
       elsif sim
         @boton = sim
         @sostiene = (arg || 8).to_i
@@ -192,7 +201,39 @@ module NXGuion
     VISTAS.sort_by { |_, n| -n }.each { |k, n| log("[excepcion]   #{n.to_s.rjust(6)}x #{k}") }
   end
 
-  def self.empieza_hasta(sim)
+  # Hay mapa cargado, aunque corra un evento o haya un mensaje: lo que hace
+  # falta para tocar la partida recien empezada.
+  def self.mapa?
+    defined?(Scene_Map) && $scene.is_a?(Scene_Map) && $game_map && $game_map.map_id.to_i > 0
+  rescue StandardError
+    false
+  end
+
+  # Pone el cursor de la lista de opciones activa sobre la primera cuyo texto
+  # empiece por alguna de las alternativas ("Mochila|Bolsa|Bag"). No pulsa
+  # nada: la siguiente orden (Z) la elige, por el mismo camino que el jugador.
+  def self.elige(texto)
+    alternativas = texto.split("|").map { |t| t.strip.downcase }
+    limpio = ->(c) { c.to_s.gsub(/<[^>]*>/, "").strip.downcase }
+    ventanas = ObjectSpace.each_object(::Window).select do |w|
+      (!w.disposed? && w.visible && w.active && w.respond_to?(:commands) &&
+       w.commands.is_a?(Array)) rescue false
+    end
+    ventanas.each do |w|
+      i = w.commands.index { |c| alternativas.any? { |a| limpio.(c).start_with?(a) } }
+      next unless i
+      w.index = i
+      log("[guion] elige #{w.commands[i].inspect} (#{i} de #{w.commands.size}) en #{w.class}")
+      return
+    end
+    vistas = ventanas.map { |w| w.commands.map { |c| limpio.(c) } }
+    log("[guion] elige: NO HAY #{texto.inspect}; listas activas: #{vistas.inspect}")
+  rescue StandardError => e
+    log("[guion] elige #{texto.inspect}: #{e.class}: #{e.message}")
+  end
+
+  def self.empieza_hasta(sim, modo = :control)
+    @modo = modo
     @hasta = true
     @insiste = sim
     @quieto = 0

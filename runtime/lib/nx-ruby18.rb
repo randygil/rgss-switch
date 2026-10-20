@@ -903,6 +903,35 @@ unless Hash.method_defined?(:index)
   NX.log("[1.8] Hash#index = Hash#key")
 end
 
+# Constantes con tildes o enes: en 1.8 un nombre era sus bytes; en 3.x lleva
+# codificacion, y el mismo nombre en binario y en UTF-8 son dos constantes.
+# Las de Essentials clasico salen de Data/Constants.rxdata, que pbSetUpSystem
+# evalua tras Zlib::Inflate.inflate, o sea en BINARIO; los scripts de los
+# eventos llegan en UTF-8. Medido en Iberia, combate contra Sofia en el
+# laboratorio (mapa 15), que un jugador reporto como cierre:
+#
+#   PBTrainers.constants -> [:"Sof\xC3\xADa1", ...]   (ASCII-8BIT)
+#   pbTrainerBattle(PBTrainers::Sofía1, ...)  -> NameError: uninitialized
+#                                                constant PBTrainers::Sofía1
+#
+# Cuando falta una constante cuyo nombre no es ASCII, se busca con la otra
+# codificacion antes de dar el error. const_missing solo corre cuando la
+# constante no existe: el resto del juego no paga nada.
+module NXConstanteCodificada
+  def const_missing(nombre)
+    s = nombre.to_s
+    unless s.ascii_only?
+      # ASCII_8BIT y no BINARY: el Ruby de la consola no trae ese alias.
+      binario = Encoding::ASCII_8BIT
+      otra = s.dup.force_encoding(s.encoding == binario ? Encoding::UTF_8 : binario).to_sym
+      return const_get(otra, false) if (const_defined?(otra, false) rescue false)
+    end
+    super
+  end
+end
+Module.prepend(NXConstanteCodificada)
+NX.log("[1.8] una constante con tildes se encuentra en binario o en UTF-8")
+
 # Audio.bgm_position: el Game.exe de estos juegos lo tenia; mkxp-z 2.4.2 lo
 # llama bgm_pos (segundos, que es lo que el juego luego pasa a Audio.bgm_play).
 # Game_System#bgm_pause hace `pos = Audio.bgm_position rescue 0` al entrar en

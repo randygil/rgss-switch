@@ -331,3 +331,25 @@ El combate en la casa sale sin fondo: el mapa 17 no tiene `MetadataBattleBack` y
 el juego busca `battlebgIndoorA`, que Iberia no trae. Igual en el PC. En
 exteriores y con nombres con `ñ` el fondo y las bases salen bien
 (`pokemon-iberia-hito-14-combate-pradera.png`, `-15-combate-otono.png`).
+
+### El combate contra Sofía en el laboratorio cerraba el juego
+
+Lo reportó el mismo jugador con la versión anterior: «justo antes de pelear
+contra la tipa en el laboratorio». Es el evento 3 del mapa 15 (Laboratorio),
+página 5:
+
+```ruby
+pbTrainerBattle(PBTrainers::Sofía1, "Sofía", _I("Si ya lo sabía yo..."), false, 2, true)
+```
+
+`PBTrainers` sale de `Data/Constants.rxdata`, que `pbSetUpSystem` evalúa tras
+`Zlib::Inflate.inflate`, en binario: sus constantes se llaman
+`:"Sof\xC3\xADa1"` en ASCII-8BIT. El script del evento llega en UTF-8, y para
+Ruby 3.1 son dos nombres distintos → `NameError: uninitialized constant
+PBTrainers::Sofía1`. En 1.8 un nombre era sus bytes. Arreglo en `nx-ruby18.rb`
+(`NXConstanteCodificada`): si falta una constante con letras no ASCII, se busca
+con la otra codificación. Con el script exacto del evento, el combate empieza y
+se gana. Vale para cualquier constante con tildes o eñes de los cinco juegos.
+
+Y una lección: el Ruby de la consola no trae el alias `Encoding::BINARY` (ya lo
+decía `nx-lote-ab.rb`); hay que escribir `Encoding::ASCII_8BIT`.
