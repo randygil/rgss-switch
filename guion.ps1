@@ -23,10 +23,17 @@
 param(
     [Parameter(Mandatory=$true)][string]$Juego,
     [Parameter(Mandatory=$true)][string]$Guion,
-    [int]$Tope = 360
+    [int]$Tope = 360,
+    # Ventana visible pero SIN activarla (SW_SHOWNOACTIVATE): el foco sigue
+    # donde estaba. Para lo que no se puede probar minimizado: Ryujinx 1.3.3
+    # se cae (0xc0000005 en Ryujinx.exe) con Pokemon Titan minimizado.
+    [switch]$Visible
 )
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Drawing
+Add-Type -Name Ventana -Namespace NxGuion -MemberDefinition @"
+[DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int cmd);
+"@
 
 $dir = "$env:APPDATA\Ryujinx\sdcard\switch\$Juego"
 $nro = "$dir\$Juego.nro"
@@ -66,7 +73,13 @@ function Nuevo($f, $desde) {
     return [Text.Encoding]::UTF8.GetString($b)
 }
 $p = Start-Process -FilePath "C:\Games\publish\Ryujinx.exe" -ArgumentList "`"$nro`"" -WindowStyle Minimized -PassThru
-Write-Output "Ryujinx PID $($p.Id), minimizado"
+if ($Visible) {
+    for ($i = 0; $i -lt 60 -and $p.MainWindowHandle -eq [IntPtr]::Zero; $i++) { Start-Sleep -Milliseconds 500; $p.Refresh() }
+    [void][NxGuion.Ventana]::ShowWindow($p.MainWindowHandle, 4)   # SW_SHOWNOACTIVATE
+    Write-Output "Ryujinx PID $($p.Id), visible sin foco"
+} else {
+    Write-Output "Ryujinx PID $($p.Id), minimizado"
+}
 $t0 = Get-Date
 $motivo = "tope de $Tope s"
 try {

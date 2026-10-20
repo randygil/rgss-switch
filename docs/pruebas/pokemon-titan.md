@@ -195,3 +195,37 @@ ABAJO**.
 
 - El primer combate.
 - El sprite de ruido de `RtlMoveMemory` junto a la profesora, igual que estaba.
+
+---
+
+## 20 de octubre de 2026: Ryujinx se cae en Pueblo Paleto (mapa 3), y es Ryujinx
+
+Recorrido con `guion.ps1` y una partida nueva que empieza en `MetadataHome`
+(mapa 3, *Pueblo Paleto*, el primer exterior que se pisa en este port). Tres de
+tres veces, **`Ryujinx.exe` se cierra** (visor de eventos: `APPCRASH`,
+`0xc0000005` en `Ryujinx.exe`, offsets distintos) sin una línea de error ni en
+el juego ni en el registro del emulador. Igual con la ventana visible, con la
+memoria en `SoftwarePageTable` y sin PPTC.
+
+Acotado con trazas: dentro de `CustomTilemap#refresh_autotiles`, el triple
+bucle `for y / for x / for z ... break` que busca autotiles animados (el pueblo
+tiene `agua`, de 11 fotogramas). Y reproducido **sin datos del juego**:
+
+```ruby
+for y in 0...2000
+  for z in 0...3
+    break        # Ryujinx muere en el 407.º
+  end
+end
+```
+
+`break` desde un bloque llamado por C (`Range#each`) es un `longjmp`. ARMeilleure
+traduce cada llamada del juego a una llamada nativa del PC, y un `longjmp` del
+juego deja esos marcos en la pila del PC: unos 400 la agotan. En la consola,
+`longjmp` restaura la pila y no se acumula nada; por eso se da por **fallo del
+emulador**, sin comprobar en hardware. Iberia no lo dispara porque Albacete no
+tiene autotiles animados.
+
+Consecuencia práctica: los exteriores de Titán con agua animada no se pueden
+probar en Ryujinx 1.3.3. Las sondas de la traza (`nx-traza-mapa.rb`,
+`nx-bucle.rb`) eran temporales y no se guardan.
