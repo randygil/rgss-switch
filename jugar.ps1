@@ -21,6 +21,9 @@
 #
 #   .\jugar.ps1 -Juego pokemon-anil
 #
+# OJO: cada pulsacion le quita el foco a quien este usando la maquina. Para
+# conducir un juego sin tocar el teclado ni el foco, guion.ps1.
+#
 # El slug es obligatorio y de el sale la ruta del .nro; -Ruta sigue estando
 # para apuntar a un .nsp o a un binario de prueba, que Ryujinx arranca igual
 # desde la linea de ordenes.

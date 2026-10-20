@@ -1054,6 +1054,8 @@ module NX18Tarde
     cadena_each unless @hecho[:cadena_each]
     datos unless @hecho[:datos]
     plano unless @hecho[:plano]
+    tilemap unless @hecho[:tilemap]
+    fuentes unless @hecho[:fuentes]
     audio unless @hecho[:audio]
     entrada                     # los juegos reabren Input en 4 o 5 secciones
     graficos
@@ -1580,6 +1582,124 @@ module NX18Tarde
     NX.log("[1.8] LargePlane construye el Plane nativo que su initialize se saltaba")
   end
 
+  # --- CustomTilemap con un tileset mas alto de lo que admite la GPU --------
+  #
+  # Los tilesets de exteriores de Iberia miden 256x40026. La GPU de la Switch
+  # no admite texturas de mas de 16384 de lado, y mkxp-z guarda un Bitmap asi
+  # en RAM como "mega surface": el Tilemap del motor sabe dibujarlo, pero un
+  # Sprite no lo acepta. Y el Tilemap que usan estos juegos no es el del motor:
+  # Iberia pone `MAPVIEWMODE = 1` en su seccion de ajustes, y con eso
+  # TilemapLoader elige CustomTilemap, el de Ruby, que pinta cada tile con
+  # `sprite.bitmap = @tileset` y un src_rect. Medido al salir de la casa (mapa
+  # 16) al pueblo (mapa 2) con la partida de un jugador:
+  #
+  #   Section036:371:in `bitmap=': Operation not supported for mega surfaces
+  #     from Section036:371:in `getRegularTile'
+  #     ... Spriteset_Map#initialize <- Scene_Map#transfer_player
+  #
+  # En el PC no pasa porque el RGSS de Enterbrain pinta por software. La casa
+  # si funciona porque su tileset (Interior.png, 256x15123) cabe.
+  #
+  # Se arregla dandole al sprite un Bitmap del tamano de un tile, recortado del
+  # tileset (NX18Tarde.trozo). Con un tileset que cabe, o con tiles que hay que
+  # estirar (@diffsizes, que ya recorta por su cuenta), se sigue por el camino
+  # del juego.
+  def self.tilemap
+    return unless Object.const_defined?(:CustomTilemap)
+    clase = Object.const_get(:CustomTilemap)
+    return unless clase.method_defined?(:getRegularTile)
+    @hecho[:tilemap] = true
+    return if clase.method_defined?(:nx_getRegularTile_entero)
+    clase.class_eval do
+      alias_method :nx_getRegularTile_entero, :getRegularTile
+      def getRegularTile(sprite, id)
+        if @diffsizes || !@tileset || !@tileset.mega?
+          return nx_getRegularTile_entero(sprite, id)
+        end
+        bitmap = NX18Tarde.trozo(@tileset, ((id - 384) & 7) * @tileSrcWidth,
+                                 ((id - 384) >> 3) * @tileSrcHeight, @tileSrcWidth, @tileSrcHeight)
+        sprite.bitmap = bitmap if sprite.bitmap != bitmap
+      end
+    end
+    NX.log("[1.8] CustomTilemap recorta los tiles de un tileset mega en vez de pasarlo entero a un Sprite")
+  end
+
+  # --- FontInstaller: instalar fuentes en Windows ---------------------------
+  #
+  # La pantalla de carga de Essentials clasico (PokemonLoad.rb en Iberia y
+  # Titan, PScreen_Load.rb en Opalo y Z, PSystem_System en Uranium) empieza
+  # con `FontInstaller.install`, que busca las fuentes del juego en la carpeta
+  # de fuentes de Windows (registro, %SystemRoot%\Fonts) y, si no estan, las
+  # copia alli y llama a AddFontResource. En la Switch no hay esa carpeta, asi
+  # que en Iberia salian tres avisos en ingles en cada arranque, entre el
+  # titulo y la pantalla de carga ("One or more fonts used in this game do not
+  # exist on the system", "The game can be played...", "To install the
+  # necessary fonts, copy the files...").
+  #
+  # No hay nada que instalar: mkxp-z carga las fuentes de Fonts/ del juego al
+  # arrancar, y el texto ya sale con ellas. Se deja install sin efecto y se
+  # apunta cuales de las que pide el juego no ve el motor, que es lo unico que
+  # podria faltar de verdad.
+  def self.fuentes
+    return unless Object.const_defined?(:FontInstaller)
+    m = Object.const_get(:FontInstaller)
+    return unless m.respond_to?(:install)
+    @hecho[:fuentes] = true
+    nombres = (m.const_get(:Names) rescue nil) || []
+    faltan = nombres.reject { |n| (Font.exist?(n) rescue true) }
+    m.define_singleton_method(:install) { nil }
+    NX.log("[1.8] FontInstaller.install sin efecto (instala en Windows); " +
+           (faltan.empty? ? "el motor ve las #{nombres.size} fuentes del juego" :
+                            "el motor NO ve: #{faltan.join(', ')}"))
+  end
+
+  # --- blt desde una mega surface pisa en vez de mezclar --------------------
+  #
+  # Lo segundo que salio en el mismo pueblo, ya sin el error: rectangulos
+  # negros alrededor de la casa. CustomTilemap compone los tiles de prioridad 0
+  # de las tres capas en un solo Bitmap con `blt`, el suelo primero y la casa
+  # encima. Pero las dos ramas de Bitmap::stretchBlt para un origen mega (la de
+  # subImageFix y la de SDL_BlitSurface con BLENDMODE_NONE) COPIAN los pixeles
+  # en vez de mezclarlos -mkxp-z lo dice: "Don't do transparent blits for now"-,
+  # asi que lo transparente de los tiles de la casa borraba el suelo de debajo.
+  #
+  # Se recorta primero el trozo pedido a un Bitmap normal -sobre uno recien
+  # creado, copiar es lo correcto- y el blt de verdad se hace desde ahi, por el
+  # camino que si mezcla. Los trozos se guardan en el propio Bitmap mega, que
+  # en estos juegos es el tileset que RPG::Cache ya tiene vivo: el mismo tile
+  # se recorta una sola vez. Un blt desde un Bitmap normal no se entera de
+  # nada mas que de una llamada a mega?.
+  BLT_NATIVO = defined?(::Bitmap) ? ::Bitmap.instance_method(:blt) : nil
+
+  def self.trozo(src, x, y, w, h)
+    cache = src.instance_variable_get(:@nx_trozos) || src.instance_variable_set(:@nx_trozos, {})
+    clave = (((y << 16) | x) << 24) | (w << 12) | h
+    b = cache[clave]
+    return b if b && !b.disposed?
+    b = ::Bitmap.new(w, h)
+    BLT_NATIVO.bind(b).call(0, 0, src, Rect.new(x, y, w, h))
+    cache[clave] = b
+  end
+
+  module BltMega
+    def blt(x, y, src, rect, opacity = 255)
+      return super unless src.mega?
+      t = NX18Tarde.trozo(src, rect.x, rect.y, rect.width, rect.height)
+      super(x, y, t, t.rect, opacity)
+    end
+
+    def stretch_blt(dest, src, rect, opacity = 255)
+      return super unless src.mega?
+      t = NX18Tarde.trozo(src, rect.x, rect.y, rect.width, rect.height)
+      super(dest, t, t.rect, opacity)
+    end
+  end
+
+  def self.blt_mega
+    return unless BLT_NATIVO && ::Bitmap.method_defined?(:mega?)
+    ::Bitmap.prepend(BltMega) unless ::Bitmap.ancestors.include?(BltMega)
+  end
+
   # --- El modulo Input, que estos cuatro juegos REESCRIBEN ENTERO -----------
   #
   # Y esto es lo que habria dejado el juego mudo con la pantalla de titulo
@@ -1678,4 +1798,5 @@ module NX18Tarde
 end
 NX18Tarde.guarda_nativos
 NX18Tarde.guarda_graficos
+NX18Tarde.blt_mega
 

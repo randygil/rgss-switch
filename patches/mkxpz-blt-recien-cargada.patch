@@ -1,0 +1,102 @@
+El blt rapido no se usa desde una imagen recien cargada que la GPU no ha leido.
+
+Pokemon Iberia salia con la pantalla de carga sin su fondo (loadbg.png): los
+paneles encima de negro. LargePlane pinta el fondo en un Bitmap del tamano de la
+pantalla con blt, y ese blt dejaba el destino vacio. Medido en Ryujinx, leyendo
+el destino por el sombreador (raw_data y get_pixel de un Bitmap de ancho
+multiplo de 16 no son de fiar alli):
+
+  origen                      destino     rectangulo        resultado
+  loadbg 512x384, fichero     512x384     entero            VACIO
+  loadbg 512x384, fichero     512x384     511 de ancho      VACIO
+  loadbg 512x384, fichero     512x384     la mitad          bien
+  loadbg 512x384, fichero     520x384     entero            bien
+  loadsavepanel 384x45        384x45      entero            VACIO
+  loadPanels 408x536          408x536     entero            bien
+  rojo 512x384, fill_rect     512x384     entero            bien
+  loadbg, leido antes una vez 512x384     entero            bien
+
+Falla glBlitFramebuffer DESDE una textura recien subida con glTexImage2D que
+ningun sombreador ha leido, hacia un destino de su tamano y casi entera. Los
+dos que fallan miden multiplos de 16 de ancho. En cuanto la textura se lee una
+vez, el mismo blt funciona.
+
+Asi que BitmapPrivate lleva `sinLeer`: lo pone el constructor desde fichero
+(las dos ramas, alijo y descompresion) y lo quita bindTexture(). Mientras
+este puesto, stretchBlt no toma el camino rapido con ese Bitmap de origen y va
+por el del sombreador, que sobre un destino limpio da los mismos pixeles y
+ademas deja la textura leida. Cuesta un blt por sombreador por imagen cargada,
+la primera vez que se copia sin haberse dibujado antes.
+
+--- a/src/display/bitmap.cpp
++++ b/src/display/bitmap.cpp
+@@ -689,6 +689,7 @@
+         format = SDL_AllocFormat(SDL_PIXELFORMAT_ABGR8888);
+         hayPendiente = false;
+         todoCero = false;
++        sinLeer = false;
+         
+         animation.width = 0;
+         animation.height = 0;
+@@ -752,6 +753,26 @@
+      * ------------------------------------------------------------------ */
+     bool todoCero;
+ 
++    /* ------------------------------------------------------------------
++     * Imagen recien subida de un fichero que la GPU aun no ha leido nunca.
++     *
++     * Medido en Ryujinx con Pokemon Iberia (pantalla de carga sin su fondo):
++     * un glBlitFramebuffer DESDE una textura asi, hacia un destino de su mismo
++     * tamano y copiandola entera o casi, no escribe nada. loadbg.png
++     * (512x384) y loadsavepanel.png (384x45) a un Bitmap de su tamano: vacio.
++     * La mitad del rectangulo, un destino 8 pixeles mayor o un origen pintado
++     * en la GPU: bien. Y el mismo loadbg, despues de leerlo una sola vez por
++     * un sombreador, tambien bien. loadPanels.png (408 de ancho) nunca falla:
++     * los dos que fallan miden multiplos de 16 de ancho, como en la lectura
++     * truncada de raw_data (runtime/diagnostico/nx-lote-ab.rb).
++     *
++     * Asi que mientras la textura no se haya leido, el blt rapido no se usa
++     * con ella de origen: va por el sombreador, que da los mismos pixeles
++     * sobre un destino limpio y, al leerla, la deja lista para el rapido. Lo
++     * pone el constructor desde fichero y lo quita bindTexture().
++     * ------------------------------------------------------------------ */
++    bool sinLeer;
++
+     /* Que haya copia en RAM y diga lo mismo que la textura. Es el paso previo
+      * de get_pixel, set_pixel y nx_opaque_bounds, que antes lo repetian cada
+      * uno a su manera. */
+@@ -897,6 +918,7 @@
+     void bindTexture(ShaderBase &shader)
+     {
+         vuelca();
++        sinLeer = false;
+         if (animation.enabled) {
+             TEXFBO cframe = animation.currentFrame();
+             TEX::bind(cframe.tex);
+@@ -1089,6 +1111,7 @@
+ 
+             TEX::bind(p->gl.tex);
+             TEX::uploadImage(p->gl.width, p->gl.height, guardada->pixels, GL_RGBA);
++            p->sinLeer = true;
+ 
+             p->addTaintedArea(rect());
+             return;
+@@ -1262,6 +1285,7 @@
+         
+         TEX::bind(p->gl.tex);
+         TEX::uploadImage(p->gl.width, p->gl.height, imgSurf->pixels, GL_RGBA);
++        p->sinLeer = true;
+ 
+ #ifdef __SWITCH__
+         /* Las mega y los GIF no llegan hasta esta linea. */
+@@ -1566,7 +1590,9 @@
+         return;
+     }
+     
+-    if (opacity == 255 && !p->touchesTaintedArea(destRect))
++    /* Desde una imagen que la GPU aun no ha leido, nunca el rapido: ver
++     * BitmapPrivate::sinLeer. */
++    if (opacity == 255 && !p->touchesTaintedArea(destRect) && !source.p->sinLeer)
+     {
+         /* Fast blit */
+         GLMeta::blitBegin(getGLTypes());

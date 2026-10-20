@@ -206,3 +206,87 @@ de la ventana. Las nueve se borraron.
 - El primer combate. Hay que salir de la casa y buscar hierba.
 - El agua y las cascadas de `KleinBitmap.dll`, y los cuatro `.mid` sin soundfont:
   igual que estaban.
+
+---
+
+## Tercera vuelta — 20 de octubre de 2026: salir de la casa
+
+Un jugador lo probó en su consola con la entrega 0.2.0 y mandó dos cosas: «es
+salir de la casa y se crashea» y «no aparece la imagen en el menú principal».
+Con su partida (`Game.rxdata`, 65.668 bytes: Pablo, mapa 17, sin equipo) las dos
+se reprodujeron en Ryujinx. Eran tres fallos, no dos.
+
+### 1. El cierre al salir: un tileset que no cabe en una textura
+
+```
+Section036:371:in `bitmap=': Operation not supported for mega surfaces (MKXPError)
+  from Section036:371:in `getRegularTile'
+  ... Spriteset_Map#initialize <- Scene_Map#transfer_player
+```
+
+Los tilesets de exteriores de Iberia miden **256x40026** (los once de
+`Graphics/Tilesets/` salvo `Interior.png`, de 256x15123, y dos pequeños). La GPU
+de la Switch no pasa de 16384 de lado y mkxp-z guarda un Bitmap así en RAM como
+*mega surface*. El Tilemap del motor sabe dibujarlo; un Sprite no. Y este juego
+no usa el Tilemap del motor: `MAPVIEWMODE = 1` (sección 0) hace que
+`TilemapLoader` elija `CustomTilemap`, el de Ruby, que pinta cada tile con
+`sprite.bitmap = @tileset`. La casa funcionaba porque su tileset cabe.
+
+Arreglo en `nx-ruby18.rb` (`NX18Tarde.tilemap`): con un tileset mega, el sprite
+recibe un Bitmap del tamaño de un tile recortado del tileset.
+
+### 2. Rectángulos negros en el pueblo: blt desde mega pisa
+
+Ya sin el cierre, Albacete salía con rectángulos negros alrededor de la casa.
+`CustomTilemap` compone en un solo Bitmap los tiles de prioridad 0 de las tres
+capas, el suelo primero y la casa encima, y las dos ramas de `stretchBlt` para un
+origen mega COPIAN en vez de mezclar (lo dice mkxp-z: «Don't do transparent blits
+for now»). Lo transparente de la casa borraba el suelo.
+
+Arreglo en el mismo shim (`NX18Tarde.blt_mega`): `blt` y `stretch_blt` desde un
+Bitmap mega recortan antes el trozo a un Bitmap normal, guardado en el propio
+tileset, y copian desde ahí por el camino que mezcla.
+
+### 3. La pantalla de carga sin fondo: glBlitFramebuffer desde una imagen sin leer
+
+La «imagen del menú principal» es `loadbg.png`, la Poké Ball de fondo de la
+pantalla de Continuar. Salía negro. `pbResolveBitmap` la encontraba, el plano se
+creaba y era visible, pero el Bitmap donde `LargePlane` la copia con `blt`
+estaba vacío. Una matriz de `blt` leída por el sombreador (`raw_data` y
+`get_pixel` no son de fiar en Ryujinx con anchos múltiplos de 16) dio la regla:
+el `blt` rápido (`glBlitFramebuffer`) desde una imagen recién cargada de fichero
+que la GPU no ha leído nunca, hacia un destino de su tamaño y copiándola casi
+entera, no escribe nada. Detalle en `patches/mkxpz-blt-recien-cargada.patch`.
+
+Arreglo en el motor (b57): esas imágenes van por el sombreador hasta que la GPU
+las ha leído una vez.
+
+### Cómo se condujo: sin quitarle el foco a nadie
+
+La primera vuelta fue con `jugar.ps1` y sus pulsaciones se pelearon con la
+máquina en uso. Desde aquí, todo con `guion.ps1` y la sonda
+`runtime/diagnostico/nx-guion.rb`: el juego se conduce desde dentro (contesta a
+`Input` y saca las fotos con `Graphics.snap_to_bitmap`) y el emulador se queda
+minimizado. `Z hasta` cruza título, avisos, pantalla de carga y la escena de la
+madre sin contar cajas.
+
+Recorrido: Continuar → escalera (13,4) del mapa 17 → escena de la madre en el 16
+→ puerta (32,13) → Albacete (17,30) → diez pasos al este y doce al oeste. Sin una
+excepción, 50–55 fps.
+
+| # | Hito | Captura |
+|---|---|---|
+| 11 | Pantalla de carga con su fondo | `pokemon-iberia-hito-11-carga-con-fondo.png` |
+| 12 | Albacete, recién salido de casa | `pokemon-iberia-hito-12-albacete.png` |
+| 13 | Albacete, al este, con el mapa ya desplazado | `pokemon-iberia-hito-13-albacete-este.png` |
+
+### Lo que queda
+
+- El primer combate, igual que antes.
+- ~~Tres avisos en inglés en cada arranque~~ («One or more fonts used in this game
+  do not exist on the system…»). Eran `FontInstaller.install` (sección 105), que
+  busca las fuentes en la carpeta de fuentes de Windows. Quitados en
+  `nx-ruby18.rb` (`NX18Tarde.fuentes`) para los cinco juegos de la familia: el
+  motor ya carga las de `Fonts/` y lo dice en el registro (`el motor ve las 6
+  fuentes del juego`).
+- Lo de `KleinBitmap.dll` y los `.mid`, como estaba.

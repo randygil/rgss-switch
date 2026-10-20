@@ -5,6 +5,7 @@ mkxpz-alijos-bitmap.patch
 mkxpz-atlas-texto.patch
 mkxpz-audio-track-nil.patch
 mkxpz-binding-mri.cpp.patch
+mkxpz-blt-recien-cargada.patch
 mkxpz-bordes-opacos.patch
 mkxpz-botones-nintendo.patch
 mkxpz-config.cpp.patch

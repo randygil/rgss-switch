@@ -56,6 +56,7 @@
 !/iterate.sh
 !/captura.ps1
 !/jugar.ps1
+!/guion.ps1
 !/recoger.ps1
 !/comprobar-ruby18.rb
 # lee un MapNNN.rxdata con el Ruby del PC: cuantas cajas y que menus tiene una
