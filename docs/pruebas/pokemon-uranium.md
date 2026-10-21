@@ -324,7 +324,7 @@ partida nueva en la casa (`MetadataHome`, mapa 49; Uranium no relee
 `Data/System` al empezar y hay que tocar `$data_system`), menú propio
 (`PokemonMenu_Scene`, iconos 0–7 que se eligen con `$PokemonTemp.menuLastChoice`),
 Pokédex con mapa de área, resumen, mochila, ficha, opciones, guardar, PC, tienda
-y combate. Hitos 11 a 13 en `docs/capturas/`.
+y combate. Hitos 6 a 8 en `docs/capturas/`.
 
 ### 1. Los Pokémon, los objetos y los movimientos salían sin nombre
 
