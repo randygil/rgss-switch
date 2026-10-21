@@ -1216,7 +1216,13 @@ module NX18Tarde
       # Un metodo de dos lineas devuelve a marshal el camino de pato que tenia
       # en 1.8. Se comprobo con `Marshal.oldload` sobre una copia del mismo
       # puerto: "TypeError: instance of IO needed".
-      unless method_defined?(:getbyte)
+      #
+      # Y aunque YA tenga getbyte, si es el de IO. Uranium (Essentials v17)
+      # declara `class StringInput < IO` y nunca inicializa el IO, asi que el
+      # IO#getbyte heredado da "IOError: uninitialized stream" y Marshal.load
+      # no puede leer Data/messages.dat: el juego arrancaba sin sus textos y
+      # los Pokemon salian sin nombre. Su getc es de Ruby; el getbyte, no.
+      if !method_defined?(:getbyte) || instance_method(:getbyte).owner == ::IO
         define_method(:getbyte) { NX18Tarde.byte(getc) }
       end
     end

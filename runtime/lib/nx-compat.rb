@@ -239,6 +239,37 @@ class Dir
 end
 NX.log("[nx] Dir.pwd contesta #{Dir.pwd.inspect} " \
        "(con dispositivo era #{Dir.nx_pwd_con_dispositivo.inspect})")
+
+# --- File.rename sobre un fichero que ya existe -----------------------------
+#
+# En Linux y en macOS, rename(2) sustituye el destino; en Windows, Ruby hace
+# lo mismo (MoveFileEx con MOVEFILE_REPLACE_EXISTING). En Horizon, rename()
+# de la SD falla con EEXIST si el destino existe. Y asi es como guardan los
+# juegos con copia de seguridad. Medido en Pokemon Uranium (PScreen_Save):
+#
+#     File.rename(mainfile, backupfile) if safeExists?(mainfile)
+#     File.rename(tempfile, mainfile)
+#
+#   Errno::EEXIST: File exists - ./Backups/Uranium.rxdata  <- pbSave
+#
+# En cuanto hay una copia en Backups/ -desde el tercer guardado- cada intento
+# falla, el juego reintenta tres veces y se rinde: la partida deja de
+# guardarse. GlobalSettings.rxdata, desde el segundo.
+#
+# Se da a rename la semantica de las otras plataformas: si el destino existe y
+# es un fichero, se borra y se repite. Un directorio no se toca.
+class File
+  class << self
+    alias_method :nx_rename_sin_sustituir, :rename
+    def rename(origen, destino)
+      nx_rename_sin_sustituir(origen, destino)
+    rescue Errno::EEXIST
+      raise unless File.file?(destino)
+      File.delete(destino)
+      nx_rename_sin_sustituir(origen, destino)
+    end
+  end
+end
 NX.log("[nx] $LOAD_PATH: #{$LOAD_PATH.inspect}")
 
 # --- comprobacion del cargador --------------------------------------------

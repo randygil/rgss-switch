@@ -312,3 +312,43 @@ Atmosphère (`recoger.ps1` la trae) que es justo lo que aquí no hay.
 51 —el que hace la transferencia—, que ahora es más fácil que antes porque
 `leer-mapa.rb` lee un `MapNNN.rxdata` con el Ruby del PC (el de Uranium hay
 que sacarlo antes de `Uranium.rgssad` con `dump-rgssad.py`).
+
+---
+
+## 20 de octubre de 2026 — arranca en Ryujinx, y dos fallos que habrían visto los jugadores
+
+Con la 0.2.3 y lo de abajo, Uranium **arranca en Ryujinx** (en septiembre no):
+lo destrabó `HandlerHash#fromSymbol` sin rescatar `NameError` (ver
+`familia-ruby18.md`). Recorrido completo con `guion.ps1`: pantalla de idioma,
+partida nueva en la casa (`MetadataHome`, mapa 49; Uranium no relee
+`Data/System` al empezar y hay que tocar `$data_system`), menú propio
+(`PokemonMenu_Scene`, iconos 0–7 que se eligen con `$PokemonTemp.menuLastChoice`),
+Pokédex con mapa de área, resumen, mochila, ficha, opciones, guardar, PC, tienda
+y combate. Hitos 11 a 13 en `docs/capturas/`.
+
+### 1. Los Pokémon, los objetos y los movimientos salían sin nombre
+
+`pbLoadMessages` fallaba al arrancar con `Corrupted data`, y el juego seguía sin
+`messages.dat`: `PBSpecies.getName` devolvía `""`. Debajo, `IOError:
+uninitialized stream` en `Marshal.load`. Uranium (Essentials v17) declara
+`class StringInput < IO` sin inicializar el IO: su `getc` y su `read` son de
+Ruby, pero `getbyte` es el de `IO`, y es lo que `Marshal.load` usa en 3.1 (en
+1.8 era `getc`). `nx-ruby18.rb` ya ponía un `getbyte` de Ruby, pero solo si no
+existía; ahora también si el que hay es el de `IO`. Con eso: Orchynx, Archilles,
+Potion.
+
+### 2. La partida dejaba de guardarse a partir del tercer guardado
+
+`PScreen_Save` guarda en un `.temp` y luego `File.rename(mainfile, backupfile)` y
+`File.rename(tempfile, mainfile)`. En el PC `rename` sustituye el destino; en
+Horizon falla con `EEXIST`. En cuanto había copia en `Backups/`, los tres
+reintentos fallaban y el juego se rendía. Arreglo general en `nx-compat.rb`:
+si el destino es un fichero, se borra y se repite. Tres `pbSave` seguidos dan
+`true`, y un cuarto con otro dinero se relee bien del fichero.
+
+### 3. Y los de la tanda anterior
+
+El ratón (`Game_Mouse#objectParams?`) preguntándole `width` al `Sprite` nativo
+vacío de un `SpriteWrapper` cerraba el juego en la pantalla de carga
+(`errorlog.txt`), y los avisos de fuentes salían aunque estuvieran tapados.
+Los dos, en `nx-ruby18.rb`.
